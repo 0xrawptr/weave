@@ -1,0 +1,43 @@
+server:
+  port: 18080
+  mode: debug  # debug | release | test
+
+temporal:
+  host: localhost
+  port: 7233
+  namespace: default
+  task_queue: prism-task-queue
+
+postgres:
+  host: localhost
+  port: 5432
+  user: prism
+  password: prism123
+  database: prism
+  sslmode: disable
+
+neo4j:
+  uri: bolt://localhost:7687
+  user: neo4j
+  password: prism123
+
+redis:
+  addr: localhost:6379
+  password: ""
+  db: 0
+
+artifacts:
+  gogo:
+    threads: 100
+    timeout: 300s
+  spray:
+    threads: 50
+    timeout: 120s
+  fingers:
+    timeout: 60s
+  neutron:
+    capacity: 30
+    timeout: 300s
+  zombie:
+    capacity: 20
+    timeout: 300s

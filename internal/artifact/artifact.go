@@ -1,0 +1,48 @@
+package artifact
+
+import (
+	"context"
+	"encoding/json"
+)
+
+// Input is the common input wrapper for all artifacts.
+type Input struct {
+	Target string          `json:"target"`
+	Data   json.RawMessage `json:"data,omitempty"`
+}
+
+// Output is the common output wrapper for all artifacts.
+type Output struct {
+	Artifact string          `json:"artifact"`
+	Target   string          `json:"target"`
+	Success  bool            `json:"success"`
+	Error    string          `json:"error,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`
+}
+
+// InputSchema describes the expected input format for an artifact.
+type InputSchema struct {
+	Fields []SchemaField `json:"fields"`
+}
+
+// OutputSchema describes the output format for an artifact.
+type OutputSchema struct {
+	Fields []SchemaField `json:"fields"`
+}
+
+// SchemaField describes a single field in input/output.
+type SchemaField struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Required    bool   `json:"required"`
+	Description string `json:"description"`
+}
+
+// Artifact is the standardized interface for all prism artifacts.
+type Artifact interface {
+	Name() string
+	InputSchema() InputSchema
+	OutputSchema() OutputSchema
+	Execute(ctx context.Context, input Input) (Output, error)
+	Close() error
+}
