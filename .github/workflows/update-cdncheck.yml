@@ -1,0 +1,46 @@
+name: Update cdncheck
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # every Monday 9am UTC
+  workflow_dispatch:      # manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Check for cdncheck update
+        id: check
+        run: |
+          CURRENT=$(go list -m -json github.com/projectdiscovery/cdncheck | jq -r .Version)
+          go get github.com/projectdiscovery/cdncheck@latest
+          LATEST=$(go list -m -json github.com/projectdiscovery/cdncheck | jq -r .Version)
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "deps: bump cdncheck ${{ steps.check.outputs.current }} → ${{ steps.check.outputs.latest }}"
+          title: "deps: update cdncheck to ${{ steps.check.outputs.latest }}"
+          body: |
+            Automated update.
+            - Current: `${{ steps.check.outputs.current }}`
+            - Latest: `${{ steps.check.outputs.latest }}`
+          branch: deps/cdncheck-update
+          delete-branch: true
