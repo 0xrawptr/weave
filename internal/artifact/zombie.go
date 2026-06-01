@@ -55,6 +55,11 @@ func NewZombieArtifact(cfg *sdkzombie.Config) (*ZombieArtifact, error) {
 	return &ZombieArtifact{engine: engine}, nil
 }
 
+// NewZombieArtifactFromEngine wraps an already-initialized SDK engine.
+func NewZombieArtifactFromEngine(engine *sdkzombie.Engine) *ZombieArtifact {
+	return &ZombieArtifact{engine: engine}
+}
+
 func (z *ZombieArtifact) Name() string { return "zombie" }
 
 func (z *ZombieArtifact) InputSchema() InputSchema {

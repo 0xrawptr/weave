@@ -43,6 +43,11 @@ func NewFingersArtifact(cfg *sdkfingers.Config) (*FingersArtifact, error) {
 	return &FingersArtifact{engine: engine}, nil
 }
 
+// NewFingersArtifactFromEngine wraps an already-initialized SDK engine.
+func NewFingersArtifactFromEngine(engine *sdkfingers.Engine) *FingersArtifact {
+	return &FingersArtifact{engine: engine}
+}
+
 func (f *FingersArtifact) Name() string { return "fingers" }
 
 func (f *FingersArtifact) InputSchema() InputSchema {

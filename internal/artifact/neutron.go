@@ -45,6 +45,11 @@ func NewNeutronArtifact(cfg *sdkneutron.Config) (*NeutronArtifact, error) {
 	return &NeutronArtifact{engine: engine}, nil
 }
 
+// NewNeutronArtifactFromEngine wraps an already-initialized SDK engine.
+func NewNeutronArtifactFromEngine(engine *sdkneutron.Engine) *NeutronArtifact {
+	return &NeutronArtifact{engine: engine}
+}
+
 func (n *NeutronArtifact) Name() string { return "neutron" }
 
 func (n *NeutronArtifact) InputSchema() InputSchema {

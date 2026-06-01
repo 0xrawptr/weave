@@ -14,11 +14,8 @@ import (
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/workflow"
 
-	sdkfingers "github.com/chainreactors/sdk/fingers"
-	sdkgogo "github.com/chainreactors/sdk/gogo"
-	sdkneutron "github.com/chainreactors/sdk/neutron"
+	sdkclient "github.com/chainreactors/sdk/client"
 	"github.com/chainreactors/sdk/pkg/provider"
-	sdkspray "github.com/chainreactors/sdk/spray"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	sdkworker "go.temporal.io/sdk/worker"
@@ -32,7 +29,6 @@ func main() {
 
 	ctx := context.Background()
 
-	// Init data stores (graceful fallback)
 	pg, pgErr := data.NewPostgresStore(ctx, data.PostgresConfig{
 		Host: cfg.Postgres.Host, Port: cfg.Postgres.Port,
 		User: cfg.Postgres.User, Password: cfg.Postgres.Password,
@@ -58,7 +54,6 @@ func main() {
 
 	repo := data.NewRepository(pg, neo, rds)
 
-	// Create hooks from repository
 	var persistHook artifact.PersistHook
 	var dedupHook artifact.DedupHook
 	var markDoneHook artifact.MarkDoneHook
@@ -80,7 +75,6 @@ func main() {
 		}
 	}
 
-	// Temporal client
 	c, err := client.Dial(client.Options{
 		HostPort:  fmt.Sprintf("%s:%d", cfg.Temporal.Host, cfg.Temporal.Port),
 		Namespace: cfg.Temporal.Namespace,
@@ -90,40 +84,10 @@ func main() {
 	}
 	defer c.Close()
 
-	reg := artifact.NewRegistry()
-	embedProvider := provider.NewEmbedProvider()
-
-	types := []struct {
-		name string
-		fn   func() (artifact.Artifact, error)
-	}{
-		{"gogo", func() (artifact.Artifact, error) {
-			return artifact.NewGogoArtifact(sdkgogo.NewConfig().WithProvider(embedProvider))
-		}},
-		{"spray", func() (artifact.Artifact, error) {
-			return artifact.NewSprayArtifact(sdkspray.NewConfig().WithProvider(embedProvider))
-		}},
-		{"fingers", func() (artifact.Artifact, error) {
-			return artifact.NewFingersArtifact(sdkfingers.NewConfig().WithProvider(embedProvider))
-		}},
-		{"neutron", func() (artifact.Artifact, error) {
-			return artifact.NewNeutronArtifact(&sdkneutron.Config{})
-		}},
-		{"zombie", func() (artifact.Artifact, error) {
-			return artifact.NewZombieArtifact(nil)
-		}},
-		{"cdncheck", func() (artifact.Artifact, error) {
-			return artifact.NewCdncheckArtifact()
-		}},
-	}
-
-	for _, t := range types {
-		a, err := t.fn()
-		if err != nil {
-			log.Printf("WARNING: %s artifact init failed: %v", t.name, err)
-			continue
-		}
-		reg.Register(a)
+	sdkCli := sdkclient.New(sdkclient.WithProvider(provider.NewEmbedProvider()))
+	reg, regErr := artifact.NewRegistryFromClient(sdkCli)
+	if regErr != nil {
+		log.Fatalf("artifact init: %v", regErr)
 	}
 
 	w := sdkworker.New(c, cfg.Temporal.TaskQueue, sdkworker.Options{})
@@ -151,6 +115,7 @@ func main() {
 		log.Println("shutting down worker...")
 		w.Stop()
 		reg.Close()
+		sdkCli.Close()
 		repo.Close()
 	}()
 

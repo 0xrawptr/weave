@@ -13,10 +13,7 @@ import (
 	"github.com/0xrawptr/weave/internal/config"
 	"github.com/0xrawptr/weave/internal/data"
 
-	sdkgogo "github.com/chainreactors/sdk/gogo"
-	sdkspray "github.com/chainreactors/sdk/spray"
-	sdkfingers "github.com/chainreactors/sdk/fingers"
-	sdkneutron "github.com/chainreactors/sdk/neutron"
+	sdkclient "github.com/chainreactors/sdk/client"
 	"github.com/chainreactors/sdk/pkg/provider"
 	"go.temporal.io/sdk/client"
 )
@@ -27,7 +24,6 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	// Initialize data stores (graceful fallback if services are not running)
 	ctx := context.Background()
 
 	pg, err := data.NewPostgresStore(ctx, data.PostgresConfig{
@@ -62,42 +58,14 @@ func main() {
 
 	repo := data.NewRepository(pg, neo, rds)
 
-	// Initialize artifact registry with EmbedProvider for fingerprint/POC data
-	reg := artifact.NewRegistry()
-	embedProvider := provider.NewEmbedProvider()
-
-	artifacts := []struct {
-		name string
-		fn   func() (artifact.Artifact, error)
-	}{
-		{"gogo", func() (artifact.Artifact, error) {
-			return artifact.NewGogoArtifact(sdkgogo.NewConfig().WithProvider(embedProvider))
-		}},
-		{"spray", func() (artifact.Artifact, error) {
-			return artifact.NewSprayArtifact(sdkspray.NewConfig().WithProvider(embedProvider))
-		}},
-		{"fingers", func() (artifact.Artifact, error) {
-			return artifact.NewFingersArtifact(sdkfingers.NewConfig().WithProvider(embedProvider))
-		}},
-		{"neutron", func() (artifact.Artifact, error) {
-			return artifact.NewNeutronArtifact(&sdkneutron.Config{})
-		}},
-		{"zombie", func() (artifact.Artifact, error) { return artifact.NewZombieArtifact(nil) }},
-		{"cdncheck", func() (artifact.Artifact, error) { return artifact.NewCdncheckArtifact() }},
+	// Initialize artifact registry from SDK client (shared provider + auto DI).
+	sdkCli := sdkclient.New(sdkclient.WithProvider(provider.NewEmbedProvider()))
+	reg, err := artifact.NewRegistryFromClient(sdkCli)
+	if err != nil {
+		log.Fatalf("artifact init: %v", err)
 	}
-
-	for _, entry := range artifacts {
-		a, err := entry.fn()
-		if err != nil {
-			log.Printf("WARNING: %s artifact init failed: %v", entry.name, err)
-			continue
-		}
-		reg.Register(a)
-	}
-
 	log.Printf("registered %d artifacts", len(reg.List()))
 
-	// Create Temporal client
 	temporalClient, err := client.Dial(client.Options{
 		HostPort:  cfg.Temporal.Host + ":" + formatPort(cfg.Temporal.Port),
 		Namespace: cfg.Temporal.Namespace,
@@ -106,7 +74,6 @@ func main() {
 		log.Printf("WARNING: Temporal unavailable: %v (workflow execution disabled)", err)
 	}
 
-	// Start API server
 	server := api.NewServer(cfg, reg, repo, temporalClient)
 
 	sigCh := make(chan os.Signal, 1)
@@ -117,12 +84,13 @@ func main() {
 		log.Println("shutting down...")
 		server.Shutdown(ctx)
 		reg.Close()
+		sdkCli.Close()
 		if temporalClient != nil {
 			temporalClient.Close()
 		}
 	}()
 
-	log.Println("prism server starting...")
+	log.Println("weave server starting...")
 	if err := server.Run(); err != nil {
 		log.Fatalf("server run: %v", err)
 	}

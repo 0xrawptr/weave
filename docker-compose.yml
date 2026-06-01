@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: prism
-      POSTGRES_PASSWORD: prism123
-      POSTGRES_DB: prism
+      POSTGRES_USER: weave
+      POSTGRES_PASSWORD: weave123
+      POSTGRES_DB: weave
     ports:
       - "5432:5432"
     volumes:
@@ -13,7 +13,7 @@ services:
   neo4j:
     image: neo4j:5-community
     environment:
-      NEO4J_AUTH: neo4j/prism123
+      NEO4J_AUTH: neo4j/weave123
       NEO4J_PLUGINS: '["apoc"]'
     ports:
       - "7474:7474"
@@ -31,8 +31,8 @@ services:
     environment:
       DB: postgres12
       DB_PORT: 5432
-      POSTGRES_USER: prism
-      POSTGRES_PWD: prism123
+      POSTGRES_USER: weave
+      POSTGRES_PWD: weave123
       POSTGRES_SEEDS: postgres
     ports:
       - "7233:7233"

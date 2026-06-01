@@ -42,6 +42,11 @@ func NewSprayArtifact(cfg *sdkspray.Config) (*SprayArtifact, error) {
 	return &SprayArtifact{engine: engine}, nil
 }
 
+// NewSprayArtifactFromEngine wraps an already-initialized SDK engine.
+func NewSprayArtifactFromEngine(engine *sdkspray.SprayEngine) *SprayArtifact {
+	return &SprayArtifact{engine: engine}
+}
+
 func (s *SprayArtifact) Name() string { return "spray" }
 
 func (s *SprayArtifact) InputSchema() InputSchema {

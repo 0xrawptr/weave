@@ -35,6 +35,11 @@ func NewGogoArtifact(cfg *sdkgogo.Config) (*GogoArtifact, error) {
 	return &GogoArtifact{engine: engine}, nil
 }
 
+// NewGogoArtifactFromEngine wraps an already-initialized SDK engine.
+func NewGogoArtifactFromEngine(engine *sdkgogo.GogoEngine) *GogoArtifact {
+	return &GogoArtifact{engine: engine}
+}
+
 func (g *GogoArtifact) Name() string { return "gogo" }
 
 func (g *GogoArtifact) InputSchema() InputSchema {

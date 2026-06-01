@@ -6,20 +6,20 @@ temporal:
   host: localhost
   port: 7233
   namespace: default
-  task_queue: prism-task-queue
+  task_queue: weave-task-queue
 
 postgres:
   host: localhost
   port: 5432
-  user: prism
-  password: prism123
-  database: prism
+  user: weave
+  password: weave123
+  database: weave
   sslmode: disable
 
 neo4j:
   uri: bolt://localhost:7687
   user: neo4j
-  password: prism123
+  password: weave123
 
 redis:
   addr: localhost:6379
