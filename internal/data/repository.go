@@ -53,9 +53,85 @@ func (r *Repository) PersistActivityResult(ctx context.Context, artifactName, sc
 		return r.persistSprayResult(ctx, scanTarget, data)
 	case "cdncheck":
 		return r.persistCdncheckResult(ctx, scanTarget, data)
+	case "fingers":
+		return r.persistFingersResult(ctx, scanTarget, data)
+	case "neutron":
+		return r.persistNeutronResult(ctx, scanTarget, data)
 	default:
 		return nil
 	}
+}
+
+func (r *Repository) persistFingersResult(ctx context.Context, scanTarget string, data []byte) error {
+	if data == nil {
+		return nil
+	}
+	type fingersItem struct {
+		Name    string   `json:"name"`
+		Product string   `json:"product,omitempty"`
+		Version string   `json:"version,omitempty"`
+		Tags    []string `json:"tags,omitempty"`
+	}
+	type fingersOutput struct {
+		Frameworks []fingersItem `json:"frameworks"`
+		Count      int           `json:"count"`
+	}
+	var out fingersOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return fmt.Errorf("parse fingers result: %w", err)
+	}
+
+	targetID := generateID("target", scanTarget)
+	r.Postgres.EnsureTarget(ctx, &Target{ID: targetID, Type: "cidr", Value: scanTarget})
+
+	for _, item := range out.Frameworks {
+		fpID := generateID("fingerprint", item.Name)
+		fpAsset := &Asset{
+			ID: fpID, Type: "fingerprint", Value: item.Name,
+			Source: "fingers", TargetID: targetID, RawData: data,
+		}
+		if err := r.SaveAsset(ctx, fpAsset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) persistNeutronResult(ctx context.Context, scanTarget string, data []byte) error {
+	if data == nil {
+		return nil
+	}
+	type neutronItem struct {
+		TemplateID string `json:"template_id"`
+		Info       string `json:"info"`
+		Severity   string `json:"severity"`
+		Target     string `json:"target"`
+		Matched    string `json:"matched"`
+	}
+	type neutronOutput struct {
+		Results []neutronItem `json:"results"`
+		Total   int           `json:"total"`
+	}
+	var out neutronOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return fmt.Errorf("parse neutron result: %w", err)
+	}
+
+	targetID := generateID("target", scanTarget)
+	r.Postgres.EnsureTarget(ctx, &Target{ID: targetID, Type: "cidr", Value: scanTarget})
+
+	for _, item := range out.Results {
+		vulnID := generateID("vuln", item.Target, item.TemplateID)
+		vulnAsset := &Asset{
+			ID: vulnID, Type: "vulnerability",
+			Value:  fmt.Sprintf("%s: %s", item.Severity, item.Info),
+			Source: "neutron", TargetID: targetID, RawData: data,
+		}
+		if err := r.SaveAsset(ctx, vulnAsset); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) persistCdncheckResult(ctx context.Context, scanTarget string, data []byte) error {
@@ -207,6 +283,25 @@ func (r *Repository) persistSprayResult(ctx context.Context, scanTarget string, 
 		}
 	}
 	return nil
+}
+
+// GetWebURLs returns the web service URLs discovered by gogo for a scan target.
+func (r *Repository) GetWebURLs(ctx context.Context, scanTarget string) ([]string, error) {
+	if r.Postgres == nil {
+		return nil, nil
+	}
+	targetID := generateID("target", scanTarget)
+	assets, err := r.Postgres.QueryAssets(ctx, targetID, "service", 100000, 0)
+	if err != nil {
+		return nil, err
+	}
+	var urls []string
+	for _, a := range assets {
+		if a.Source == "gogo" {
+			urls = append(urls, a.Value)
+		}
+	}
+	return urls, nil
 }
 
 func (r *Repository) Close() {

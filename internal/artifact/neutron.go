@@ -10,7 +10,8 @@ import (
 
 // NeutronArtifact wraps the SDK neutron engine for POC/template-based vulnerability detection.
 type NeutronArtifact struct {
-	engine *sdkneutron.Engine
+	engine      *sdkneutron.Engine
+	urlResolver URLResolver
 }
 
 // NeutronInput defines the input for neutron scanning.
@@ -50,6 +51,9 @@ func NewNeutronArtifactFromEngine(engine *sdkneutron.Engine) *NeutronArtifact {
 	return &NeutronArtifact{engine: engine}
 }
 
+// SetURLResolver injects a resolver for DB-backed URL resolution.
+func (n *NeutronArtifact) SetURLResolver(r URLResolver) { n.urlResolver = r }
+
 func (n *NeutronArtifact) Name() string { return "neutron" }
 
 func (n *NeutronArtifact) InputSchema() InputSchema {
@@ -75,30 +79,38 @@ func (n *NeutronArtifact) Execute(ctx context.Context, input Input) (Output, err
 	if err := json.Unmarshal(input.Data, &nin); err != nil {
 		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
-
 	if nin.Target == "" {
 		nin.Target = input.Target
 	}
 
-	neutronCtx := sdkneutron.NewContext().WithContext(ctx)
-	task := sdkneutron.NewExecuteTask(nin.Target)
-
-	resultCh, err := n.engine.Execute(neutronCtx, task)
-	if err != nil {
-		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
+	// Resolve targets: single URL or DB-backed bulk scan.
+	targets := []string{nin.Target}
+	if n.urlResolver != nil {
+		if resolved, err := n.urlResolver(ctx, input.Target); err == nil && len(resolved) > 0 {
+			targets = resolved
+		}
 	}
 
+	neutronCtx := sdkneutron.NewContext().WithContext(ctx)
 	var items []NeutronResultItem
-	for result := range resultCh {
-		if execResult, ok := types.ResultData[*sdkneutron.ExecuteResult](result); ok {
-			nr := execResult.Result()
-			if nr != nil {
-				for _, event := range nr.Events {
-					item := NeutronResultItem{Target: nin.Target}
-					if event != nil {
-						item.Matched = event.Matched
+
+	for _, t := range targets {
+		task := sdkneutron.NewExecuteTask(t)
+		resultCh, err := n.engine.Execute(neutronCtx, task)
+		if err != nil {
+			continue
+		}
+		for result := range resultCh {
+			if execResult, ok := types.ResultData[*sdkneutron.ExecuteResult](result); ok {
+				nr := execResult.Result()
+				if nr != nil {
+					for _, event := range nr.Events {
+						item := NeutronResultItem{Target: t}
+						if event != nil {
+							item.Matched = event.Matched
+						}
+						items = append(items, item)
 					}
-					items = append(items, item)
 				}
 			}
 		}

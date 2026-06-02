@@ -9,7 +9,8 @@ import (
 
 // FingersArtifact wraps the SDK fingers engine for passive and active fingerprinting.
 type FingersArtifact struct {
-	engine *sdkfingers.Engine
+	engine      *sdkfingers.Engine
+	urlResolver URLResolver
 }
 
 // FingersInput defines the input for fingerprint operations.
@@ -47,6 +48,10 @@ func NewFingersArtifact(cfg *sdkfingers.Config) (*FingersArtifact, error) {
 func NewFingersArtifactFromEngine(engine *sdkfingers.Engine) *FingersArtifact {
 	return &FingersArtifact{engine: engine}
 }
+
+// SetURLResolver injects a resolver so the artifact can query the DB
+// for web URLs when the workflow passes only a target.
+func (f *FingersArtifact) SetURLResolver(r URLResolver) { f.urlResolver = r }
 
 func (f *FingersArtifact) Name() string { return "fingers" }
 
@@ -93,8 +98,14 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 			items = append(items, item)
 		}
 	case "http_match":
+		urls := fin.URLs
+		if len(urls) == 0 && f.urlResolver != nil {
+			if resolved, err := f.urlResolver(ctx, input.Target); err == nil {
+				urls = resolved
+			}
+		}
 		fingersCtx := sdkfingers.NewContext().WithContext(ctx)
-		results, err := f.engine.HTTPMatch(fingersCtx, fin.URLs)
+		results, err := f.engine.HTTPMatch(fingersCtx, urls)
 		if err != nil {
 			return Output{Artifact: f.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 		}

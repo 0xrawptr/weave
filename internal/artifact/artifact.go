@@ -17,7 +17,8 @@ type Output struct {
 	Target   string          `json:"target"`
 	Success  bool            `json:"success"`
 	Error    string          `json:"error,omitempty"`
-	Data     json.RawMessage `json:"data,omitempty"`
+	Data     json.RawMessage `json:"data,omitempty"`      // lightweight, for workflow
+	FullData json.RawMessage `json:"full_data,omitempty"` // complete, for persist
 }
 
 // InputSchema describes the expected input format for an artifact.
@@ -37,6 +38,11 @@ type SchemaField struct {
 	Required    bool   `json:"required"`
 	Description string `json:"description"`
 }
+
+// URLResolver resolves a scan target to a list of web URLs discovered
+// by a previous stage (typically gogo). The artifact queries the resolver
+// when no explicit URLs are provided in its input.
+type URLResolver func(ctx context.Context, target string) ([]string, error)
 
 // Artifact is the standardized interface for all prism artifacts.
 type Artifact interface {

@@ -71,7 +71,7 @@ func main() {
 			return repo.CheckDuplicate(ctx, target, artifactName, input)
 		}
 		markDoneHook = func(ctx context.Context, target, artifactName string, input []byte) error {
-			return repo.MarkDuplicate(ctx, target, artifactName, input, 24*time.Hour)
+			return repo.MarkDuplicate(ctx, target, artifactName, input, 8*time.Hour)
 		}
 	}
 
@@ -88,6 +88,19 @@ func main() {
 	reg, regErr := artifact.NewRegistryFromClient(sdkCli)
 	if regErr != nil {
 		log.Fatalf("artifact init: %v", regErr)
+	}
+
+	// Inject DB-backed URL resolver so fingers/neutron query gogo results.
+	if repo.Postgres != nil {
+		urlResolver := artifact.URLResolver(func(ctx context.Context, target string) ([]string, error) {
+			return repo.GetWebURLs(ctx, target)
+		})
+		if a, err := reg.Get("fingers"); err == nil {
+			a.(*artifact.FingersArtifact).SetURLResolver(urlResolver)
+		}
+		if a, err := reg.Get("neutron"); err == nil {
+			a.(*artifact.NeutronArtifact).SetURLResolver(urlResolver)
+		}
 	}
 
 	w := sdkworker.New(c, cfg.Temporal.TaskQueue, sdkworker.Options{})

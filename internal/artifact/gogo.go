@@ -7,6 +7,7 @@ import (
 
 	sdkgogo "github.com/chainreactors/sdk/gogo"
 	"github.com/chainreactors/sdk/pkg/types"
+	"github.com/chainreactors/utils/iutils"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -19,9 +20,17 @@ type GogoInput struct {
 	Ports string `json:"ports"`
 }
 
+// GogoOutput is the full result set, persisted by the hook.
 type GogoOutput struct {
 	Results []*types.GOGOResult `json:"results"`
 	Total   int                 `json:"total"`
+}
+
+// GogoSummary is the lightweight response for the workflow layer.
+// Full results are persisted via FullData, not passed through Temporal.
+type GogoSummary struct {
+	Total   int      `json:"total"`
+	WebURLs []string `json:"web_urls"`
 }
 
 func NewGogoArtifact(cfg *sdkgogo.Config) (*GogoArtifact, error) {
@@ -35,7 +44,6 @@ func NewGogoArtifact(cfg *sdkgogo.Config) (*GogoArtifact, error) {
 	return &GogoArtifact{engine: engine}, nil
 }
 
-// NewGogoArtifactFromEngine wraps an already-initialized SDK engine.
 func NewGogoArtifactFromEngine(engine *sdkgogo.GogoEngine) *GogoArtifact {
 	return &GogoArtifact{engine: engine}
 }
@@ -66,7 +74,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 
-	gogoCtx := sdkgogo.NewContext().WithContext(ctx)
+	gogoCtx := sdkgogo.NewContext().WithContext(ctx).SetThreads(gogoThreads())
 	wf := &types.Workflow{IP: gogoIn.IP, Ports: gogoIn.Ports}
 
 	resultCh, err := g.engine.WorkflowStream(gogoCtx, wf)
@@ -82,12 +90,21 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 		select {
 		case result, ok := <-resultCh:
 			if !ok {
-				data, _ := json.Marshal(GogoOutput{Results: results, Total: len(results)})
+				// Build lightweight summary for workflow, full data for persist.
+				summary := GogoSummary{Total: len(results)}
+				for _, r := range results {
+					if r != nil && r.IsHttp() {
+						summary.WebURLs = append(summary.WebURLs, r.GetBaseURL())
+					}
+				}
+				summaryData, _ := json.Marshal(summary)
+				fullData, _ := json.Marshal(GogoOutput{Results: results, Total: len(results)})
 				return Output{
 					Artifact: g.Name(),
 					Target:   input.Target,
 					Success:  true,
-					Data:     data,
+					Data:     summaryData,
+					FullData: fullData,
 				}, nil
 			}
 			if result != nil {
@@ -101,6 +118,17 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 			return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: ctx.Err().Error()}, nil
 		}
 	}
+}
+
+func gogoThreads() int {
+	if iutils.IsWin() || iutils.IsMac() {
+		return 4000
+	}
+	n := 8000
+	if fdlimit := iutils.GetFdLimit(); n > fdlimit {
+		n = fdlimit - 100
+	}
+	return n
 }
 
 func (g *GogoArtifact) Close() error { return g.engine.Close() }

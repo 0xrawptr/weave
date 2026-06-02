@@ -141,6 +141,14 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 }
 
 func extractWebURLs(gogoResult artifact.ActivityResult) []string {
+	// Try GogoSummary first (lightweight, current path).
+	var summary struct {
+		WebURLs []string `json:"web_urls"`
+	}
+	if json.Unmarshal(gogoResult.Data, &summary) == nil && len(summary.WebURLs) > 0 {
+		return summary.WebURLs
+	}
+	// Fallback: parse full GogoOutput (legacy or persist data).
 	items := parseGogoResults(gogoResult)
 	var urls []string
 	for _, r := range items {

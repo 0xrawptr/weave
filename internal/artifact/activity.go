@@ -22,18 +22,15 @@ type ActivityResult struct {
 type ActivityFunc func(ctx context.Context, input Input) (*ActivityResult, error)
 
 // PersistHook is called after successful activity execution to persist results.
-// Returns nil if persistence is not needed.
 type PersistHook func(ctx context.Context, result *ActivityResult) error
 
 // DedupHook checks if the given target+artifact+input has already been processed.
-// Returns true if it should be skipped.
 type DedupHook func(ctx context.Context, target, artifact string, input []byte) (bool, error)
 
 // MarkDoneHook marks a target+artifact+input as processed.
 type MarkDoneHook func(ctx context.Context, target, artifact string, input []byte) error
 
 // NewActivityFunc creates a named Temporal activity function for the given artifact.
-// Hooks are optional — pass nil to skip persistence or deduplication.
 func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook) ActivityFunc {
 	return func(ctx context.Context, input Input) (*ActivityResult, error) {
 		logger := activity.GetLogger(ctx)
@@ -76,10 +73,18 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 			result.Error = err.Error()
 		}
 
-		// Persist results
-		if persist != nil && result.Success && len(result.Data) > 0 {
-			if persistErr := persist(ctx, result); persistErr != nil {
-				logger.Error("failed to persist result", "error", persistErr)
+		// Persist results — prefer FullData (complete) over Data (summary)
+		if persist != nil && result.Success {
+			persistData := output.FullData
+			if len(persistData) == 0 {
+				persistData = output.Data
+			}
+			if len(persistData) > 0 {
+				r := *result
+				r.Data = persistData
+				if persistErr := persist(ctx, &r); persistErr != nil {
+					logger.Error("failed to persist result", "error", persistErr)
+				}
 			}
 		}
 
