@@ -30,6 +30,10 @@ func PortScanWorkflow(ctx workflow.Context, input PortScanInput) (*PortScanResul
 		},
 	})
 
+	if input.Ports == "" {
+		input.Ports = "top1000"
+	}
+
 	result := &PortScanResult{IP: input.IP}
 
 	var gogoResult artifact.ActivityResult

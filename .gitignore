@@ -17,9 +17,6 @@
 .DS_Store
 Thumbs.db
 
-# Playwright
-.playwright-mcp/
-
 # Claude Code
 .claude/
 

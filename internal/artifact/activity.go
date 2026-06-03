@@ -30,8 +30,11 @@ type DedupHook func(ctx context.Context, target, artifact string, input []byte) 
 // MarkDoneHook marks a target+artifact+input as processed.
 type MarkDoneHook func(ctx context.Context, target, artifact string, input []byte) error
 
+// RawEventHandler stores raw artifact output before any transformation.
+type RawEventHandler func(ctx context.Context, artifact, target, workflowID string, data []byte)
+
 // NewActivityFunc creates a named Temporal activity function for the given artifact.
-func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook) ActivityFunc {
+func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook, rawEvent RawEventHandler) ActivityFunc {
 	return func(ctx context.Context, input Input) (*ActivityResult, error) {
 		logger := activity.GetLogger(ctx)
 		logger.Info("artifact started", "artifact", a.Name(), "target", input.Target)
@@ -71,6 +74,18 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 		}
 		if err != nil {
 			result.Error = err.Error()
+		}
+
+		// Save raw event — untouched artifact output.
+		if rawEvent != nil {
+			persistData := output.FullData
+			if len(persistData) == 0 {
+				persistData = output.Data
+			}
+			if len(persistData) > 0 {
+				wfInfo := activity.GetInfo(ctx)
+				rawEvent(ctx, a.Name(), input.Target, wfInfo.WorkflowExecution.ID, persistData)
+			}
 		}
 
 		// Persist results — prefer FullData (complete) over Data (summary)

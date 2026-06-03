@@ -12,22 +12,17 @@ import (
 )
 
 type GogoArtifact struct {
-	engine *sdkgogo.GogoEngine
+	engine        *sdkgogo.GogoEngine
+	resultHandler func(ctx context.Context, target string, result *types.GOGOResult) // streaming persist
 }
 
 type GogoInput struct {
-	IP    string `json:"ip"`
-	Ports string `json:"ports"`
+	IP         string `json:"ip"`
+	Ports      string `json:"ports"`
+	ChunkIdx   int    `json:"chunk_idx,omitempty"`
+	ChunkTotal int    `json:"chunk_total,omitempty"`
 }
 
-// GogoOutput is the full result set, persisted by the hook.
-type GogoOutput struct {
-	Results []*types.GOGOResult `json:"results"`
-	Total   int                 `json:"total"`
-}
-
-// GogoSummary is the lightweight response for the workflow layer.
-// Full results are persisted via FullData, not passed through Temporal.
 type GogoSummary struct {
 	Total   int      `json:"total"`
 	WebURLs []string `json:"web_urls"`
@@ -46,6 +41,11 @@ func NewGogoArtifact(cfg *sdkgogo.Config) (*GogoArtifact, error) {
 
 func NewGogoArtifactFromEngine(engine *sdkgogo.GogoEngine) *GogoArtifact {
 	return &GogoArtifact{engine: engine}
+}
+
+// SetResultHandler injects a per-result callback for streaming persist.
+func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target string, result *types.GOGOResult)) {
+	g.resultHandler = h
 }
 
 func (g *GogoArtifact) Name() string { return "gogo" }
@@ -82,7 +82,12 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 
-	var results []*types.GOGOResult
+	var (
+		count    int
+		webURLs  []string
+		latestIP string
+		started  = time.Now()
+	)
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -90,30 +95,36 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 		select {
 		case result, ok := <-resultCh:
 			if !ok {
-				// Build lightweight summary for workflow, full data for persist.
-				summary := GogoSummary{Total: len(results)}
-				for _, r := range results {
-					if r != nil && r.IsHttp() {
-						summary.WebURLs = append(summary.WebURLs, r.GetBaseURL())
-					}
-				}
-				summaryData, _ := json.Marshal(summary)
-				fullData, _ := json.Marshal(GogoOutput{Results: results, Total: len(results)})
+				summaryData, _ := json.Marshal(GogoSummary{Total: count, WebURLs: webURLs})
 				return Output{
 					Artifact: g.Name(),
 					Target:   input.Target,
 					Success:  true,
 					Data:     summaryData,
-					FullData: fullData,
 				}, nil
 			}
 			if result != nil {
-				results = append(results, result)
+				count++
+				latestIP = result.Ip
+				if result.IsHttp() {
+					webURLs = append(webURLs, result.GetBaseURL())
+				}
+				if g.resultHandler != nil {
+					g.resultHandler(ctx, input.Target, result)
+				}
 			}
 		case <-ticker.C:
-			activity.RecordHeartbeat(ctx, map[string]interface{}{
-				"found": len(results),
-			})
+			h := map[string]interface{}{
+				"found":       count,
+				"elapsed_sec": int(time.Since(started).Seconds()),
+				"latest":      latestIP,
+			}
+			if gogoIn.ChunkTotal > 0 {
+				h["chunk"] = gogoIn.IP
+				h["chunk_idx"] = gogoIn.ChunkIdx
+				h["chunk_total"] = gogoIn.ChunkTotal
+			}
+			activity.RecordHeartbeat(ctx, h)
 		case <-ctx.Done():
 			return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: ctx.Err().Error()}, nil
 		}
@@ -122,9 +133,9 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 
 func gogoThreads() int {
 	if iutils.IsWin() || iutils.IsMac() {
-		return 4000
+		return 100
 	}
-	n := 8000
+	n := 10000
 	if fdlimit := iutils.GetFdLimit(); n > fdlimit {
 		n = fdlimit - 100
 	}

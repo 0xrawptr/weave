@@ -47,6 +47,17 @@ type ScanResult struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// RawEvent stores artifact output exactly as produced, before any transformation.
+type RawEvent struct {
+	ID         string    `json:"id"`
+	Artifact   string    `json:"artifact"`
+	TargetID   string    `json:"target_id"`
+	TargetType string    `json:"target_type"` // "cidr", "domain", "ip"
+	WorkflowID string    `json:"workflow_id"`
+	Data       []byte    `json:"data"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // AssetRelation represents an edge between two assets in the graph.
 type AssetRelation struct {
 	FromAssetID string `json:"from_asset_id"`

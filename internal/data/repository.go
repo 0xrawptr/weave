@@ -19,19 +19,36 @@ func NewRepository(pg *PostgresStore, neo *Neo4jStore, rds *RedisStore) *Reposit
 	return &Repository{Postgres: pg, Neo4j: neo, Redis: rds}
 }
 
-func generateID(parts ...string) string {
+func (r *Repository) EnsureTarget(ctx context.Context, t *Target) error {
+	if r.Postgres == nil {
+		return nil
+	}
+	return r.Postgres.EnsureTarget(ctx, t)
+}
+
+func GenerateID(parts ...string) string {
 	h := sha256.Sum256([]byte(fmt.Sprintf("%v", parts)))
 	return hex.EncodeToString(h[:8])
 }
 
+func generateID(parts ...string) string { return GenerateID(parts...) }
+
 func (r *Repository) SaveAsset(ctx context.Context, asset *Asset) error {
-	if err := r.Postgres.InsertAsset(ctx, asset); err != nil {
-		return err
+	if r.Postgres != nil {
+		if err := r.Postgres.InsertAsset(ctx, asset); err != nil {
+			return err
+		}
 	}
-	return r.Neo4j.CreateAssetNode(ctx, asset)
+	if r.Neo4j != nil {
+		return r.Neo4j.CreateAssetNode(ctx, asset)
+	}
+	return nil
 }
 
 func (r *Repository) SaveRelation(ctx context.Context, rel AssetRelation) error {
+	if r.Neo4j == nil {
+		return nil
+	}
 	return r.Neo4j.CreateRelation(ctx, rel)
 }
 
@@ -46,17 +63,13 @@ func (r *Repository) MarkDuplicate(ctx context.Context, target, artifact string,
 }
 
 func (r *Repository) PersistActivityResult(ctx context.Context, artifactName, scanTarget string, data []byte) error {
+	// Only spray and cdncheck remain here. Gogo, fingers, neutron, nuclei are
+	// handled by the ETL pipeline.
 	switch artifactName {
-	case "gogo":
-		return r.persistGogoResult(ctx, scanTarget, data)
 	case "spray":
 		return r.persistSprayResult(ctx, scanTarget, data)
 	case "cdncheck":
 		return r.persistCdncheckResult(ctx, scanTarget, data)
-	case "fingers":
-		return r.persistFingersResult(ctx, scanTarget, data)
-	case "neutron":
-		return r.persistNeutronResult(ctx, scanTarget, data)
 	default:
 		return nil
 	}
@@ -85,7 +98,7 @@ func (r *Repository) persistFingersResult(ctx context.Context, scanTarget string
 	r.Postgres.EnsureTarget(ctx, &Target{ID: targetID, Type: "cidr", Value: scanTarget})
 
 	for _, item := range out.Frameworks {
-		fpID := generateID("fingerprint", item.Name)
+		fpID := generateID("fingerprint", scanTarget, item.Name)
 		fpAsset := &Asset{
 			ID: fpID, Type: "fingerprint", Value: item.Name,
 			Source: "fingers", TargetID: targetID, RawData: data,
@@ -121,11 +134,12 @@ func (r *Repository) persistNeutronResult(ctx context.Context, scanTarget string
 	r.Postgres.EnsureTarget(ctx, &Target{ID: targetID, Type: "cidr", Value: scanTarget})
 
 	for _, item := range out.Results {
-		vulnID := generateID("vuln", item.Target, item.TemplateID)
+		vulnID := generateID("vuln", scanTarget, item.Target, item.TemplateID)
+		itemRaw, _ := json.Marshal(item)
 		vulnAsset := &Asset{
 			ID: vulnID, Type: "vulnerability",
 			Value:  fmt.Sprintf("%s: %s", item.Severity, item.Info),
-			Source: "neutron", TargetID: targetID, RawData: data,
+			Source: "neutron", TargetID: targetID, RawData: itemRaw,
 		}
 		if err := r.SaveAsset(ctx, vulnAsset); err != nil {
 			return err
@@ -197,14 +211,14 @@ func (r *Repository) persistGogoResult(ctx context.Context, scanTarget string, d
 		raw, _ := json.Marshal(item)
 
 		ipAsset := &Asset{
-			ID: generateID("ip", item.IP), Type: "ip", Value: item.IP,
+			ID: generateID("ip", scanTarget, item.IP), Type: "ip", Value: item.IP,
 			Source: "gogo", TargetID: targetID,
 		}
 		if err := r.SaveAsset(ctx, ipAsset); err != nil {
 			return err
 		}
 
-		portID := generateID("port", item.IP, item.Port)
+		portID := generateID("port", scanTarget, item.IP, item.Port)
 		portAsset := &Asset{
 			ID: portID, Type: "port", Value: fmt.Sprintf("%s:%s", item.IP, item.Port),
 			Source: "gogo", TargetID: targetID, RawData: raw,
@@ -218,7 +232,7 @@ func (r *Repository) persistGogoResult(ctx context.Context, scanTarget string, d
 			return err
 		}
 
-		svcID := generateID("service", item.IP, item.Port, item.Protocol)
+		svcID := generateID("service", scanTarget, item.IP, item.Port, item.Protocol)
 		svcAsset := &Asset{
 			ID: svcID, Type: "service",
 			Value:    fmt.Sprintf("%s://%s:%s", item.Protocol, item.IP, item.Port),
@@ -235,7 +249,7 @@ func (r *Repository) persistGogoResult(ctx context.Context, scanTarget string, d
 		}
 
 		for fpName := range item.Frameworks {
-			fpID := generateID("fingerprint", fpName)
+			fpID := generateID("fingerprint", scanTarget, fpName)
 			fpAsset := &Asset{
 				ID: fpID, Type: "fingerprint", Value: fpName, Source: "gogo", TargetID: targetID,
 			}
@@ -275,10 +289,73 @@ func (r *Repository) persistSprayResult(ctx context.Context, scanTarget string, 
 
 	for _, item := range output.Results {
 		asset := &Asset{
-			ID: generateID("url", item.URL), Type: "url", Value: item.URL,
+			ID: generateID("url", scanTarget, item.URL), Type: "url", Value: item.URL,
 			Source: "spray", TargetID: targetID,
 		}
 		if err := r.SaveAsset(ctx, asset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SaveRawEvent stores an artifact's output untouched before transformation.
+func (r *Repository) SaveRawEvent(ctx context.Context, e *RawEvent) error {
+	if r.Postgres == nil {
+		return nil
+	}
+	targetType := e.TargetType
+	if targetType == "" {
+		targetType = "unknown"
+	}
+	targetID := generateID("target", e.TargetID)
+	_ = r.Postgres.EnsureTarget(ctx, &Target{ID: targetID, Type: targetType, Value: e.TargetID})
+	return r.Postgres.InsertRawEvent(ctx, e)
+}
+
+// PersistSingleResult persists a single gogo result directly (streaming mode).
+func (r *Repository) PersistSingleResult(ctx context.Context, scanTarget string, resultJSON []byte) error {
+	if resultJSON == nil {
+		return nil
+	}
+	wrapped, _ := json.Marshal(map[string]interface{}{
+		"results": []json.RawMessage{resultJSON},
+	})
+	return r.persistGogoResult(ctx, scanTarget, wrapped)
+}
+
+func (r *Repository) persistNucleiResult(ctx context.Context, scanTarget string, data []byte) error {
+	if data == nil {
+		return nil
+	}
+	type nucleiItem struct {
+		TemplateID string `json:"template_id"`
+		Info       string `json:"info"`
+		Severity   string `json:"severity"`
+		Target     string `json:"target"`
+		Matched    string `json:"matched"`
+	}
+	type nucleiOutput struct {
+		Results []nucleiItem `json:"results"`
+		Total   int          `json:"total"`
+	}
+	var out nucleiOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return fmt.Errorf("parse nuclei result: %w", err)
+	}
+
+	targetID := generateID("target", scanTarget)
+	r.Postgres.EnsureTarget(ctx, &Target{ID: targetID, Type: "cidr", Value: scanTarget})
+
+	for _, item := range out.Results {
+		vulnID := generateID("vuln", scanTarget, item.Target, item.TemplateID)
+		itemRaw, _ := json.Marshal(item)
+		vulnAsset := &Asset{
+			ID: vulnID, Type: "vulnerability",
+			Value:  fmt.Sprintf("%s: %s", item.Severity, item.Info),
+			Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+		}
+		if err := r.SaveAsset(ctx, vulnAsset); err != nil {
 			return err
 		}
 	}
@@ -302,6 +379,27 @@ func (r *Repository) GetWebURLs(ctx context.Context, scanTarget string) ([]strin
 		}
 	}
 	return urls, nil
+}
+
+// GetFingerprints returns the unique fingerprint names discovered by gogo for a target.
+func (r *Repository) GetFingerprints(ctx context.Context, scanTarget string) ([]string, error) {
+	if r.Postgres == nil {
+		return nil, nil
+	}
+	targetID := generateID("target", scanTarget)
+	assets, err := r.Postgres.QueryAssets(ctx, targetID, "fingerprint", 10000, 0)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var names []string
+	for _, a := range assets {
+		if !seen[a.Value] {
+			seen[a.Value] = true
+			names = append(names, a.Value)
+		}
+	}
+	return names, nil
 }
 
 func (r *Repository) Close() {

@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/0xrawptr/weave/internal/workflow"
@@ -13,13 +15,45 @@ import (
 
 // StartWorkflowRequest is the request body for starting a new workflow.
 type StartWorkflowRequest struct {
-	Type   string                 `json:"type"`   // "domain", "ip", "company"
+	Type   string                 `json:"type"`   // "auto", "domain", "ip", "portscan", "company"
 	Input  map[string]interface{} `json:"input"`  // workflow-specific input
 	Target string                 `json:"target"` // shorthand for target
 }
 
 func generateWorkflowID(wfType string) string {
 	return fmt.Sprintf("%s-%d", wfType, time.Now().UnixNano())
+}
+
+// resolveTarget parses a raw target string and returns the workflow type,
+// cleaned target, and default ports.
+func resolveTarget(raw string) (wfType, target, ports string) {
+	raw = strings.TrimSpace(raw)
+
+	// IP:port format — e.g. "1.1.1.1:789"
+	if host, port, err := net.SplitHostPort(raw); err == nil {
+		return "ip", host, port
+	}
+
+	// CIDR format — e.g. "1.1.1.0/24" (only if the part after / is a number)
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") && strings.Contains(raw, "/") {
+		afterSlash := raw[strings.LastIndex(raw, "/")+1:]
+		if isNumeric(afterSlash) {
+			return "ip", raw, "top1000"
+		}
+		return "", raw, "" // URL path, not CIDR
+	}
+
+	// Plain IP — e.g. "1.1.1.1"
+	if net.ParseIP(raw) != nil {
+		return "ip", raw, "top1000"
+	}
+
+	// Looks like a domain (has a dot, no spaces, no path)
+	if strings.Contains(raw, ".") && !strings.Contains(raw, " ") && !strings.Contains(raw, "/") {
+		return "domain", raw, ""
+	}
+
+	return "", raw, ""
 }
 
 // StartWorkflow creates and starts a new workflow execution.
@@ -35,8 +69,20 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		return
 	}
 
+	// Auto-detect workflow type from target format
+	detectedType := req.Type
+	detectedTarget := req.Target
+	detectedPorts := "top1000"
+	if req.Type == "auto" || req.Type == "" {
+		detectedType, detectedTarget, detectedPorts = resolveTarget(req.Target)
+		if detectedType == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unable to determine target type: " + req.Target})
+			return
+		}
+	}
+
 	ctx := context.Background()
-	workflowID := generateWorkflowID(req.Type)
+	workflowID := generateWorkflowID(detectedType)
 
 	var run client.WorkflowRun
 	opts := client.StartWorkflowOptions{
@@ -44,9 +90,9 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		TaskQueue: s.cfg.Temporal.TaskQueue,
 	}
 
-	switch req.Type {
+	switch detectedType {
 	case "domain":
-		domain := req.Target
+		domain := detectedTarget
 		if d, ok := req.Input["domain"].(string); ok {
 			domain = d
 		}
@@ -61,8 +107,8 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		}
 
 	case "ip":
-		ip := req.Target
-		ports := "top1000"
+		ip := detectedTarget
+		ports := detectedPorts
 		if i, ok := req.Input["ip"].(string); ok {
 			ip = i
 		}
@@ -80,7 +126,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		}
 
 	case "portscan":
-		ip := req.Target
+		ip := detectedTarget
 		ports := "1-65535"
 		if i, ok := req.Input["ip"].(string); ok {
 			ip = i
@@ -99,7 +145,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		}
 
 	case "company":
-		company := req.Target
+		company := detectedTarget
 		var domains []string
 		if cn, ok := req.Input["company"].(string); ok {
 			company = cn
@@ -122,14 +168,15 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		}
 
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported workflow type: " + req.Type})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported workflow type: " + detectedType})
 		return
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"workflow_id": run.GetID(),
 		"run_id":      run.GetRunID(),
-		"type":        req.Type,
+		"type":        detectedType,
+		"target":      detectedTarget,
 	})
 }
 
@@ -176,4 +223,16 @@ func (s *Server) CancelWorkflow(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

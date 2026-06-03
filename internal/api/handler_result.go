@@ -25,9 +25,10 @@ func (s *Server) ListResults(c *gin.Context) {
 		return
 	}
 
+	total, _ := s.repo.Postgres.CountAssets(c.Request.Context(), targetID, assetType)
 	c.JSON(http.StatusOK, gin.H{
 		"results": assets,
-		"total":   len(assets),
+		"total":   total,
 		"limit":   limit,
 		"offset":  offset,
 	})
@@ -73,19 +74,10 @@ func (s *Server) GetResult(c *gin.Context) {
 		return
 	}
 
-	assets, err := s.repo.Postgres.QueryAssets(c.Request.Context(), "", "", 1, 0)
+	asset, err := s.repo.Postgres.GetAssetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found: " + id})
 		return
 	}
-
-	// Simple linear search — in production, add a dedicated GetByID method
-	for _, a := range assets {
-		if a.ID == id {
-			c.JSON(http.StatusOK, a)
-			return
-		}
-	}
-
-	c.JSON(http.StatusNotFound, gin.H{"error": "result not found"})
+	c.JSON(http.StatusOK, asset)
 }

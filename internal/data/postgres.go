@@ -82,8 +82,19 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS raw_events (
+			id TEXT PRIMARY KEY,
+			artifact TEXT NOT NULL,
+			target_id TEXT NOT NULL DEFAULT '',
+			workflow_id TEXT NOT NULL DEFAULT '',
+			data JSONB NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		);
+
 	CREATE INDEX IF NOT EXISTS idx_assets_target ON assets(target_id);
 	CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type);
+	CREATE INDEX IF NOT EXISTS idx_raw_events_artifact ON raw_events(artifact);
+	CREATE INDEX IF NOT EXISTS idx_raw_events_target ON raw_events(target_id);
 	CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id);
 	CREATE INDEX IF NOT EXISTS idx_scans_workflow ON scans(workflow_id);
 	`
@@ -104,6 +115,14 @@ func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
 		`INSERT INTO assets (id, type, value, source, target_id, raw_data)
 		 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
 		asset.ID, asset.Type, asset.Value, asset.Source, asset.TargetID, asset.RawData)
+	return err
+}
+
+func (p *PostgresStore) InsertRawEvent(ctx context.Context, e *RawEvent) error {
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO raw_events (id, artifact, target_id, workflow_id, data)
+		 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
+		e.ID, e.Artifact, e.TargetID, e.WorkflowID, e.Data)
 	return err
 }
 
@@ -149,6 +168,42 @@ func (p *PostgresStore) QueryAssets(ctx context.Context, targetID string, assetT
 		assets = append(assets, a)
 	}
 	return assets, nil
+}
+
+func (p *PostgresStore) CountAssets(ctx context.Context, targetID, assetType string) (int, error) {
+	var count int
+	query := `SELECT count(*) FROM assets WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if targetID != "" {
+		query += fmt.Sprintf(" AND target_id = $%d", argIdx)
+		args = append(args, targetID)
+		argIdx++
+	}
+	if assetType != "" {
+		query += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, assetType)
+	}
+	if err := p.pool.QueryRow(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (p *PostgresStore) GetAssetByID(ctx context.Context, id string) (*Asset, error) {
+	rows, err := p.pool.Query(ctx, `SELECT id, type, value, source, target_id, raw_data, created_at FROM assets WHERE id = $1 LIMIT 1`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, fmt.Errorf("asset %s not found", id)
+	}
+	var a Asset
+	if err := rows.Scan(&a.ID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
 
 func (p *PostgresStore) Close() {

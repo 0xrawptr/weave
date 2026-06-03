@@ -5,22 +5,21 @@ import (
 	"encoding/json"
 
 	sdkfingers "github.com/chainreactors/sdk/fingers"
+
+	"github.com/0xrawptr/weave/internal/favicon"
 )
 
-// FingersArtifact wraps the SDK fingers engine for passive and active fingerprinting.
 type FingersArtifact struct {
 	engine      *sdkfingers.Engine
 	urlResolver URLResolver
 }
 
-// FingersInput defines the input for fingerprint operations.
 type FingersInput struct {
-	Mode string   `json:"mode"` // "match", "http_match"
+	Mode string   `json:"mode"`
 	Data []byte   `json:"data,omitempty"`
 	URLs []string `json:"urls,omitempty"`
 }
 
-// FingersOutput contains the fingerprinted frameworks.
 type FingersOutput struct {
 	Frameworks []FingersFrameworkItem `json:"frameworks"`
 	Count      int                    `json:"count"`
@@ -44,13 +43,10 @@ func NewFingersArtifact(cfg *sdkfingers.Config) (*FingersArtifact, error) {
 	return &FingersArtifact{engine: engine}, nil
 }
 
-// NewFingersArtifactFromEngine wraps an already-initialized SDK engine.
 func NewFingersArtifactFromEngine(engine *sdkfingers.Engine) *FingersArtifact {
 	return &FingersArtifact{engine: engine}
 }
 
-// SetURLResolver injects a resolver so the artifact can query the DB
-// for web URLs when the workflow passes only a target.
 func (f *FingersArtifact) SetURLResolver(r URLResolver) { f.urlResolver = r }
 
 func (f *FingersArtifact) Name() string { return "fingers" }
@@ -111,12 +107,35 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 		}
 		for _, tr := range results {
 			for _, sr := range tr.Results {
-				item := FingersFrameworkItem{Name: sr.Framework.Name}
-				if sr.Framework != nil {
-					item.Product = sr.Framework.Product
-					item.Version = sr.Framework.Version
-					item.Tags = sr.Framework.Tags
+				if sr.Framework == nil {
+					continue
 				}
+				item := FingersFrameworkItem{Name: sr.Framework.Name}
+				item.Product = sr.Framework.Product
+				item.Version = sr.Framework.Version
+				item.Tags = sr.Framework.Tags
+				items = append(items, item)
+			}
+		}
+		// Favicon detection with smarter HTML parsing.
+		fc := favicon.NewFetcher()
+		for _, u := range urls {
+			r, err := fc.Fetch(u)
+			if err != nil || len(r.Data) == 0 {
+				continue
+			}
+			frameworks, err := f.engine.MatchFavicon(r.Data)
+			if err != nil {
+				continue
+			}
+			for name, fw := range frameworks {
+				if fw == nil {
+					continue
+				}
+				item := FingersFrameworkItem{Name: name}
+				item.Product = fw.Product
+				item.Version = fw.Version
+				item.Tags = fw.Tags
 				items = append(items, item)
 			}
 		}

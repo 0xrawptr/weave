@@ -44,6 +44,9 @@ type SchemaField struct {
 // when no explicit URLs are provided in its input.
 type URLResolver func(ctx context.Context, target string) ([]string, error)
 
+// TagResolver resolves a scan target to a list of fingerprint tags for template filtering.
+type TagResolver func(ctx context.Context, target string) ([]string, error)
+
 // Artifact is the standardized interface for all prism artifacts.
 type Artifact interface {
 	Name() string

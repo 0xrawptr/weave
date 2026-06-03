@@ -86,6 +86,10 @@ func NewRegistryFromClient(c *sdkclient.Client) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cdncheck: %w", err)
 	}
+	nucleiEngine, err := NewNucleiArtifact()
+	if err != nil {
+		return nil, fmt.Errorf("nuclei: %w", err)
+	}
 
 	reg := NewRegistry()
 	reg.Register(NewGogoArtifactFromEngine(gogoEngine))
@@ -94,6 +98,7 @@ func NewRegistryFromClient(c *sdkclient.Client) (*Registry, error) {
 	reg.Register(NewSprayArtifactFromEngine(sprayEngine))
 	reg.Register(NewZombieArtifactFromEngine(zombieEngine))
 	reg.Register(cdncheckEngine)
+	reg.Register(nucleiEngine)
 	return reg, nil
 }
 

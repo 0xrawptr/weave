@@ -59,7 +59,7 @@ func main() {
 	repo := data.NewRepository(pg, neo, rds)
 
 	// Initialize artifact registry from SDK client (shared provider + auto DI).
-	sdkCli := sdkclient.New(sdkclient.WithProvider(provider.NewEmbedProvider()))
+	sdkCli := sdkclient.New(sdkclient.WithProvider(provider.NewEmbedProvider()), sdkclient.WithIndex(nil))
 	reg, err := artifact.NewRegistryFromClient(sdkCli)
 	if err != nil {
 		log.Fatalf("artifact init: %v", err)
