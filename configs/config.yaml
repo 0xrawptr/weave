@@ -26,6 +26,20 @@ redis:
   password: ""
   db: 0
 
+knowledge:
+  # Local knowledge paths should be provided through environment variables.
+  # Example:
+  #   export WEAVE_NUCLEI_TEMPLATES_PATH="$HOME/nuclei-templates"
+  #   export WEAVE_KEV_PATH="$HOME/weave-knowledge/known_exploited_vulnerabilities.json"
+  #   export WEAVE_EPSS_PATH="$HOME/weave-knowledge/epss_scores-current.csv.gz"
+  #   export WEAVE_VULNRICHMENT_PATH="$HOME/weave-knowledge/vulnrichment"
+  nuclei_templates_path: ${WEAVE_NUCLEI_TEMPLATES_PATH}
+  product_aliases_path: ""
+  kev_path: ${WEAVE_KEV_PATH}
+  epss_path: ${WEAVE_EPSS_PATH}
+  vulnrichment_path: ${WEAVE_VULNRICHMENT_PATH}
+  max_templates_per_lookup: 80
+
 artifacts:
   gogo:
     threads: 100

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/0xrawptr/weave/internal/artifact"
-	"github.com/chainreactors/utils"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -87,23 +86,4 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 	}
 
 	return result, nil
-}
-
-func splitCIDR(target string) []string {
-	cidr := utils.ParseCIDR(target)
-	if cidr == nil {
-		return []string{target}
-	}
-	if cidr.Mask > 24 {
-		return []string{target}
-	}
-	chunks, err := cidr.Split(24)
-	if err != nil {
-		return []string{target}
-	}
-	out := make([]string, len(chunks))
-	for i, c := range chunks {
-		out[i] = c.String()
-	}
-	return out
 }

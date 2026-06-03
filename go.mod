@@ -3,6 +3,7 @@ module github.com/0xrawptr/weave
 go 1.26.2
 
 require (
+	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/chainreactors/sdk v0.2.3
 	github.com/chainreactors/utils v0.0.0-20260529070435-f03100630384
 	github.com/gin-gonic/gin v1.12.0
@@ -14,6 +15,10 @@ require (
 	go.temporal.io/sdk v1.44.1
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace github.com/projectdiscovery/utils v0.11.1 => github.com/projectdiscovery/utils v0.10.1
+
+replace github.com/microsoft/go-mssqldb v1.9.2 => ./internal/mssqlstub
 
 require (
 	aead.dev/minisign v0.3.0 // indirect
@@ -38,7 +43,6 @@ require (
 	github.com/Mzack9999/goja v0.0.0-20250507184235-e46100e9c697 // indirect
 	github.com/Mzack9999/goja_nodejs v0.0.0-20250507184139-66bcbf65c883 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
-	github.com/PuerkitoBio/goquery v1.11.0 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
@@ -339,12 +343,12 @@ require (
 	github.com/projectdiscovery/machineid v0.0.0-20250715113114-c77eb3567582 // indirect
 	github.com/projectdiscovery/mapcidr v1.1.97 // indirect
 	github.com/projectdiscovery/n3iwf v0.0.0-20230523120440-b8cd232ff1f5 // indirect
-	github.com/projectdiscovery/networkpolicy v0.1.37 // indirect
+	github.com/projectdiscovery/networkpolicy v0.1.38 // indirect
 	github.com/projectdiscovery/ratelimit v0.0.85 // indirect
 	github.com/projectdiscovery/rawhttp v0.1.90 // indirect
 	github.com/projectdiscovery/rdap v0.9.0 // indirect
 	github.com/projectdiscovery/retryabledns v1.0.114 // indirect
-	github.com/projectdiscovery/retryablehttp-go v1.3.10 // indirect
+	github.com/projectdiscovery/retryablehttp-go v1.3.11 // indirect
 	github.com/projectdiscovery/sarif v0.0.1 // indirect
 	github.com/projectdiscovery/tlsx v1.2.2 // indirect
 	github.com/projectdiscovery/uncover v1.2.0 // indirect
@@ -475,7 +479,3 @@ require (
 	moul.io/http2curl v1.0.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace github.com/projectdiscovery/utils v0.11.1 => github.com/projectdiscovery/utils v0.10.1
-
-replace github.com/microsoft/go-mssqldb v1.9.2 => ./internal/mssqlstub

@@ -47,6 +47,7 @@ func (r *Registry) List() []ArtifactInfo {
 			Name:         a.Name(),
 			InputSchema:  a.InputSchema(),
 			OutputSchema: a.OutputSchema(),
+			Descriptor:   descriptorFor(a),
 		})
 	}
 	return infos
@@ -57,6 +58,21 @@ type ArtifactInfo struct {
 	Name         string       `json:"name"`
 	InputSchema  InputSchema  `json:"input_schema"`
 	OutputSchema OutputSchema `json:"output_schema"`
+	Descriptor   Descriptor   `json:"descriptor"`
+}
+
+func descriptorFor(a Artifact) Descriptor {
+	if described, ok := a.(DescribedArtifact); ok {
+		return described.Descriptor()
+	}
+	return Descriptor{
+		Name:          a.Name(),
+		Consumes:      []string{"target"},
+		Produces:      []string{"raw_event"},
+		Passive:       false,
+		TouchesTarget: true,
+		Risk:          "medium",
+	}
 }
 
 // NewRegistryFromClient creates a registry pre-populated with all engines

@@ -43,7 +43,7 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		if !entitySet[ipID] {
 			result.Entities = append(result.Entities, Entity{
 				ID: ipID, Type: "ip", Value: item.IP,
-				Source: "gogo", TargetID: targetID,
+				Source: "gogo", TargetID: targetID, Confidence: 1.0, Status: "observed",
 			})
 			entitySet[ipID] = true
 		}
@@ -52,7 +52,7 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		portID := data.GenerateID("port", scanTarget, item.IP, item.Port)
 		result.Entities = append(result.Entities, Entity{
 			ID: portID, Type: "port", Value: fmt.Sprintf("%s:%s", item.IP, item.Port),
-			Source: "gogo", TargetID: targetID, RawData: raw,
+			Source: "gogo", TargetID: targetID, RawData: raw, Confidence: 1.0, Status: "observed",
 		})
 		result.Relations = append(result.Relations, Relation{
 			FromID: ipID, ToID: portID, Type: "has_port",
@@ -63,7 +63,7 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		result.Entities = append(result.Entities, Entity{
 			ID: svcID, Type: "service",
 			Value:  fmt.Sprintf("%s://%s:%s", item.Protocol, item.IP, item.Port),
-			Source: "gogo", TargetID: targetID,
+			Source: "gogo", TargetID: targetID, Confidence: 1.0, Status: "observed",
 		})
 		result.Relations = append(result.Relations, Relation{
 			FromID: portID, ToID: svcID, Type: "runs",
@@ -74,7 +74,7 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 			fpID := data.GenerateID("fingerprint", scanTarget, fpName)
 			result.Entities = append(result.Entities, Entity{
 				ID: fpID, Type: "fingerprint", Value: fpName,
-				Source: "gogo", TargetID: targetID,
+				Source: "gogo", TargetID: targetID, Confidence: 0.7, Status: "observed",
 			})
 			result.Relations = append(result.Relations, Relation{
 				FromID: svcID, ToID: fpID, Type: "has_fingerprint",

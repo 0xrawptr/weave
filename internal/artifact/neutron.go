@@ -56,6 +56,18 @@ func (n *NeutronArtifact) SetURLResolver(r URLResolver) { n.urlResolver = r }
 
 func (n *NeutronArtifact) Name() string { return "neutron" }
 
+func (n *NeutronArtifact) Descriptor() Descriptor {
+	return Descriptor{
+		Name:          n.Name(),
+		Consumes:      []string{"url"},
+		Produces:      []string{"vulnerability"},
+		Passive:       false,
+		TouchesTarget: true,
+		Risk:          "medium",
+		Description:   "SDK POC/template vulnerability validation",
+	}
+}
+
 func (n *NeutronArtifact) InputSchema() InputSchema {
 	return InputSchema{
 		Fields: []SchemaField{

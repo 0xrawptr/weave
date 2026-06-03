@@ -13,6 +13,7 @@ import (
 type NucleiArtifact struct {
 	urlResolver URLResolver
 	tagResolver TagResolver
+	idResolver  TagResolver // returns template IDs for precise matching
 }
 
 // NucleiInput defines the input for nuclei scanning.
@@ -43,8 +44,21 @@ func NewNucleiArtifact() (*NucleiArtifact, error) {
 
 func (n *NucleiArtifact) Name() string { return "nuclei" }
 
+func (n *NucleiArtifact) Descriptor() Descriptor {
+	return Descriptor{
+		Name:          n.Name(),
+		Consumes:      []string{"url", "template", "tag"},
+		Produces:      []string{"vulnerability"},
+		Passive:       false,
+		TouchesTarget: true,
+		Risk:          "medium",
+		Description:   "template-based vulnerability validation",
+	}
+}
+
 func (n *NucleiArtifact) SetURLResolver(r URLResolver) { n.urlResolver = r }
-func (n *NucleiArtifact) SetTagResolver(r TagResolver)    { n.tagResolver = r }
+func (n *NucleiArtifact) SetTagResolver(r TagResolver) { n.tagResolver = r }
+func (n *NucleiArtifact) SetIDResolver(r TagResolver)  { n.idResolver = r }
 
 func (n *NucleiArtifact) InputSchema() InputSchema {
 	return InputSchema{
@@ -82,7 +96,13 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 	}
 
 	tags := nin.Tags
-	if len(tags) == 0 && n.tagResolver != nil {
+	ids := nin.IDs
+	if n.idResolver != nil {
+		if resolved, err := n.idResolver(ctx, input.Target); err == nil {
+			ids = resolved
+		}
+	}
+	if n.tagResolver != nil {
 		if resolved, err := n.tagResolver(ctx, input.Target); err == nil {
 			tags = resolved
 		}
@@ -90,7 +110,7 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 
 	filters := nuclei.TemplateFilters{
 		Tags: tags,
-		IDs:  nin.IDs,
+		IDs:  ids,
 	}
 
 	ne, err := nuclei.NewNucleiEngineCtx(ctx,

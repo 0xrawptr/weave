@@ -51,6 +51,18 @@ func (f *FingersArtifact) SetURLResolver(r URLResolver) { f.urlResolver = r }
 
 func (f *FingersArtifact) Name() string { return "fingers" }
 
+func (f *FingersArtifact) Descriptor() Descriptor {
+	return Descriptor{
+		Name:          f.Name(),
+		Consumes:      []string{"url", "http_response"},
+		Produces:      []string{"fingerprint"},
+		Passive:       false,
+		TouchesTarget: true,
+		Risk:          "low",
+		Description:   "HTTP fingerprint matching and favicon detection",
+	}
+}
+
 func (f *FingersArtifact) InputSchema() InputSchema {
 	return InputSchema{
 		Fields: []SchemaField{

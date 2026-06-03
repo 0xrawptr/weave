@@ -30,3 +30,11 @@
 3. 如果报 aurora 冲突 → 妥协 1 仍需保留，删除最新版 nuclei 继续等
 4. 如果报 mssql 冲突 → 查看是否同一包路径，是则删除妥协 2
 5. 如果编译通过 → 删除所有 replace，删除本目录
+
+## 最近验证
+
+2026-06-03 验证当前依赖组合：
+
+- 删除 `github.com/projectdiscovery/utils` replace 后，`go test ./...` 会在 nuclei v3.8.0 的 runner 编译阶段触发 aurora v2/v4 类型不兼容。
+- 删除 `github.com/microsoft/go-mssqldb` replace 后，`go test ./...` 会触发 `sql: Register called twice for driver mssql`。
+- 保留两个 replace 后，`go test ./...` 与 `go vet ./...` 均通过。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -57,6 +58,13 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		source TEXT NOT NULL,
 		target_id TEXT REFERENCES targets(id),
 		raw_data JSONB,
+		confidence DOUBLE PRECISION DEFAULT 1.0,
+		severity TEXT NOT NULL DEFAULT '',
+		priority INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'observed',
+		source_run_id TEXT NOT NULL DEFAULT '',
+		first_seen TIMESTAMPTZ DEFAULT NOW(),
+		last_seen TIMESTAMPTZ DEFAULT NOW(),
 		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
@@ -86,15 +94,47 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			artifact TEXT NOT NULL,
 			target_id TEXT NOT NULL DEFAULT '',
+			target_type TEXT NOT NULL DEFAULT '',
 			workflow_id TEXT NOT NULL DEFAULT '',
 			data JSONB NOT NULL,
 			created_at TIMESTAMPTZ DEFAULT NOW()
 		);
 
+	CREATE TABLE IF NOT EXISTS action_records (
+		id TEXT PRIMARY KEY,
+		target TEXT NOT NULL,
+		artifact TEXT NOT NULL,
+		input JSONB NOT NULL,
+		priority INTEGER NOT NULL DEFAULT 0,
+		reason TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'candidate',
+		attempts INTEGER NOT NULL DEFAULT 0,
+		workflow_id TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW(),
+		started_at TIMESTAMPTZ,
+		completed_at TIMESTAMPTZ
+	);
+
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION DEFAULT 1.0;
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT '';
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'observed';
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_run_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT NOW();
+	ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT NOW();
+	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS target_type TEXT NOT NULL DEFAULT '';
+
 	CREATE INDEX IF NOT EXISTS idx_assets_target ON assets(target_id);
 	CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type);
+	CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status);
+	CREATE INDEX IF NOT EXISTS idx_assets_priority ON assets(priority);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_artifact ON raw_events(artifact);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_target ON raw_events(target_id);
+	CREATE INDEX IF NOT EXISTS idx_action_records_target ON action_records(target);
+	CREATE INDEX IF NOT EXISTS idx_action_records_status ON action_records(status);
+	CREATE INDEX IF NOT EXISTS idx_action_records_artifact ON action_records(artifact);
 	CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id);
 	CREATE INDEX IF NOT EXISTS idx_scans_workflow ON scans(workflow_id);
 	`
@@ -111,18 +151,37 @@ func (p *PostgresStore) EnsureTarget(ctx context.Context, t *Target) error {
 }
 
 func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
+	if asset.Status == "" {
+		asset.Status = "observed"
+	}
+	if asset.Confidence == 0 {
+		asset.Confidence = 1.0
+	}
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO assets (id, type, value, source, target_id, raw_data)
-		 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
-		asset.ID, asset.Type, asset.Value, asset.Source, asset.TargetID, asset.RawData)
+		`INSERT INTO assets (id, type, value, source, target_id, raw_data, confidence, severity, priority, status, source_run_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 ON CONFLICT (id) DO UPDATE SET
+			raw_data = COALESCE(EXCLUDED.raw_data, assets.raw_data),
+			confidence = GREATEST(assets.confidence, EXCLUDED.confidence),
+			severity = CASE WHEN EXCLUDED.severity <> '' THEN EXCLUDED.severity ELSE assets.severity END,
+			priority = GREATEST(assets.priority, EXCLUDED.priority),
+			status = CASE
+				WHEN assets.status IN ('false_positive', 'ignored', 'interesting') THEN assets.status
+				WHEN EXCLUDED.status <> '' THEN EXCLUDED.status
+				ELSE assets.status
+			END,
+			source_run_id = CASE WHEN EXCLUDED.source_run_id <> '' THEN EXCLUDED.source_run_id ELSE assets.source_run_id END,
+			last_seen = NOW()`,
+		asset.ID, asset.Type, asset.Value, asset.Source, asset.TargetID, asset.RawData,
+		asset.Confidence, asset.Severity, asset.Priority, asset.Status, asset.SourceRunID)
 	return err
 }
 
 func (p *PostgresStore) InsertRawEvent(ctx context.Context, e *RawEvent) error {
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO raw_events (id, artifact, target_id, workflow_id, data)
-		 VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
-		e.ID, e.Artifact, e.TargetID, e.WorkflowID, e.Data)
+		`INSERT INTO raw_events (id, artifact, target_id, target_type, workflow_id, data)
+		 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
+		e.ID, e.Artifact, e.TargetID, e.TargetType, e.WorkflowID, e.Data)
 	return err
 }
 
@@ -134,8 +193,83 @@ func (p *PostgresStore) InsertScanResult(ctx context.Context, sr *ScanResult) er
 	return err
 }
 
+func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionRecord) (bool, error) {
+	if record.Status == "" {
+		record.Status = "running"
+	}
+	var id string
+	err := p.pool.QueryRow(ctx,
+		`INSERT INTO action_records (id, target, artifact, input, priority, reason, status, attempts, workflow_id, started_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'running', 1, $7, NOW(), NOW())
+		 ON CONFLICT (id) DO UPDATE SET
+			target = EXCLUDED.target,
+			artifact = EXCLUDED.artifact,
+			input = EXCLUDED.input,
+			priority = EXCLUDED.priority,
+			reason = EXCLUDED.reason,
+			status = 'running',
+			attempts = action_records.attempts + 1,
+			workflow_id = EXCLUDED.workflow_id,
+			error = '',
+			started_at = NOW(),
+			updated_at = NOW()
+		 WHERE action_records.status NOT IN ('running', 'completed')
+		 RETURNING id`,
+		record.ID, record.Target, record.Artifact, record.Input, record.Priority, record.Reason, record.WorkflowID).Scan(&id)
+	if err == nil {
+		return true, nil
+	}
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	return false, err
+}
+
+func (p *PostgresStore) CompleteActionRecord(ctx context.Context, id, status, errorMessage string) error {
+	if status == "" {
+		status = "completed"
+	}
+	_, err := p.pool.Exec(ctx,
+		`UPDATE action_records
+		 SET status = $2,
+			 error = $3,
+			 completed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE completed_at END,
+			 updated_at = NOW()
+		 WHERE id = $1`,
+		id, status, errorMessage)
+	return err
+}
+
+func (p *PostgresStore) QueryActionRecords(ctx context.Context, target string) ([]ActionRecord, error) {
+	query := `SELECT id, target, artifact, input, priority, reason, status, attempts, workflow_id, error,
+		created_at, updated_at, COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
+		FROM action_records WHERE 1=1`
+	args := []interface{}{}
+	if target != "" {
+		query += ` AND target = $1`
+		args = append(args, target)
+	}
+	query += ` ORDER BY priority DESC, updated_at DESC`
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []ActionRecord
+	for rows.Next() {
+		var record ActionRecord
+		if err := rows.Scan(&record.ID, &record.Target, &record.Artifact, &record.Input, &record.Priority, &record.Reason, &record.Status, &record.Attempts, &record.WorkflowID, &record.Error, &record.CreatedAt, &record.UpdatedAt, &record.StartedAt, &record.CompletedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func (p *PostgresStore) QueryAssets(ctx context.Context, targetID string, assetType string, limit, offset int) ([]Asset, error) {
-	query := `SELECT id, type, value, source, target_id, raw_data, created_at FROM assets WHERE 1=1`
+	query := `SELECT id, type, value, source, target_id, raw_data, confidence, severity, priority, status, source_run_id, first_seen, last_seen, created_at FROM assets WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
 
@@ -162,7 +296,7 @@ func (p *PostgresStore) QueryAssets(ctx context.Context, targetID string, assetT
 	var assets []Asset
 	for rows.Next() {
 		var a Asset
-		if err := rows.Scan(&a.ID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.Confidence, &a.Severity, &a.Priority, &a.Status, &a.SourceRunID, &a.FirstSeen, &a.LastSeen, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		assets = append(assets, a)
@@ -191,7 +325,7 @@ func (p *PostgresStore) CountAssets(ctx context.Context, targetID, assetType str
 }
 
 func (p *PostgresStore) GetAssetByID(ctx context.Context, id string) (*Asset, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id, type, value, source, target_id, raw_data, created_at FROM assets WHERE id = $1 LIMIT 1`, id)
+	rows, err := p.pool.Query(ctx, `SELECT id, type, value, source, target_id, raw_data, confidence, severity, priority, status, source_run_id, first_seen, last_seen, created_at FROM assets WHERE id = $1 LIMIT 1`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +334,7 @@ func (p *PostgresStore) GetAssetByID(ctx context.Context, id string) (*Asset, er
 		return nil, fmt.Errorf("asset %s not found", id)
 	}
 	var a Asset
-	if err := rows.Scan(&a.ID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.CreatedAt); err != nil {
+	if err := rows.Scan(&a.ID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.Confidence, &a.Severity, &a.Priority, &a.Status, &a.SourceRunID, &a.FirstSeen, &a.LastSeen, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &a, nil

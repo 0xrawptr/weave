@@ -20,10 +20,10 @@ type CdncheckInput struct {
 
 // CdncheckOutput describes what type of infrastructure was detected.
 type CdncheckOutput struct {
-	IsCDN   bool   `json:"is_cdn"`
-	IsCloud bool   `json:"is_cloud"`
-	IsWAF   bool   `json:"is_waf"`
-	CDNName string `json:"cdn_name,omitempty"`
+	IsCDN   bool     `json:"is_cdn"`
+	IsCloud bool     `json:"is_cloud"`
+	IsWAF   bool     `json:"is_waf"`
+	CDNName string   `json:"cdn_name,omitempty"`
 	IPs     []string `json:"ips,omitempty"`
 }
 
@@ -36,6 +36,18 @@ func NewCdncheckArtifact() (*CdncheckArtifact, error) {
 }
 
 func (c *CdncheckArtifact) Name() string { return "cdncheck" }
+
+func (c *CdncheckArtifact) Descriptor() Descriptor {
+	return Descriptor{
+		Name:          c.Name(),
+		Consumes:      []string{"domain", "ip"},
+		Produces:      []string{"protection", "ip"},
+		Passive:       true,
+		TouchesTarget: false,
+		Risk:          "low",
+		Description:   "CDN, cloud, and WAF detection",
+	}
+}
 
 func (c *CdncheckArtifact) InputSchema() InputSchema {
 	return InputSchema{

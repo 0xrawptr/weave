@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -52,19 +53,33 @@ func (n *Neo4jStore) CreateAssetNode(ctx context.Context, asset *Asset) error {
 
 	_, err := session.Run(ctx,
 		`MERGE (a:Asset {id: $id})
-		 SET a.type = $type, a.value = $value, a.source = $source, a.target_id = $targetID`,
+		 SET a.type = $type,
+			 a.value = $value,
+			 a.source = $source,
+			 a.target_id = $targetID,
+			 a.confidence = $confidence,
+			 a.severity = $severity,
+			 a.priority = $priority,
+			 a.status = $status`,
 		map[string]interface{}{
-			"id":        asset.ID,
-			"type":      asset.Type,
-			"value":     asset.Value,
-			"source":    asset.Source,
-			"targetID":  asset.TargetID,
+			"id":         asset.ID,
+			"type":       asset.Type,
+			"value":      asset.Value,
+			"source":     asset.Source,
+			"targetID":   asset.TargetID,
+			"confidence": asset.Confidence,
+			"severity":   asset.Severity,
+			"priority":   asset.Priority,
+			"status":     asset.Status,
 		})
 	return err
 }
 
 // CreateRelation creates a relationship between two asset nodes.
 func (n *Neo4jStore) CreateRelation(ctx context.Context, rel AssetRelation) error {
+	if !validRelationType(rel.Type) {
+		return fmt.Errorf("invalid relation type %q", rel.Type)
+	}
 	session := n.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 	defer session.Close(ctx)
 
@@ -77,6 +92,15 @@ func (n *Neo4jStore) CreateRelation(ctx context.Context, rel AssetRelation) erro
 		"toID":   rel.ToAssetID,
 	})
 	return err
+}
+
+var relationTypePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validRelationType(relType string) bool {
+	if relType == "" {
+		return false
+	}
+	return relationTypePattern.MatchString(relType)
 }
 
 // QueryGraph traverses related assets starting from a given asset ID.
@@ -102,6 +126,108 @@ func (n *Neo4jStore) QueryGraph(ctx context.Context, assetID string, depth int) 
 	return nodes, result.Err()
 }
 
+// QueryKnowledgeEvidence returns normalized knowledge nodes connected to a target.
+func (n *Neo4jStore) QueryKnowledgeEvidence(ctx context.Context, targetID string) ([]EvidenceRecord, error) {
+	session := n.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	result, err := session.Run(ctx,
+		`MATCH (seed:Asset {target_id: $targetID})
+		 WHERE seed.type IN ['fingerprint', 'product', 'cve']
+		 MATCH p = shortestPath((seed)-[*0..4]-(n:Asset {target_id: $targetID}))
+		 WHERE n.type IN ['fingerprint', 'product', 'cve', 'template', 'intel', 'cpe', 'cwe']
+		 RETURN DISTINCT n.type AS type,
+			 n.value AS value,
+			 n.source AS source,
+			 n.confidence AS confidence,
+			 n.severity AS severity,
+			 n.priority AS priority,
+			 n.status AS status,
+			 [node IN nodes(p) | {type: node.type, value: node.value}] AS path_nodes,
+			 [rel IN relationships(p) | type(rel)] AS path_rels`,
+		map[string]interface{}{"targetID": targetID})
+	if err != nil {
+		return nil, err
+	}
+
+	var evidence []EvidenceRecord
+	for result.Next(ctx) {
+		record := result.Record().AsMap()
+		evidence = append(evidence, EvidenceRecord{
+			Type:       stringField(record["type"]),
+			Value:      stringField(record["value"]),
+			Source:     stringField(record["source"]),
+			Confidence: floatField(record["confidence"]),
+			Severity:   stringField(record["severity"]),
+			Priority:   intField(record["priority"]),
+			Status:     stringField(record["status"]),
+			Path:       evidencePath(record["path_nodes"], record["path_rels"]),
+		})
+	}
+	return evidence, result.Err()
+}
+
 func (n *Neo4jStore) Close(ctx context.Context) {
 	n.driver.Close(ctx)
+}
+
+func stringField(value interface{}) string {
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func floatField(value interface{}) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+func intField(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+func evidencePath(rawNodes, rawRels interface{}) []EvidencePathStep {
+	nodes, ok := rawNodes.([]interface{})
+	if !ok || len(nodes) == 0 {
+		return nil
+	}
+	rels, _ := rawRels.([]interface{})
+	steps := make([]EvidencePathStep, 0, len(nodes))
+	for i, rawNode := range nodes {
+		node, ok := rawNode.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		step := EvidencePathStep{
+			Type:  stringField(node["type"]),
+			Value: stringField(node["value"]),
+		}
+		if i > 0 && i-1 < len(rels) {
+			step.Relation = stringField(rels[i-1])
+		}
+		if step.Type != "" && step.Value != "" {
+			steps = append(steps, step)
+		}
+	}
+	return steps
 }

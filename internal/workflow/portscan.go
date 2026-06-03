@@ -16,8 +16,18 @@ type PortScanInput struct {
 
 // PortScanResult contains only the gogo scan results.
 type PortScanResult struct {
-	IP   string                   `json:"ip"`
-	Gogo *artifact.ActivityResult `json:"gogo,omitempty"`
+	IP      string                   `json:"ip"`
+	Ports   string                   `json:"ports"`
+	Chunks  int                      `json:"chunks"`
+	Results []PortScanChunkResult    `json:"results,omitempty"`
+	Gogo    *artifact.ActivityResult `json:"gogo,omitempty"`
+}
+
+type PortScanChunkResult struct {
+	Chunk   string                   `json:"chunk"`
+	Success bool                     `json:"success"`
+	Error   string                   `json:"error,omitempty"`
+	Gogo    *artifact.ActivityResult `json:"gogo,omitempty"`
 }
 
 // PortScanWorkflow runs a gogo port scan only (no fingers, no neutron).
@@ -34,20 +44,34 @@ func PortScanWorkflow(ctx workflow.Context, input PortScanInput) (*PortScanResul
 		input.Ports = "top1000"
 	}
 
-	result := &PortScanResult{IP: input.IP}
+	chunks := splitCIDR(input.IP)
+	result := &PortScanResult{IP: input.IP, Ports: input.Ports, Chunks: len(chunks)}
 
-	var gogoResult artifact.ActivityResult
-	err := workflow.ExecuteActivity(ctx, "gogo", artifact.Input{
-		Target: input.IP,
-		Data: mustMarshal(map[string]interface{}{
-			"ip":    input.IP,
-			"ports": input.Ports,
-		}),
-	}).Get(ctx, &gogoResult)
-	if err != nil {
-		return result, err
+	for i, chunk := range chunks {
+		chunkResult := PortScanChunkResult{Chunk: chunk}
+		var gogoResult artifact.ActivityResult
+		err := workflow.ExecuteActivity(ctx, "gogo", artifact.Input{
+			Target: input.IP,
+			Data: mustMarshal(map[string]interface{}{
+				"ip":          chunk,
+				"ports":       input.Ports,
+				"chunk_idx":   i + 1,
+				"chunk_total": len(chunks),
+			}),
+		}).Get(ctx, &gogoResult)
+		chunkResult.Gogo = &gogoResult
+		chunkResult.Success = err == nil && gogoResult.Success
+		if err != nil {
+			chunkResult.Error = err.Error()
+			result.Results = append(result.Results, chunkResult)
+			return result, err
+		}
+		if !gogoResult.Success {
+			chunkResult.Error = gogoResult.Error
+		}
+		result.Results = append(result.Results, chunkResult)
+		result.Gogo = &gogoResult
 	}
-	result.Gogo = &gogoResult
 
 	return result, nil
 }

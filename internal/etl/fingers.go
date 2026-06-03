@@ -31,10 +31,13 @@ func (f *FingersExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 	result := &ExtractResult{}
 	targetID := data.GenerateID("target", scanTarget)
 	for _, item := range out.Frameworks {
+		itemRaw, _ := json.Marshal(item)
 		fpID := data.GenerateID("fingerprint", scanTarget, item.Name)
 		result.Entities = append(result.Entities, Entity{
 			ID: fpID, Type: "fingerprint", Value: item.Name,
-			Source: "fingers", TargetID: targetID, RawData: rawData,
+			Source: "fingers", TargetID: targetID, RawData: itemRaw,
+			Product: item.Product, Version: item.Version, Tags: item.Tags,
+			Confidence: 0.85, Status: "observed",
 		})
 	}
 	return result, nil

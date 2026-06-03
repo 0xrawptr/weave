@@ -14,6 +14,7 @@ type Config struct {
 	Neo4j     Neo4jConfig     `yaml:"neo4j"`
 	Redis     RedisConfig     `yaml:"redis"`
 	Artifacts ArtifactsConfig `yaml:"artifacts"`
+	Knowledge KnowledgeConfig `yaml:"knowledge"`
 }
 
 type ServerConfig struct {
@@ -57,6 +58,15 @@ type ArtifactsConfig struct {
 	Zombie  ArtifactOpts `yaml:"zombie"`
 }
 
+type KnowledgeConfig struct {
+	NucleiTemplatesPath   string `yaml:"nuclei_templates_path"`
+	ProductAliasesPath    string `yaml:"product_aliases_path"`
+	KEVPath               string `yaml:"kev_path"`
+	EPSSPath              string `yaml:"epss_path"`
+	VulnrichmentPath      string `yaml:"vulnrichment_path"`
+	MaxTemplatesPerLookup int    `yaml:"max_templates_per_lookup"`
+}
+
 type ArtifactOpts struct {
 	Threads  int           `yaml:"threads,omitempty"`
 	Capacity int           `yaml:"capacity,omitempty"`
@@ -68,6 +78,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	data = []byte(os.ExpandEnv(string(data)))
 
 	cfg := &Config{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {

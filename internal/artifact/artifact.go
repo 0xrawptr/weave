@@ -39,6 +39,18 @@ type SchemaField struct {
 	Description string `json:"description"`
 }
 
+// Descriptor describes runtime behavior beyond basic JSON schemas. The planner
+// uses this to decide whether an artifact is safe and useful for a candidate action.
+type Descriptor struct {
+	Name          string   `json:"name"`
+	Consumes      []string `json:"consumes"`
+	Produces      []string `json:"produces"`
+	Passive       bool     `json:"passive"`
+	TouchesTarget bool     `json:"touches_target"`
+	Risk          string   `json:"risk"` // low, medium, high
+	Description   string   `json:"description,omitempty"`
+}
+
 // URLResolver resolves a scan target to a list of web URLs discovered
 // by a previous stage (typically gogo). The artifact queries the resolver
 // when no explicit URLs are provided in its input.
@@ -54,4 +66,8 @@ type Artifact interface {
 	OutputSchema() OutputSchema
 	Execute(ctx context.Context, input Input) (Output, error)
 	Close() error
+}
+
+type DescribedArtifact interface {
+	Descriptor() Descriptor
 }

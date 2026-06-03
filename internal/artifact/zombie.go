@@ -6,8 +6,8 @@ import (
 	"net"
 	"strings"
 
-	sdkzombie "github.com/chainreactors/sdk/zombie"
 	"github.com/chainreactors/sdk/pkg/types"
+	sdkzombie "github.com/chainreactors/sdk/zombie"
 )
 
 // ZombieArtifact wraps the SDK zombie engine for service brute-force attacks.
@@ -61,6 +61,18 @@ func NewZombieArtifactFromEngine(engine *sdkzombie.Engine) *ZombieArtifact {
 }
 
 func (z *ZombieArtifact) Name() string { return "zombie" }
+
+func (z *ZombieArtifact) Descriptor() Descriptor {
+	return Descriptor{
+		Name:          z.Name(),
+		Consumes:      []string{"service", "credential_dictionary"},
+		Produces:      []string{"credential"},
+		Passive:       false,
+		TouchesTarget: true,
+		Risk:          "high",
+		Description:   "service credential brute-force validation",
+	}
+}
 
 func (z *ZombieArtifact) InputSchema() InputSchema {
 	return InputSchema{

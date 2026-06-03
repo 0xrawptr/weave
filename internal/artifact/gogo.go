@@ -50,6 +50,18 @@ func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target strin
 
 func (g *GogoArtifact) Name() string { return "gogo" }
 
+func (g *GogoArtifact) Descriptor() Descriptor {
+	return Descriptor{
+		Name:          g.Name(),
+		Consumes:      []string{"domain", "ip", "cidr"},
+		Produces:      []string{"ip", "port", "service", "fingerprint"},
+		Passive:       false,
+		TouchesTarget: true,
+		Risk:          "medium",
+		Description:   "port scan and service fingerprint discovery",
+	}
+}
+
 func (g *GogoArtifact) InputSchema() InputSchema {
 	return InputSchema{
 		Fields: []SchemaField{
@@ -133,7 +145,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 
 func gogoThreads() int {
 	if iutils.IsWin() || iutils.IsMac() {
-		return 100
+		return 6000
 	}
 	n := 10000
 	if fdlimit := iutils.GetFdLimit(); n > fdlimit {

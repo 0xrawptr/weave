@@ -9,6 +9,7 @@ import (
 	"github.com/0xrawptr/weave/internal/artifact"
 	"github.com/0xrawptr/weave/internal/config"
 	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/planner"
 	"github.com/gin-gonic/gin"
 	"go.temporal.io/sdk/client"
 )
@@ -19,6 +20,7 @@ type Server struct {
 	router   *gin.Engine
 	registry *artifact.Registry
 	repo     *data.Repository
+	planner  *planner.Planner
 	temporal client.Client
 
 	httpServer *http.Server
@@ -35,6 +37,7 @@ func NewServer(cfg *config.Config, registry *artifact.Registry, repo *data.Repos
 		router:   gin.Default(),
 		registry: registry,
 		repo:     repo,
+		planner:  planner.New(repo),
 		temporal: temporalClient,
 	}
 
@@ -56,8 +59,13 @@ func (s *Server) setupRoutes() {
 
 		// Result endpoints
 		v1.GET("/results", s.ListResults)
-		v1.GET("/results/:id", s.GetResult)
 		v1.GET("/results/graph", s.QueryGraph)
+		v1.GET("/results/:id", s.GetResult)
+
+		// Planner endpoints
+		v1.GET("/plan", s.PlanTarget)
+		v1.GET("/actions", s.ListActions)
+		v1.POST("/actions", s.StartAction)
 	}
 }
 
