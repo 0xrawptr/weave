@@ -22,13 +22,38 @@ func (s *Server) PlanTarget(c *gin.Context) {
 		return
 	}
 
-	actions, err := s.planner.PlanForTarget(c.Request.Context(), target)
+	campaignID := c.Query("campaign_id")
+	actions, err := s.planner.PlanForTargetInCampaign(c.Request.Context(), target, campaignID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"target":  target,
-		"actions": actions,
+		"target":      target,
+		"campaign_id": campaignID,
+		"actions":     actions,
 	})
+}
+
+func (s *Server) PlanDAGTarget(c *gin.Context) {
+	target := c.Query("target")
+	if target == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "target query parameter is required"})
+		return
+	}
+	if s.repo == nil || s.repo.Postgres == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
+		return
+	}
+	if s.planner == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "planner not available"})
+		return
+	}
+
+	plan, err := s.planner.PlanDAGForTarget(c.Request.Context(), target, c.Query("campaign_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, plan)
 }

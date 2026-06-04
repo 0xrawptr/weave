@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,9 +16,10 @@ import (
 
 // StartWorkflowRequest is the request body for starting a new workflow.
 type StartWorkflowRequest struct {
-	Type   string                 `json:"type"`   // "auto", "planned", "domain", "ip", "portscan", "batch_portscan", "company"
-	Input  map[string]interface{} `json:"input"`  // workflow-specific input
-	Target string                 `json:"target"` // shorthand for target
+	Type       string                 `json:"type"`        // "auto", "planned", "planned_dag", "dag", "domain", "ip", "portscan", "batch_portscan", "company"
+	CampaignID string                 `json:"campaign_id"` // optional campaign scope
+	Input      map[string]interface{} `json:"input"`       // workflow-specific input
+	Target     string                 `json:"target"`      // shorthand for target
 }
 
 func generateWorkflowID(wfType string) string {
@@ -94,6 +96,10 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 
 	ctx := context.Background()
 	workflowID := generateWorkflowID(detectedType)
+	campaignID := req.CampaignID
+	if campaignID == "" {
+		campaignID = inputString(req.Input, "campaign_id")
+	}
 
 	var run client.WorkflowRun
 	opts := client.StartWorkflowOptions{
@@ -102,6 +108,33 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 	}
 
 	switch detectedType {
+	case "dag":
+		var dagInput workflow.DAGWorkflowInput
+		if err := mapInput(req.Input, &dagInput); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid dag input: " + err.Error()})
+			return
+		}
+		if dagInput.Target == "" {
+			dagInput.Target = detectedTarget
+		}
+		if dagInput.Target == "" {
+			dagInput.Target = req.Target
+		}
+		if dagInput.CampaignID == "" {
+			dagInput.CampaignID = campaignID
+		}
+		if len(dagInput.Nodes) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "nodes are required for dag workflow"})
+			return
+		}
+		detectedTarget = dagInput.Target
+		var err error
+		run, err = s.temporal.ExecuteWorkflow(ctx, opts, workflow.DAGWorkflow, dagInput)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
 	case "planned":
 		target := detectedTarget
 		if target == "" {
@@ -120,8 +153,38 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 			workflow.PlannedWorkflow,
 			workflow.PlannedWorkflowInput{
 				Target:        target,
+				CampaignID:    campaignID,
 				MaxIterations: inputInt(req.Input, "max_iterations"),
 				MaxActions:    inputInt(req.Input, "max_actions"),
+			},
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+	case "planned_dag":
+		target := detectedTarget
+		if target == "" {
+			target = req.Target
+		}
+		if t, ok := req.Input["target"].(string); ok && t != "" {
+			target = t
+		}
+		if target == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "target is required for planned_dag workflow"})
+			return
+		}
+		detectedTarget = target
+		var err error
+		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
+			workflow.PlannedDAGWorkflow,
+			workflow.PlannedDAGWorkflowInput{
+				Target:            target,
+				CampaignID:        campaignID,
+				MaxIterations:     inputInt(req.Input, "max_iterations"),
+				MaxConcurrency:    inputInt(req.Input, "max_concurrency"),
+				ContinueOnFailure: inputBool(req.Input, "continue_on_failure"),
 			},
 		)
 		if err != nil {
@@ -137,7 +200,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		var err error
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.DomainWorkflow,
-			workflow.DomainWorkflowInput{Domain: domain},
+			workflow.DomainWorkflowInput{Domain: domain, CampaignID: campaignID},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -156,7 +219,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		var err error
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.IPWorkflow,
-			workflow.IPWorkflowInput{IP: ip, Ports: ports},
+			workflow.IPWorkflowInput{IP: ip, CampaignID: campaignID, Ports: ports},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -175,7 +238,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		var err error
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.PortScanWorkflow,
-			workflow.PortScanInput{IP: ip, Ports: ports},
+			workflow.PortScanInput{IP: ip, CampaignID: campaignID, Ports: ports},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -204,9 +267,11 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 			workflow.BatchPortScanWorkflow,
 			workflow.BatchPortScanInput{
 				Targets:        targets,
+				CampaignID:     campaignID,
 				Ports:          ports,
 				MaxConcurrency: inputInt(req.Input, "max_concurrency"),
 				ChunkPrefix:    inputInt(req.Input, "chunk_prefix"),
+				MaxAttempts:    inputInt(req.Input, "max_attempts"),
 			},
 		)
 		if err != nil {
@@ -230,7 +295,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		var err error
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.CompanyWorkflow,
-			workflow.CompanyWorkflowInput{Company: company, Domains: domains},
+			workflow.CompanyWorkflowInput{Company: company, CampaignID: campaignID, Domains: domains},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -247,6 +312,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		"run_id":      run.GetRunID(),
 		"type":        detectedType,
 		"target":      detectedTarget,
+		"campaign_id": campaignID,
 	})
 }
 
@@ -326,6 +392,14 @@ func inputInt(input map[string]interface{}, key string) int {
 	}
 }
 
+func inputBool(input map[string]interface{}, key string) bool {
+	if input == nil {
+		return false
+	}
+	value, _ := input[key].(bool)
+	return value
+}
+
 func inputStringSlice(input map[string]interface{}, key string) []string {
 	if input == nil {
 		return nil
@@ -348,6 +422,14 @@ func inputStringSlice(input map[string]interface{}, key string) []string {
 	}
 }
 
+func inputString(input map[string]interface{}, key string) string {
+	if input == nil {
+		return ""
+	}
+	value, _ := input[key].(string)
+	return strings.TrimSpace(value)
+}
+
 func splitTargetList(raw string) []string {
 	parts := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
@@ -367,6 +449,14 @@ func cleanStringSlice(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func mapInput(input map[string]interface{}, out interface{}) error {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
 }
 
 type jsonNumber interface {

@@ -3,8 +3,11 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"sort"
+	"strings"
 
+	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	sdkspray "github.com/chainreactors/sdk/spray"
 	spraypkg "github.com/chainreactors/spray/pkg"
 )
@@ -36,8 +39,19 @@ type SpraySummary struct {
 
 // SprayResultItem is a flattened spray result.
 type SprayResultItem struct {
-	URL        string `json:"url"`
-	StatusCode int    `json:"status_code"`
+	URL           string `json:"url"`
+	StatusCode    int    `json:"status_code"`
+	Title         string `json:"title,omitempty"`
+	ContentType   string `json:"content_type,omitempty"`
+	ContentLength int64  `json:"content_length,omitempty"`
+	BodyHash      string `json:"body_hash,omitempty"`
+	BodySimhash   string `json:"body_simhash,omitempty"`
+	FaviconHash   string `json:"favicon_hash,omitempty"`
+	RedirectURL   string `json:"location,omitempty"`
+	Source        string `json:"source,omitempty"`
+	Valid         bool   `json:"valid"`
+	Fuzzy         bool   `json:"fuzzy,omitempty"`
+	Reason        string `json:"reason,omitempty"`
 }
 
 func NewSprayArtifact(cfg *sdkspray.Config) (*SprayArtifact, error) {
@@ -113,10 +127,7 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 		}
 		for _, r := range results {
-			items = append(items, SprayResultItem{
-				URL:        r.UrlString,
-				StatusCode: r.Status,
-			})
+			items = append(items, sprayResultItem(r))
 		}
 	} else if len(sprayIn.URLs) > 0 {
 		results, err := s.engine.Check(sprayCtx, sprayIn.URLs)
@@ -124,10 +135,7 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 		}
 		for _, r := range results {
-			items = append(items, SprayResultItem{
-				URL:        r.UrlString,
-				StatusCode: r.Status,
-			})
+			items = append(items, sprayResultItem(r))
 		}
 	} else {
 		return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: "no valid input: provide urls or base_urls+wordlist"}, nil
@@ -174,4 +182,43 @@ func spraySummary(items []SprayResultItem) SpraySummary {
 	}
 	summary.Sample = append([]SprayResultItem(nil), items...)
 	return summary
+}
+
+func sprayResultItem(r *sdktypes.SprayResult) SprayResultItem {
+	if r == nil {
+		return SprayResultItem{}
+	}
+	item := SprayResultItem{
+		URL:           r.UrlString,
+		StatusCode:    r.Status,
+		Title:         r.Title,
+		ContentType:   r.ContentType,
+		ContentLength: int64(r.BodyLength),
+		RedirectURL:   r.RedirectURL,
+		Valid:         r.IsValid,
+		Fuzzy:         r.IsFuzzy,
+		Reason:        r.Reason,
+	}
+	item.Source = r.Source.Name()
+	if r.Hashes != nil {
+		item.BodyHash = r.Hashes.BodyMd5
+		item.BodySimhash = r.Hashes.BodySimhash
+		if looksLikeFaviconResult(r.UrlString, r.ContentType) {
+			item.FaviconHash = r.Hashes.BodyMmh3
+		}
+	}
+	return item
+}
+
+func looksLikeFaviconResult(rawURL, contentType string) bool {
+	contentType = strings.ToLower(contentType)
+	if strings.Contains(contentType, "icon") || strings.Contains(contentType, "ico") {
+		return true
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	p := strings.ToLower(u.Path)
+	return strings.HasSuffix(p, "/favicon.ico") || strings.Contains(p, "favicon")
 }

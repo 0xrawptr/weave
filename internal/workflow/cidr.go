@@ -1,6 +1,10 @@
 package workflow
 
-import "github.com/chainreactors/utils"
+import (
+	"net"
+
+	"github.com/projectdiscovery/mapcidr"
+)
 
 const defaultCIDRChunkPrefix = 24
 
@@ -9,14 +13,19 @@ func splitCIDR(target string) []string {
 }
 
 func splitCIDRToPrefix(target string, prefix int) []string {
-	cidr := utils.ParseCIDR(target)
-	if cidr == nil {
+	_, ipnet, err := net.ParseCIDR(target)
+	if err != nil {
 		return []string{target}
 	}
-	if prefix <= 0 || prefix > 32 || cidr.Mask > prefix {
+	mask, bits := ipnet.Mask.Size()
+	if bits != 32 || prefix <= 0 || prefix > bits || mask > prefix {
 		return []string{target}
 	}
-	chunks, err := cidr.Split(prefix)
+	if mask == prefix {
+		return []string{ipnet.String()}
+	}
+	chunkCount := 1 << uint(prefix-mask)
+	chunks, err := mapcidr.SplitIPNetIntoN(ipnet, chunkCount)
 	if err != nil {
 		return []string{target}
 	}

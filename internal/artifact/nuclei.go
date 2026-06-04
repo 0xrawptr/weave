@@ -31,11 +31,29 @@ type NucleiOutput struct {
 
 // NucleiResultItem represents a single finding.
 type NucleiResultItem struct {
-	TemplateID string `json:"template_id"`
-	Info       string `json:"info"`
-	Severity   string `json:"severity"`
-	Target     string `json:"target"`
-	Matched    string `json:"matched"`
+	TemplateID    string                 `json:"template_id"`
+	TemplatePath  string                 `json:"template_path,omitempty"`
+	TemplateURL   string                 `json:"template_url,omitempty"`
+	Info          string                 `json:"info"`
+	Severity      string                 `json:"severity"`
+	Tags          []string               `json:"tags,omitempty"`
+	Target        string                 `json:"target"`
+	Matched       string                 `json:"matched"`
+	Type          string                 `json:"type,omitempty"`
+	MatcherName   string                 `json:"matcher_name,omitempty"`
+	ExtractorName string                 `json:"extractor_name,omitempty"`
+	Host          string                 `json:"host,omitempty"`
+	IP            string                 `json:"ip,omitempty"`
+	Port          string                 `json:"port,omitempty"`
+	Scheme        string                 `json:"scheme,omitempty"`
+	URL           string                 `json:"url,omitempty"`
+	Path          string                 `json:"path,omitempty"`
+	CVEs          []string               `json:"cves,omitempty"`
+	CWEs          []string               `json:"cwes,omitempty"`
+	CPE           string                 `json:"cpe,omitempty"`
+	CVSSScore     float64                `json:"cvss_score,omitempty"`
+	EPSSScore     float64                `json:"epss_score,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func NewNucleiArtifact() (*NucleiArtifact, error) {
@@ -132,12 +150,33 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		mu.Lock()
 		defer mu.Unlock()
 		items = append(items, NucleiResultItem{
-			TemplateID: result.TemplateID,
-			Info:       result.Info.Name,
-			Severity:   result.Info.SeverityHolder.Severity.String(),
-			Target:     result.Matched,
-			Matched:    result.Matched,
+			TemplateID:    result.TemplateID,
+			TemplatePath:  result.TemplatePath,
+			TemplateURL:   result.TemplateURL,
+			Info:          result.Info.Name,
+			Severity:      result.Info.SeverityHolder.Severity.String(),
+			Tags:          append([]string{}, result.Info.Tags.ToSlice()...),
+			Target:        nucleiFirstNonEmpty(result.URL, result.Host, result.Matched),
+			Matched:       result.Matched,
+			Type:          result.Type,
+			MatcherName:   result.MatcherName,
+			ExtractorName: result.ExtractorName,
+			Host:          result.Host,
+			IP:            result.IP,
+			Port:          result.Port,
+			Scheme:        result.Scheme,
+			URL:           result.URL,
+			Path:          result.Path,
+			Metadata:      result.Metadata,
 		})
+		if result.Info.Classification != nil {
+			item := &items[len(items)-1]
+			item.CVEs = append([]string{}, result.Info.Classification.CVEID.ToSlice()...)
+			item.CWEs = append([]string{}, result.Info.Classification.CWEID.ToSlice()...)
+			item.CPE = result.Info.Classification.CPE
+			item.CVSSScore = result.Info.Classification.CVSSScore
+			item.EPSSScore = result.Info.Classification.EPSSScore
+		}
 	})
 	if err != nil {
 		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
@@ -153,3 +192,12 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 }
 
 func (n *NucleiArtifact) Close() error { return nil }
+
+func nucleiFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}

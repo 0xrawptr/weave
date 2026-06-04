@@ -11,13 +11,15 @@ import (
 )
 
 type StartActionRequest struct {
-	Artifact string                 `json:"artifact"`
-	Target   string                 `json:"target"`
-	Input    map[string]interface{} `json:"input"`
+	Artifact   string                 `json:"artifact"`
+	Target     string                 `json:"target"`
+	CampaignID string                 `json:"campaign_id,omitempty"`
+	Input      map[string]interface{} `json:"input"`
 }
 
 type ActionRecordResponse struct {
 	ID          string          `json:"id"`
+	CampaignID  string          `json:"campaign_id,omitempty"`
 	Target      string          `json:"target"`
 	Artifact    string          `json:"artifact"`
 	Input       json.RawMessage `json:"input"`
@@ -38,7 +40,7 @@ func (s *Server) ListActions(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
 		return
 	}
-	records, err := s.repo.GetActionRecords(c.Request.Context(), c.Query("target"))
+	records, err := s.repo.GetActionRecordsFiltered(c.Request.Context(), c.Query("target"), c.Query("campaign_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -47,6 +49,7 @@ func (s *Server) ListActions(c *gin.Context) {
 	for _, record := range records {
 		out = append(out, ActionRecordResponse{
 			ID:          record.ID,
+			CampaignID:  record.CampaignID,
 			Target:      record.Target,
 			Artifact:    record.Artifact,
 			Input:       json.RawMessage(record.Input),
@@ -90,9 +93,10 @@ func (s *Server) StartAction(c *gin.Context) {
 		ID:        workflowID,
 		TaskQueue: s.cfg.Temporal.TaskQueue,
 	}, workflow.ActionWorkflow, workflow.ActionWorkflowInput{
-		Artifact: req.Artifact,
-		Target:   req.Target,
-		Input:    req.Input,
+		Artifact:   req.Artifact,
+		Target:     req.Target,
+		CampaignID: req.CampaignID,
+		Input:      req.Input,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -103,5 +107,6 @@ func (s *Server) StartAction(c *gin.Context) {
 		"run_id":      run.GetRunID(),
 		"artifact":    req.Artifact,
 		"target":      req.Target,
+		"campaign_id": req.CampaignID,
 	})
 }

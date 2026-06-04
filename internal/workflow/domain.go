@@ -20,7 +20,8 @@ type gogoResultItem struct {
 
 // DomainWorkflowInput is the input for the domain asset discovery workflow.
 type DomainWorkflowInput struct {
-	Domain string `json:"domain"`
+	Domain     string `json:"domain"`
+	CampaignID string `json:"campaign_id,omitempty"`
 }
 
 // DomainWorkflowResult aggregates results from all stages.
@@ -47,8 +48,9 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		})
 		var cdnResult artifact.ActivityResult
 		err := workflow.ExecuteActivity(ctx, "cdncheck", artifact.Input{
-			Target: input.Domain,
-			Data:   mustMarshal(map[string]interface{}{"target": input.Domain}),
+			Target:     input.Domain,
+			CampaignID: input.CampaignID,
+			Data:       mustMarshal(map[string]interface{}{"target": input.Domain}),
 		}).Get(ctx, &cdnResult)
 		if err == nil {
 			result.Cdncheck = &cdnResult
@@ -82,8 +84,9 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		})
 		var gogoResult artifact.ActivityResult
 		err := workflow.ExecuteActivity(ctx, "gogo", artifact.Input{
-			Target: input.Domain,
-			Data:   mustMarshal(map[string]interface{}{"ip": input.Domain, "ports": "top1000"}),
+			Target:     input.Domain,
+			CampaignID: input.CampaignID,
+			Data:       mustMarshal(map[string]interface{}{"ip": input.Domain, "ports": "top1000"}),
 		}).Get(ctx, &gogoResult)
 		if err != nil {
 			return result, err
@@ -96,7 +99,8 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		// Stage 2: spray path brute
 		var sprayResult artifact.ActivityResult
 		err := workflow.ExecuteActivity(ctx, "spray", artifact.Input{
-			Target: input.Domain,
+			Target:     input.Domain,
+			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"urls": webURLs,
 			}),
@@ -108,7 +112,8 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		// Stage 3: fingers fingerprint
 		var fingersResult artifact.ActivityResult
 		err = workflow.ExecuteActivity(ctx, "fingers", artifact.Input{
-			Target: input.Domain,
+			Target:     input.Domain,
+			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"mode": "http_match",
 				"urls": webURLs,
@@ -122,7 +127,8 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		for _, url := range webURLs {
 			var nucleiResult artifact.ActivityResult
 			err = workflow.ExecuteActivity(ctx, "nuclei", artifact.Input{
-				Target: input.Domain,
+				Target:     input.Domain,
+				CampaignID: input.CampaignID,
 				Data: mustMarshal(map[string]interface{}{
 					"targets": []string{url},
 				}),

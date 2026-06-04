@@ -18,14 +18,16 @@ type dbLoader struct {
 }
 
 func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
+	campaignID := CampaignIDFromContext(ctx)
 	for _, e := range r.Entities {
 		asset := &data.Asset{
 			ID:          e.ID,
+			CampaignID:  campaignID,
 			Type:        e.Type,
 			Value:       e.Value,
 			Source:      e.Source,
 			TargetID:    e.TargetID,
-			RawData:     e.RawData,
+			RawData:     entityRawData(e),
 			Confidence:  e.Confidence,
 			Severity:    e.Severity,
 			Priority:    e.Priority,
@@ -46,6 +48,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 			tplID := data.GenerateID("template", e.TargetID, tid)
 			tplAsset := &data.Asset{
 				ID:         tplID,
+				CampaignID: campaignID,
 				Type:       "template",
 				Value:      tid,
 				Source:     e.Source,
@@ -72,6 +75,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 			tagID := data.GenerateID("tag", e.TargetID, tag)
 			tagAsset := &data.Asset{
 				ID:         tagID,
+				CampaignID: campaignID,
 				Type:       "tag",
 				Value:      tag,
 				Source:     e.Source,
@@ -93,6 +97,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 			cpeID := data.GenerateID("cpe", e.TargetID, cpe)
 			cpeAsset := &data.Asset{
 				ID:         cpeID,
+				CampaignID: campaignID,
 				Type:       "cpe",
 				Value:      cpe,
 				Source:     e.Source,
@@ -130,6 +135,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 			}
 			cveAsset := &data.Asset{
 				ID:         cveID,
+				CampaignID: campaignID,
 				Type:       "cve",
 				Value:      cve,
 				Source:     e.Source,
@@ -179,6 +185,24 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 	return nil
 }
 
+func entityRawData(e Entity) []byte {
+	if e.Quality == nil {
+		return e.RawData
+	}
+	var raw map[string]interface{}
+	if len(e.RawData) > 0 && json.Unmarshal(e.RawData, &raw) == nil {
+		raw["_quality"] = e.Quality
+		out, _ := json.Marshal(raw)
+		return out
+	}
+	out, _ := json.Marshal(map[string]interface{}{
+		"value":    e.Value,
+		"raw":      json.RawMessage(e.RawData),
+		"_quality": e.Quality,
+	})
+	return out
+}
+
 func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, error) {
 	if e.Product == "" && e.Version == "" && !needsSyntheticProduct(e) {
 		return "", nil
@@ -193,6 +217,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 	productID := data.GenerateID("product", e.TargetID, productValue)
 	product := &data.Asset{
 		ID:         productID,
+		CampaignID: CampaignIDFromContext(ctx),
 		Type:       "product",
 		Value:      productValue,
 		Source:     e.Source,
@@ -215,6 +240,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 	versionID := data.GenerateID("version", e.TargetID, productValue, e.Version)
 	version := &data.Asset{
 		ID:         versionID,
+		CampaignID: CampaignIDFromContext(ctx),
 		Type:       "version",
 		Value:      e.Version,
 		Source:     e.Source,
@@ -247,6 +273,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 		productID := data.GenerateID("product", e.TargetID, productValue)
 		product := &data.Asset{
 			ID:         productID,
+			CampaignID: CampaignIDFromContext(ctx),
 			Type:       "product",
 			Value:      productValue,
 			Source:     e.Source,
@@ -269,6 +296,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 		cpeID := data.GenerateID("cpe", e.TargetID, cpe)
 		cpeAsset := &data.Asset{
 			ID:         cpeID,
+			CampaignID: CampaignIDFromContext(ctx),
 			Type:       "cpe",
 			Value:      cpe,
 			Source:     e.Source,
@@ -289,6 +317,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 		cweID := data.GenerateID("cwe", e.TargetID, cwe)
 		cweAsset := &data.Asset{
 			ID:         cweID,
+			CampaignID: CampaignIDFromContext(ctx),
 			Type:       "cwe",
 			Value:      cwe,
 			Source:     e.Source,
@@ -330,6 +359,7 @@ func (l *dbLoader) saveCVEIntel(ctx context.Context, e Entity, cveID string, int
 	intelID := data.GenerateID("intel", e.TargetID, intel.ID)
 	intelAsset := &data.Asset{
 		ID:         intelID,
+		CampaignID: CampaignIDFromContext(ctx),
 		Type:       "intel",
 		Value:      intelSummary(intel),
 		Source:     e.Source,

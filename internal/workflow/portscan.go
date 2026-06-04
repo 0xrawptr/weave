@@ -10,8 +10,9 @@ import (
 
 // PortScanInput is a gogo-only scan without vulnerability detection.
 type PortScanInput struct {
-	IP    string `json:"ip"`
-	Ports string `json:"ports"`
+	IP         string `json:"ip"`
+	CampaignID string `json:"campaign_id,omitempty"`
+	Ports      string `json:"ports"`
 }
 
 // PortScanResult contains only the gogo scan results.
@@ -51,7 +52,8 @@ func PortScanWorkflow(ctx workflow.Context, input PortScanInput) (*PortScanResul
 		chunkResult := PortScanChunkResult{Chunk: chunk}
 		var gogoResult artifact.ActivityResult
 		err := workflow.ExecuteActivity(ctx, "gogo", artifact.Input{
-			Target: input.IP,
+			Target:     input.IP,
+			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"ip":          chunk,
 				"ports":       input.Ports,

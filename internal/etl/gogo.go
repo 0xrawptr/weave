@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
 )
@@ -20,7 +22,15 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		IP         string                     `json:"ip"`
 		Port       string                     `json:"port"`
 		Protocol   string                     `json:"protocol"`
+		Status     string                     `json:"status,omitempty"`
+		URI        string                     `json:"uri,omitempty"`
+		Host       string                     `json:"host,omitempty"`
 		Frameworks map[string]json.RawMessage `json:"frameworks,omitempty"`
+		Vulns      map[string]json.RawMessage `json:"vulns,omitempty"`
+		Extracteds map[string][]string        `json:"extracted,omitempty"`
+		Title      string                     `json:"title,omitempty"`
+		Midware    string                     `json:"midware,omitempty"`
+		Timing     int64                      `json:"timing,omitempty"`
 	}
 	type gogoOutput struct {
 		Results []gogoItem `json:"results"`
@@ -59,11 +69,33 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		})
 
 		// Service entity. Port → runs → service.
+		serviceValue := fmt.Sprintf("%s://%s:%s", item.Protocol, item.IP, item.Port)
+		var serviceQuality *Quality
+		statusCode, _ := strconv.Atoi(item.Status)
+		if item.Protocol == "http" || item.Protocol == "https" || item.URI != "" {
+			if item.URI != "" {
+				if strings.HasPrefix(item.URI, "http://") || strings.HasPrefix(item.URI, "https://") {
+					serviceValue = item.URI
+				} else {
+					serviceValue = strings.TrimRight(serviceValue, "/") + "/" + strings.TrimLeft(item.URI, "/")
+				}
+			}
+			canonical, quality := buildHTTPQuality(HTTPQualityInput{
+				URL:        serviceValue,
+				StatusCode: statusCode,
+				Title:      item.Title,
+			})
+			if canonical != "" {
+				serviceValue = canonical
+				serviceQuality = &quality
+			}
+		}
 		svcID := data.GenerateID("service", scanTarget, item.IP, item.Port, item.Protocol)
 		result.Entities = append(result.Entities, Entity{
 			ID: svcID, Type: "service",
-			Value:  fmt.Sprintf("%s://%s:%s", item.Protocol, item.IP, item.Port),
-			Source: "gogo", TargetID: targetID, Confidence: 1.0, Status: "observed",
+			Value:  serviceValue,
+			Source: "gogo", TargetID: targetID, RawData: raw, Confidence: 1.0, Status: "observed",
+			Quality: serviceQuality,
 		})
 		result.Relations = append(result.Relations, Relation{
 			FromID: portID, ToID: svcID, Type: "runs",

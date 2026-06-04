@@ -11,6 +11,7 @@ import (
 
 type PlannedWorkflowInput struct {
 	Target        string `json:"target"`
+	CampaignID    string `json:"campaign_id,omitempty"`
 	MaxIterations int    `json:"max_iterations,omitempty"`
 	MaxActions    int    `json:"max_actions,omitempty"`
 }
@@ -64,6 +65,9 @@ func PlannedWorkflow(ctx workflow.Context, input PlannedWorkflowInput) (*Planned
 				result.Skipped = append(result.Skipped, action)
 				continue
 			}
+			if action.CampaignID == "" {
+				action.CampaignID = input.CampaignID
+			}
 			if len(result.Executed) >= input.MaxActions {
 				return result, nil
 			}
@@ -81,8 +85,9 @@ func PlannedWorkflow(ctx workflow.Context, input PlannedWorkflowInput) (*Planned
 
 			var activityResult artifact.ActivityResult
 			err := workflow.ExecuteActivity(actionCtx, action.Artifact, artifact.Input{
-				Target: action.Target,
-				Data:   mustMarshal(action.Input),
+				Target:     action.Target,
+				CampaignID: action.CampaignID,
+				Data:       mustMarshal(action.Input),
 			}).Get(actionCtx, &activityResult)
 			if err != nil {
 				_ = workflow.ExecuteActivity(stateCtx, planner.CompleteActionActivityName, planner.ActionCompletion{

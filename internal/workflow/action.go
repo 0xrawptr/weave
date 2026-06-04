@@ -9,9 +9,10 @@ import (
 )
 
 type ActionWorkflowInput struct {
-	Artifact string                 `json:"artifact"`
-	Target   string                 `json:"target"`
-	Input    map[string]interface{} `json:"input"`
+	Artifact   string                 `json:"artifact"`
+	Target     string                 `json:"target"`
+	CampaignID string                 `json:"campaign_id,omitempty"`
+	Input      map[string]interface{} `json:"input"`
 }
 
 // ActionWorkflow executes one planner/manual action. It is the bridge from
@@ -27,8 +28,9 @@ func ActionWorkflow(ctx workflow.Context, input ActionWorkflowInput) (*artifact.
 
 	var result artifact.ActivityResult
 	err := workflow.ExecuteActivity(ctx, input.Artifact, artifact.Input{
-		Target: input.Target,
-		Data:   mustMarshal(input.Input),
+		Target:     input.Target,
+		CampaignID: input.CampaignID,
+		Data:       mustMarshal(input.Input),
 	}).Get(ctx, &result)
 	if err != nil {
 		return &result, err

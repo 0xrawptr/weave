@@ -10,15 +10,16 @@ import (
 
 // CompanyWorkflowInput is the input for the company asset discovery workflow.
 type CompanyWorkflowInput struct {
-	Company string   `json:"company"`
-	Domains []string `json:"domains,omitempty"` // pre-discovered domains (optional)
+	Company    string   `json:"company"`
+	CampaignID string   `json:"campaign_id,omitempty"`
+	Domains    []string `json:"domains,omitempty"` // pre-discovered domains (optional)
 }
 
 // CompanyWorkflowResult aggregates results from all company-related scans.
 type CompanyWorkflowResult struct {
-	Company string                    `json:"company"`
-	Domains []DomainWorkflowResult    `json:"domains,omitempty"`
-	Spray   *artifact.ActivityResult  `json:"spray,omitempty"`
+	Company string                   `json:"company"`
+	Domains []DomainWorkflowResult   `json:"domains,omitempty"`
+	Spray   *artifact.ActivityResult `json:"spray,omitempty"`
 }
 
 // CompanyWorkflow discovers assets related to a company.
@@ -41,7 +42,8 @@ func CompanyWorkflow(ctx workflow.Context, input CompanyWorkflowInput) (*Company
 		// Search for company-related assets via spray
 		var sprayResult artifact.ActivityResult
 		err := workflow.ExecuteActivity(ctx, "spray", artifact.Input{
-			Target: input.Company,
+			Target:     input.Company,
+			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"base_urls": []string{input.Company},
 				"wordlist":  []string{"admin", "login", "api", "docs", "portal"},
@@ -63,7 +65,8 @@ func CompanyWorkflow(ctx workflow.Context, input CompanyWorkflowInput) (*Company
 
 		var domainResult DomainWorkflowResult
 		err := workflow.ExecuteChildWorkflow(childCtx, DomainWorkflow, DomainWorkflowInput{
-			Domain: domain,
+			Domain:     domain,
+			CampaignID: input.CampaignID,
 		}).Get(childCtx, &domainResult)
 		if err != nil {
 			continue

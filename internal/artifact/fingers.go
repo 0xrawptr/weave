@@ -3,7 +3,9 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
+	fingerscommon "github.com/chainreactors/fingers/common"
 	sdkfingers "github.com/chainreactors/sdk/fingers"
 
 	"github.com/0xrawptr/weave/internal/favicon"
@@ -26,10 +28,23 @@ type FingersOutput struct {
 }
 
 type FingersFrameworkItem struct {
-	Name    string   `json:"name"`
-	Product string   `json:"product,omitempty"`
-	Version string   `json:"version,omitempty"`
-	Tags    []string `json:"tags,omitempty"`
+	Name        string              `json:"name"`
+	Target      string              `json:"target,omitempty"`
+	Product     string              `json:"product,omitempty"`
+	Version     string              `json:"version,omitempty"`
+	Tags        []string            `json:"tags,omitempty"`
+	Sources     []string            `json:"sources,omitempty"`
+	CPE         string              `json:"cpe,omitempty"`
+	Focus       bool                `json:"focus,omitempty"`
+	MatchDetail *FingersMatchDetail `json:"match_detail,omitempty"`
+}
+
+type FingersMatchDetail struct {
+	RuleIndex    int    `json:"rule_index,omitempty"`
+	MatcherType  string `json:"matcher_type,omitempty"`
+	MatcherIndex int    `json:"matcher_index,omitempty"`
+	MatcherValue string `json:"matcher_value,omitempty"`
+	SendData     string `json:"send_data,omitempty"`
 }
 
 func NewFingersArtifact(cfg *sdkfingers.Config) (*FingersArtifact, error) {
@@ -97,13 +112,7 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 			return Output{Artifact: f.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 		}
 		for name, fw := range frameworks {
-			item := FingersFrameworkItem{Name: name}
-			if fw != nil {
-				item.Product = fw.Product
-				item.Version = fw.Version
-				item.Tags = fw.Tags
-			}
-			items = append(items, item)
+			items = append(items, frameworkItem(input.Target, name, fw))
 		}
 	case "http_match":
 		urls := fin.URLs
@@ -122,11 +131,7 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 				if sr.Framework == nil {
 					continue
 				}
-				item := FingersFrameworkItem{Name: sr.Framework.Name}
-				item.Product = sr.Framework.Product
-				item.Version = sr.Framework.Version
-				item.Tags = sr.Framework.Tags
-				items = append(items, item)
+				items = append(items, frameworkItem(tr.Target, sr.Framework.Name, sr.Framework))
 			}
 		}
 		// Favicon detection with smarter HTML parsing.
@@ -144,10 +149,10 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 				if fw == nil {
 					continue
 				}
-				item := FingersFrameworkItem{Name: name}
-				item.Product = fw.Product
-				item.Version = fw.Version
-				item.Tags = fw.Tags
+				item := frameworkItem(u, name, fw)
+				if len(item.Sources) == 0 {
+					item.Sources = []string{"ico"}
+				}
 				items = append(items, item)
 			}
 		}
@@ -166,4 +171,32 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 
 func (f *FingersArtifact) Close() error {
 	return f.engine.Close()
+}
+
+func frameworkItem(target, name string, fw *fingerscommon.Framework) FingersFrameworkItem {
+	item := FingersFrameworkItem{Name: name, Target: target}
+	if fw == nil {
+		return item
+	}
+	item.Product = fw.Product
+	item.Version = fw.Version
+	item.Tags = fw.Tags
+	item.Focus = fw.IsFocus
+	if fw.Attributes != nil {
+		item.CPE = fw.CPE()
+	}
+	for from := range fw.Froms {
+		item.Sources = append(item.Sources, from.String())
+	}
+	sort.Strings(item.Sources)
+	if fw.MatchDetail != nil {
+		item.MatchDetail = &FingersMatchDetail{
+			RuleIndex:    fw.MatchDetail.RuleIndex,
+			MatcherType:  fw.MatchDetail.MatcherType,
+			MatcherIndex: fw.MatchDetail.MatcherIndex,
+			MatcherValue: fw.MatchDetail.MatcherValue,
+			SendData:     fw.MatchDetail.SendData,
+		}
+	}
+	return item
 }

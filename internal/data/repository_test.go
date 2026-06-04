@@ -95,3 +95,78 @@ func TestDedupeEvidenceKeepsLongerPathWhenPriorityTies(t *testing.T) {
 		t.Fatalf("expected longer path to win, got %#v", values[0])
 	}
 }
+
+func TestValidAssetStatus(t *testing.T) {
+	for _, status := range []string{
+		AssetStatusObserved,
+		AssetStatusQueued,
+		AssetStatusNoise,
+		AssetStatusCandidate,
+		AssetStatusConfirmed,
+		AssetStatusFalsePositive,
+		AssetStatusIgnored,
+		AssetStatusInteresting,
+	} {
+		if !ValidAssetStatus(status) {
+			t.Fatalf("expected valid status %q", status)
+		}
+	}
+	if ValidAssetStatus("random") {
+		t.Fatal("unexpected valid random status")
+	}
+}
+
+func TestPlannerVisibleAssetStatus(t *testing.T) {
+	for _, status := range []string{"", AssetStatusObserved, AssetStatusCandidate, AssetStatusConfirmed, AssetStatusInteresting} {
+		if !plannerVisibleAssetStatus(status) {
+			t.Fatalf("expected planner-visible status %q", status)
+		}
+	}
+	for _, status := range []string{AssetStatusQueued, AssetStatusNoise, AssetStatusIgnored, AssetStatusFalsePositive} {
+		if plannerVisibleAssetStatus(status) {
+			t.Fatalf("expected planner-hidden status %q", status)
+		}
+	}
+}
+
+func TestRawDataHashCanonicalJSON(t *testing.T) {
+	hash1 := rawDataHash([]byte(`{"b":2,"a":1}`))
+	hash2 := rawDataHash([]byte(`{"a":1,"b":2}`))
+	if hash1 == "" {
+		t.Fatal("expected non-empty hash")
+	}
+	if hash1 != hash2 {
+		t.Fatalf("expected canonical JSON hashes to match: %s != %s", hash1, hash2)
+	}
+}
+
+func TestRawDataHashEmpty(t *testing.T) {
+	if got := rawDataHash(nil); got != "" {
+		t.Fatalf("expected empty hash for nil raw data, got %q", got)
+	}
+	if got := rawDataHash([]byte{}); got != "" {
+		t.Fatalf("expected empty hash for empty raw data, got %q", got)
+	}
+}
+
+func TestAssetEventType(t *testing.T) {
+	tests := []struct {
+		name         string
+		existed      bool
+		previousHash string
+		newHash      string
+		want         string
+	}{
+		{name: "new asset", existed: false, newHash: "a", want: "new"},
+		{name: "reproduced unchanged", existed: true, previousHash: "a", newHash: "a", want: "reproduced"},
+		{name: "changed", existed: true, previousHash: "a", newHash: "b", want: "changed"},
+		{name: "reproduced missing hash", existed: true, previousHash: "", newHash: "b", want: "reproduced"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := assetEventType(tt.existed, tt.previousHash, tt.newHash); got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}

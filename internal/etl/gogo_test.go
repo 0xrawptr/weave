@@ -131,8 +131,8 @@ func TestNucleiExtractor(t *testing.T) {
 	if len(result.Entities) != 4 {
 		t.Errorf("expected 4 entities, got %d", len(result.Entities))
 	}
-	if len(result.Relations) != 3 {
-		t.Errorf("expected 3 relations, got %d", len(result.Relations))
+	if len(result.Relations) != 4 {
+		t.Errorf("expected 4 relations, got %d", len(result.Relations))
 	}
 	if !hasEntityType(result.Entities, "vulnerability") {
 		t.Errorf("expected vulnerability entity, got %#v", result.Entities)

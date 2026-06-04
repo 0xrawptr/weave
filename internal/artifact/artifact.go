@@ -7,8 +7,9 @@ import (
 
 // Input is the common input wrapper for all artifacts.
 type Input struct {
-	Target string          `json:"target"`
-	Data   json.RawMessage `json:"data,omitempty"`
+	Target     string          `json:"target"`
+	CampaignID string          `json:"campaign_id,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
 }
 
 // Output is the common output wrapper for all artifacts.

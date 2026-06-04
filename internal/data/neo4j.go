@@ -94,6 +94,17 @@ func (n *Neo4jStore) CreateRelation(ctx context.Context, rel AssetRelation) erro
 	return err
 }
 
+func (n *Neo4jStore) UpdateAssetStatus(ctx context.Context, id, status string) error {
+	session := n.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
+
+	_, err := session.Run(ctx,
+		`MATCH (a:Asset {id: $id})
+		 SET a.status = $status`,
+		map[string]interface{}{"id": id, "status": status})
+	return err
+}
+
 var relationTypePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func validRelationType(relType string) bool {

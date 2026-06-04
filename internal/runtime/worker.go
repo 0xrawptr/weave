@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
-	"strings"
 	"time"
 
 	"github.com/0xrawptr/weave/internal/app"
 	"github.com/0xrawptr/weave/internal/artifact"
 	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/etl"
 	"github.com/0xrawptr/weave/internal/planner"
 	"github.com/0xrawptr/weave/internal/workflow"
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
@@ -85,9 +84,10 @@ func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, persist
 		a, _ := reg.Get(info.Name)
 		w.RegisterActivityWithOptions(
 			artifact.NewActivityFunc(a, persistHook, dedupHook, markDoneHook,
-				func(ctx context.Context, artifactName, target, workflowID string, eventData []byte) {
+				func(ctx context.Context, artifactName, target, workflowID, campaignID string, eventData []byte) {
 					if err := repo.SaveRawEvent(ctx, &data.RawEvent{
 						ID:         fmt.Sprintf("%s-%d", workflowID, time.Now().UnixNano()),
+						CampaignID: campaignID,
 						Artifact:   artifactName,
 						TargetID:   target,
 						TargetType: targetType(target),
@@ -96,7 +96,7 @@ func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, persist
 					}); err != nil {
 						log.Printf("WARNING: raw event save failed for %s: %v", artifactName, err)
 					}
-					processETL(runtimeApp, ctx, artifactName, target, eventData)
+					processETL(runtimeApp, ctx, artifactName, target, campaignID, eventData)
 				},
 			),
 			activity.RegisterOptions{Name: info.Name},
@@ -105,7 +105,8 @@ func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, persist
 	}
 }
 
-func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target string, eventData []byte) {
+func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target, campaignID string, eventData []byte) {
+	ctx = etl.WithCampaignID(ctx, campaignID)
 	var etlErr error
 	switch artifactName {
 	case "gogo":
@@ -131,11 +132,19 @@ func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target s
 func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	planActivity := planner.NewActivity(repo)
 	w.RegisterActivityWithOptions(planActivity.PlanTarget, activity.RegisterOptions{Name: planner.PlanTargetActivityName})
+	w.RegisterActivityWithOptions(planActivity.PlanDAGTarget, activity.RegisterOptions{Name: planner.PlanDAGTargetActivityName})
 	w.RegisterActivityWithOptions(planActivity.ClaimAction, activity.RegisterOptions{Name: planner.ClaimActionActivityName})
 	w.RegisterActivityWithOptions(planActivity.CompleteAction, activity.RegisterOptions{Name: planner.CompleteActionActivityName})
+	w.RegisterActivityWithOptions(planActivity.EvaluateCondition, activity.RegisterOptions{Name: planner.EvaluateConditionActivityName})
+	w.RegisterActivityWithOptions(planActivity.UpsertBatchRun, activity.RegisterOptions{Name: planner.UpsertBatchRunActivityName})
+	w.RegisterActivityWithOptions(planActivity.UpsertBatchChunk, activity.RegisterOptions{Name: planner.UpsertBatchChunkActivityName})
 	log.Printf("registered activity: %s", planner.PlanTargetActivityName)
+	log.Printf("registered activity: %s", planner.PlanDAGTargetActivityName)
 	log.Printf("registered activity: %s", planner.ClaimActionActivityName)
 	log.Printf("registered activity: %s", planner.CompleteActionActivityName)
+	log.Printf("registered activity: %s", planner.EvaluateConditionActivityName)
+	log.Printf("registered activity: %s", planner.UpsertBatchRunActivityName)
+	log.Printf("registered activity: %s", planner.UpsertBatchChunkActivityName)
 }
 
 func registerWorkflows(w sdkworker.Worker) {
@@ -144,20 +153,13 @@ func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.CompanyWorkflow)
 	w.RegisterWorkflow(workflow.PortScanWorkflow)
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
+	w.RegisterWorkflow(workflow.DAGWorkflow)
+	w.RegisterWorkflow(workflow.PlannedDAGWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)
 	w.RegisterWorkflow(workflow.PlannedWorkflow)
-	log.Println("registered workflows: domain, ip, company, portscan, batch_portscan, action, planned")
+	log.Println("registered workflows: domain, ip, company, portscan, batch_portscan, dag, planned_dag, action, planned")
 }
 
 func targetType(raw string) string {
-	if strings.Contains(raw, "/") {
-		return "cidr"
-	}
-	if net.ParseIP(raw) != nil {
-		return "ip"
-	}
-	if strings.Contains(raw, ".") {
-		return "domain"
-	}
-	return "unknown"
+	return data.TargetType(raw)
 }

@@ -10,8 +10,9 @@ import (
 
 // IPWorkflowInput is the input for the IP scanning workflow.
 type IPWorkflowInput struct {
-	IP    string `json:"ip"`
-	Ports string `json:"ports"`
+	IP         string `json:"ip"`
+	CampaignID string `json:"campaign_id,omitempty"`
+	Ports      string `json:"ports"`
 }
 
 // IPWorkflowResult aggregates results from the IP scan pipeline.
@@ -43,7 +44,8 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 		for i, chunk := range chunks {
 			var gr artifact.ActivityResult
 			err := workflow.ExecuteActivity(chunkCtx, "gogo", artifact.Input{
-				Target: input.IP,
+				Target:     input.IP,
+				CampaignID: input.CampaignID,
 				Data: mustMarshal(map[string]interface{}{
 					"ip":          chunk,
 					"ports":       input.Ports,
@@ -66,7 +68,8 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 
 		var fingersResult artifact.ActivityResult
 		err := workflow.ExecuteActivity(postCtx, "fingers", artifact.Input{
-			Target: input.IP,
+			Target:     input.IP,
+			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"mode": "http_match",
 			}),
@@ -77,8 +80,9 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 
 		var nucleiResult artifact.ActivityResult
 		err = workflow.ExecuteActivity(postCtx, "nuclei", artifact.Input{
-			Target: input.IP,
-			Data:   mustMarshal(map[string]interface{}{}),
+			Target:     input.IP,
+			CampaignID: input.CampaignID,
+			Data:       mustMarshal(map[string]interface{}{}),
 		}).Get(postCtx, &nucleiResult)
 		if err == nil && nucleiResult.Success {
 			result.Nuclei = &nucleiResult

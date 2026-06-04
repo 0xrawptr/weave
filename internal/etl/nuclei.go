@@ -16,11 +16,29 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		return nil, nil
 	}
 	type nucleiItem struct {
-		TemplateID string `json:"template_id"`
-		Info       string `json:"info"`
-		Severity   string `json:"severity"`
-		Target     string `json:"target"`
-		Matched    string `json:"matched"`
+		TemplateID    string                 `json:"template_id"`
+		TemplatePath  string                 `json:"template_path,omitempty"`
+		TemplateURL   string                 `json:"template_url,omitempty"`
+		Info          string                 `json:"info"`
+		Severity      string                 `json:"severity"`
+		Tags          []string               `json:"tags,omitempty"`
+		Target        string                 `json:"target"`
+		Matched       string                 `json:"matched"`
+		Type          string                 `json:"type,omitempty"`
+		MatcherName   string                 `json:"matcher_name,omitempty"`
+		ExtractorName string                 `json:"extractor_name,omitempty"`
+		Host          string                 `json:"host,omitempty"`
+		IP            string                 `json:"ip,omitempty"`
+		Port          string                 `json:"port,omitempty"`
+		Scheme        string                 `json:"scheme,omitempty"`
+		URL           string                 `json:"url,omitempty"`
+		Path          string                 `json:"path,omitempty"`
+		CVEs          []string               `json:"cves,omitempty"`
+		CWEs          []string               `json:"cwes,omitempty"`
+		CPE           string                 `json:"cpe,omitempty"`
+		CVSSScore     float64                `json:"cvss_score,omitempty"`
+		EPSSScore     float64                `json:"epss_score,omitempty"`
+		Metadata      map[string]interface{} `json:"metadata,omitempty"`
 	}
 	type nucleiOutput struct {
 		Results []nucleiItem `json:"results"`
@@ -36,16 +54,18 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 	relationSet := make(map[string]bool)
 	for _, item := range out.Results {
 		itemRaw, _ := json.Marshal(item)
-		urlValue := item.Target
-		if urlValue == "" {
-			urlValue = item.Matched
-		}
+		urlValue := firstNonEmpty(item.URL, item.Target, item.Matched)
 		if urlValue != "" {
+			var urlQuality *Quality
+			if canonical, quality := buildHTTPQuality(HTTPQualityInput{URL: urlValue}); canonical != "" {
+				urlValue = canonical
+				urlQuality = &quality
+			}
 			urlID := data.GenerateID("url", scanTarget, urlValue)
 			addEntity(result, entitySet, Entity{
 				ID: urlID, Type: "url", Value: urlValue,
 				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
-				Confidence: 1.0, Status: "observed",
+				Confidence: 1.0, Status: "observed", Quality: urlQuality,
 			})
 		}
 
@@ -55,11 +75,11 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				ID: templateID, Type: "template", Value: item.TemplateID,
 				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-				Priority: severityPriority(item.Severity), Status: "confirmed",
+				Priority: severityPriority(item.Severity), Status: "confirmed", Tags: item.Tags,
 			})
 		}
 
-		vulnID := data.GenerateID("vuln", scanTarget, item.Target, item.TemplateID)
+		vulnID := data.GenerateID("vuln", scanTarget, urlValue, item.TemplateID)
 		addEntity(result, entitySet, Entity{
 			ID: vulnID, Type: "vulnerability",
 			Value:  fmt.Sprintf("%s: %s", item.Severity, item.Info),
@@ -76,17 +96,40 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 			addRelation(result, relationSet, Relation{
 				FromID: templateID, ToID: vulnID, Type: RelDetects,
 			})
-			if cve := templateCVE(item.TemplateID); cve != "" {
-				cveID := data.GenerateID("cve", scanTarget, cve)
+		}
+		for _, cve := range nucleiCVEs(item.TemplateID, item.CVEs) {
+			cveID := data.GenerateID("cve", scanTarget, cve)
+			addEntity(result, entitySet, Entity{
+				ID: cveID, Type: "cve", Value: cve,
+				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
+				Priority: severityPriority(item.Severity), Status: "confirmed",
+			})
+			addRelation(result, relationSet, Relation{FromID: vulnID, ToID: cveID, Type: RelRelatesTo})
+			if item.TemplateID != "" {
+				addRelation(result, relationSet, Relation{FromID: cveID, ToID: templateID, Type: RelHasTemplate})
+			}
+			if item.CPE != "" {
+				cpeID := data.GenerateID("cpe", scanTarget, item.CPE)
 				addEntity(result, entitySet, Entity{
-					ID: cveID, Type: "cve", Value: cve,
+					ID: cpeID, Type: "cpe", Value: item.CPE,
 					Source: "nuclei", TargetID: targetID, RawData: itemRaw,
-					Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-					Priority: severityPriority(item.Severity), Status: "confirmed",
+					Confidence: 0.8, Status: "confirmed",
 				})
-				addRelation(result, relationSet, Relation{
-					FromID: vulnID, ToID: cveID, Type: RelRelatesTo,
+				addRelation(result, relationSet, Relation{FromID: cveID, ToID: cpeID, Type: RelHasCPE})
+			}
+			for _, cwe := range item.CWEs {
+				cwe = strings.ToUpper(strings.TrimSpace(cwe))
+				if cwe == "" {
+					continue
+				}
+				cweID := data.GenerateID("cwe", scanTarget, cwe)
+				addEntity(result, entitySet, Entity{
+					ID: cweID, Type: "cwe", Value: cwe,
+					Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+					Confidence: 0.8, Status: "confirmed",
 				})
+				addRelation(result, relationSet, Relation{FromID: cveID, ToID: cweID, Type: RelHasCWE})
 			}
 		}
 	}
@@ -117,6 +160,32 @@ func templateCVE(templateID string) string {
 	upper := strings.ToUpper(strings.TrimSpace(templateID))
 	if strings.HasPrefix(upper, "CVE-") {
 		return upper
+	}
+	return ""
+}
+
+func nucleiCVEs(templateID string, cves []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, cve := range cves {
+		cve = strings.ToUpper(strings.TrimSpace(cve))
+		if cve == "" || seen[cve] {
+			continue
+		}
+		seen[cve] = true
+		out = append(out, cve)
+	}
+	if cve := templateCVE(templateID); cve != "" && !seen[cve] {
+		out = append(out, cve)
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
 	}
 	return ""
 }

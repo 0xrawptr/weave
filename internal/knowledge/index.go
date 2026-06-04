@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	sdkprovider "github.com/chainreactors/sdk/pkg/provider"
+	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -367,6 +370,22 @@ func (idx *Index) loadAliases(path string) error {
 }
 
 func (idx *Index) loadTemplates(root string) error {
+	provider := sdkprovider.NewFileProvider("", root)
+	tpls, err := provider.POCs(context.Background())
+	if err == nil && len(tpls) > 0 {
+		for _, tpl := range tpls {
+			ref := templateToRef(tpl)
+			if ref.ID == "" {
+				continue
+			}
+			idx.addTemplateRef(ref)
+		}
+		return nil
+	}
+	return idx.loadTemplatesTolerant(root)
+}
+
+func (idx *Index) loadTemplatesTolerant(root string) error {
 	stat, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("stat nuclei templates path: %w", err)
@@ -391,6 +410,17 @@ func (idx *Index) loadTemplates(root string) error {
 		}
 		return idx.loadTemplateFile(path)
 	})
+}
+
+func (idx *Index) addTemplateRef(ref TemplateRef) {
+	id := len(idx.templates)
+	idx.templates = append(idx.templates, ref)
+	for _, key := range ref.indexKeys() {
+		idx.byKey[key] = appendUniqueInt(idx.byKey[key], id)
+	}
+	for _, cve := range ref.CVEs {
+		idx.byCVE[cve] = appendUniqueInt(idx.byCVE[cve], id)
+	}
 }
 
 func (idx *Index) loadKEV(path string) error {
@@ -759,15 +789,50 @@ func (idx *Index) loadTemplateFile(path string) error {
 	if ref.ID == "" {
 		return nil
 	}
-	id := len(idx.templates)
-	idx.templates = append(idx.templates, ref)
-	for _, key := range ref.indexKeys() {
-		idx.byKey[key] = appendUniqueInt(idx.byKey[key], id)
-	}
-	for _, cve := range ref.CVEs {
-		idx.byCVE[cve] = appendUniqueInt(idx.byCVE[cve], id)
-	}
+	idx.addTemplateRef(ref)
 	return nil
+}
+
+func templateToRef(t *sdktypes.Template) TemplateRef {
+	if t == nil {
+		return TemplateRef{}
+	}
+	ref := TemplateRef{
+		ID:   strings.TrimSpace(t.Id),
+		Name: strings.TrimSpace(t.Info.Name),
+		Tags: normalizeList(t.Info.Tags),
+	}
+	ref.Severity = normalizeSeverity(t.Info.Severity)
+	if t.Info.Classification != nil {
+		ref.CVEs = normalizeCVEs(normalizeList(t.Info.Classification.CVEID))
+		ref.CPEs = normalizeList(t.Info.Classification.CPE)
+	}
+	if product, ok := metadataString(t.Info.Metadata, "product"); ok {
+		ref.Product = product
+	}
+	if vendor, ok := metadataString(t.Info.Metadata, "vendor"); ok {
+		ref.Vendor = vendor
+	}
+	if len(ref.CVEs) == 0 && strings.HasPrefix(strings.ToUpper(ref.ID), "CVE-") {
+		ref.CVEs = []string{strings.ToUpper(ref.ID)}
+	}
+	if len(ref.CPEs) == 0 {
+		if cpe, ok := metadataString(t.Info.Metadata, "cpe"); ok {
+			ref.CPEs = []string{cpe}
+		}
+	}
+	if ref.Product == "" || ref.Vendor == "" {
+		for _, cpe := range ref.CPEs {
+			vendor, product := cpeVendorProduct(cpe)
+			if ref.Vendor == "" {
+				ref.Vendor = vendor
+			}
+			if ref.Product == "" {
+				ref.Product = product
+			}
+		}
+	}
+	return ref
 }
 
 func (idx *Index) lookupKeys(name string) []string {

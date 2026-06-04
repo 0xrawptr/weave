@@ -276,6 +276,84 @@ func TestPlanFromStateUsesGraphEvidenceForScoring(t *testing.T) {
 	}
 }
 
+func TestScoreActionRewardsCompleteEvidenceChain(t *testing.T) {
+	shallow := Action{
+		Artifact: "nuclei",
+		Priority: 70,
+		Cost:     35,
+		Risk:     "medium",
+		Evidence: []Evidence{{Type: "product", Value: "Spring Boot", Priority: 40}},
+	}
+	complete := shallow
+	complete.Evidence = []Evidence{{
+		Type:     "intel",
+		Value:    "CVE-2021-44228 KEV EPSS 0.97 CVSS 10",
+		Priority: 100,
+		Severity: "critical",
+		Status:   "candidate",
+		Path: []EvidencePathStep{
+			{Type: "fingerprint", Value: "log4j"},
+			{Relation: "identifies_product", Type: "product", Value: "Apache Log4j"},
+			{Relation: "affected_by", Type: "cve", Value: "CVE-2021-44228"},
+			{Relation: "has_template", Type: "template", Value: "CVE-2021-44228"},
+			{Relation: "has_intel", Type: "intel", Value: "CVE-2021-44228 KEV EPSS 0.97 CVSS 10"},
+		},
+	}}
+	if scoreAction(complete) <= scoreAction(shallow) {
+		t.Fatalf("expected complete evidence chain to score higher, shallow=%d complete=%d", scoreAction(shallow), scoreAction(complete))
+	}
+}
+
+func TestPlanDAGFromActionsOrdersAndLinksStages(t *testing.T) {
+	actions := []Action{
+		{
+			ID:       "nuclei-1",
+			Target:   "example.com",
+			Artifact: "nuclei",
+			Input:    map[string]interface{}{"targets": []string{"https://example.com"}, "ids": []string{"CVE-2020-14882"}},
+			Priority: 80,
+			Score:    100,
+			DedupKey: "nuclei-key",
+		},
+		{
+			ID:       "spray-1",
+			Target:   "example.com",
+			Artifact: "spray",
+			Input:    map[string]interface{}{"base_urls": []string{"https://example.com"}, "wordlist_mode": "full"},
+			Priority: 80,
+			Score:    60,
+			DedupKey: "spray-key",
+		},
+		{
+			ID:       "fingers-1",
+			Target:   "example.com",
+			Artifact: "fingers",
+			Input:    map[string]interface{}{"mode": "http_match", "urls": []string{"https://example.com"}},
+			Priority: 50,
+			Score:    50,
+			DedupKey: "fingers-key",
+		},
+	}
+	plan := PlanDAGFromActions("example.com", "camp-1", actions)
+	if len(plan.Nodes) != 3 {
+		t.Fatalf("expected 3 nodes, got %#v", plan.Nodes)
+	}
+	if plan.Nodes[0].Artifact != "fingers" || plan.Nodes[1].Artifact != "spray" || plan.Nodes[2].Artifact != "nuclei" {
+		t.Fatalf("unexpected DAG order: %#v", plan.Nodes)
+	}
+	fingersID := plan.Nodes[0].ID
+	sprayID := plan.Nodes[1].ID
+	if !contains(plan.Nodes[1].DependsOn, fingersID) {
+		t.Fatalf("expected spray to depend on fingers, got %#v", plan.Nodes[1].DependsOn)
+	}
+	if !contains(plan.Nodes[2].DependsOn, fingersID) || !contains(plan.Nodes[2].DependsOn, sprayID) {
+		t.Fatalf("expected nuclei to depend on fingers and spray, got %#v", plan.Nodes[2].DependsOn)
+	}
+	if plan.Nodes[2].RunIf == nil || plan.Nodes[2].RunIf.CampaignID != "camp-1" {
+		t.Fatalf("expected nuclei run_if with campaign, got %#v", plan.Nodes[2].RunIf)
+	}
+}
+
 func findAction(actions []Action, artifact string) *Action {
 	for i := range actions {
 		if actions[i].Artifact == artifact {
@@ -283,6 +361,15 @@ func findAction(actions []Action, artifact string) *Action {
 		}
 	}
 	return nil
+}
+
+func contains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func hasEvidence(values []Evidence, evidenceType, value string) bool {

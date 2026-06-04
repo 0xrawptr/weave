@@ -43,11 +43,16 @@ func (n *NeutronExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 			urlValue = item.Matched
 		}
 		if urlValue != "" {
+			var urlQuality *Quality
+			if canonical, quality := buildHTTPQuality(HTTPQualityInput{URL: urlValue}); canonical != "" {
+				urlValue = canonical
+				urlQuality = &quality
+			}
 			urlID := data.GenerateID("url", scanTarget, urlValue)
 			addEntity(result, entitySet, Entity{
 				ID: urlID, Type: "url", Value: urlValue,
 				Source: "neutron", TargetID: targetID, RawData: itemRaw,
-				Confidence: 1.0, Status: "observed",
+				Confidence: 1.0, Status: "observed", Quality: urlQuality,
 			})
 		}
 

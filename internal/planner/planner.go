@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
@@ -11,18 +12,19 @@ import (
 
 // Action is a planner decision derived from current assets and enrichment.
 type Action struct {
-	ID       string                 `json:"id"`
-	Target   string                 `json:"target"`
-	Artifact string                 `json:"artifact"`
-	Input    map[string]interface{} `json:"input"`
-	Priority int                    `json:"priority"`
-	Reason   string                 `json:"reason"`
-	Status   string                 `json:"status"`
-	Evidence []Evidence             `json:"evidence,omitempty"`
-	Risk     string                 `json:"risk,omitempty"`
-	Cost     int                    `json:"cost,omitempty"`
-	DedupKey string                 `json:"dedup_key,omitempty"`
-	Score    int                    `json:"score,omitempty"`
+	ID         string                 `json:"id"`
+	CampaignID string                 `json:"campaign_id,omitempty"`
+	Target     string                 `json:"target"`
+	Artifact   string                 `json:"artifact"`
+	Input      map[string]interface{} `json:"input"`
+	Priority   int                    `json:"priority"`
+	Reason     string                 `json:"reason"`
+	Status     string                 `json:"status"`
+	Evidence   []Evidence             `json:"evidence,omitempty"`
+	Risk       string                 `json:"risk,omitempty"`
+	Cost       int                    `json:"cost,omitempty"`
+	DedupKey   string                 `json:"dedup_key,omitempty"`
+	Score      int                    `json:"score,omitempty"`
 }
 
 type Planner struct {
@@ -31,6 +33,7 @@ type Planner struct {
 
 type State struct {
 	Target        string
+	CampaignID    string
 	URLs          []string
 	BaseURLs      []string
 	SprayURLs     []string
@@ -59,6 +62,29 @@ type EvidencePathStep struct {
 	Value    string `json:"value"`
 }
 
+type DAGPlan struct {
+	Target     string        `json:"target"`
+	CampaignID string        `json:"campaign_id,omitempty"`
+	Nodes      []DAGPlanNode `json:"nodes"`
+	Actions    []Action      `json:"actions,omitempty"`
+}
+
+type DAGPlanNode struct {
+	ID         string            `json:"id"`
+	Artifact   string            `json:"artifact"`
+	Target     string            `json:"target"`
+	CampaignID string            `json:"campaign_id,omitempty"`
+	Input      map[string]any    `json:"input,omitempty"`
+	DependsOn  []string          `json:"depends_on,omitempty"`
+	RunIf      *ConditionRequest `json:"run_if,omitempty"`
+	Priority   int               `json:"priority,omitempty"`
+	Reason     string            `json:"reason,omitempty"`
+	Risk       string            `json:"risk,omitempty"`
+	Cost       int               `json:"cost,omitempty"`
+	Score      int               `json:"score,omitempty"`
+	Evidence   []Evidence        `json:"evidence,omitempty"`
+}
+
 func New(repo *data.Repository) *Planner {
 	return &Planner{repo: repo}
 }
@@ -67,6 +93,10 @@ func New(repo *data.Repository) *Planner {
 // It intentionally returns recommendations; workflow execution can consume the
 // same actions later without changing this decision logic.
 func (p *Planner) PlanForTarget(ctx context.Context, target string) ([]Action, error) {
+	return p.PlanForTargetInCampaign(ctx, target, "")
+}
+
+func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignID string) ([]Action, error) {
 	if p == nil || p.repo == nil {
 		return nil, nil
 	}
@@ -103,7 +133,7 @@ func (p *Planner) PlanForTarget(ctx context.Context, target string) ([]Action, e
 	if err != nil {
 		return nil, err
 	}
-	records, err := p.repo.GetActionRecords(ctx, target)
+	records, err := p.repo.GetActionRecordsFiltered(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +144,7 @@ func (p *Planner) PlanForTarget(ctx context.Context, target string) ([]Action, e
 
 	return PlanFromState(State{
 		Target:        target,
+		CampaignID:    campaignID,
 		URLs:          append(append([]string{}, urls...), sprayURLs...),
 		BaseURLs:      urls,
 		SprayURLs:     sprayURLs,
@@ -125,6 +156,15 @@ func (p *Planner) PlanForTarget(ctx context.Context, target string) ([]Action, e
 		Evidence:      evidence,
 		Actions:       records,
 	}), nil
+}
+
+func (p *Planner) PlanDAGForTarget(ctx context.Context, target, campaignID string) (*DAGPlan, error) {
+	actions, err := p.PlanForTargetInCampaign(ctx, target, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	plan := PlanDAGFromActions(target, campaignID, actions)
+	return &plan, nil
 }
 
 func PlanFromState(state State) []Action {
@@ -149,17 +189,18 @@ func PlanFromState(state State) []Action {
 	var actions []Action
 	if len(targets) == 0 {
 		actions = append(actions, Action{
-			ID:       data.GenerateID("action", state.Target, "gogo"),
-			Target:   state.Target,
-			Artifact: "gogo",
-			Input:    map[string]interface{}{"ip": state.Target, "ports": "top1000"},
-			Priority: 40,
-			Reason:   "no web service URLs are available yet",
-			Status:   "candidate",
-			Evidence: []Evidence{{Type: "target", Value: state.Target}},
-			Risk:     "low",
-			Cost:     40,
-			DedupKey: actionDedupKey(state.Target, "gogo", "top1000"),
+			ID:         data.GenerateID("action", state.Target, "gogo"),
+			CampaignID: state.CampaignID,
+			Target:     state.Target,
+			Artifact:   "gogo",
+			Input:      map[string]interface{}{"ip": state.Target, "ports": "top1000"},
+			Priority:   40,
+			Reason:     "no web service URLs are available yet",
+			Status:     "candidate",
+			Evidence:   []Evidence{{Type: "target", Value: state.Target}},
+			Risk:       "low",
+			Cost:       40,
+			DedupKey:   actionDedupKey(state.Target, "gogo", "top1000"),
 		})
 		return finalizeActions(actions, state.Actions)
 	}
@@ -171,34 +212,36 @@ func PlanFromState(state State) []Action {
 	fingerTargets = withoutCoveredValues(fingerTargets, state.Actions, "fingers", "urls")
 	if len(fingerTargets) > 0 && (len(fingerprints) == 0 || len(sprayURLs) > 0) {
 		actions = append(actions, Action{
-			ID:       data.GenerateID("action", state.Target, "fingers", joinKey(fingerTargets)),
-			Target:   state.Target,
-			Artifact: "fingers",
-			Input:    map[string]interface{}{"mode": "http_match", "urls": fingerTargets},
-			Priority: 50,
-			Reason:   fingersReason(len(fingerprints), len(sprayURLs)),
-			Status:   "candidate",
-			Evidence: stringEvidence("url", fingerTargets, 0),
-			Risk:     "low",
-			Cost:     25,
-			DedupKey: actionDedupKey(state.Target, "fingers", joinKey(fingerTargets)),
+			ID:         data.GenerateID("action", state.Target, "fingers", joinKey(fingerTargets)),
+			CampaignID: state.CampaignID,
+			Target:     state.Target,
+			Artifact:   "fingers",
+			Input:      map[string]interface{}{"mode": "http_match", "urls": fingerTargets},
+			Priority:   50,
+			Reason:     fingersReason(len(fingerprints), len(sprayURLs)),
+			Status:     "candidate",
+			Evidence:   stringEvidence("url", fingerTargets, 0),
+			Risk:       "low",
+			Cost:       25,
+			DedupKey:   actionDedupKey(state.Target, "fingers", joinKey(fingerTargets)),
 		})
 	}
 
 	sprayBaseURLs := withoutCoveredValues(baseURLs, state.Actions, "spray", "base_urls")
 	if len(sprayBaseURLs) > 0 {
 		actions = append(actions, Action{
-			ID:       data.GenerateID("action", state.Target, "spray", "full", joinKey(sprayBaseURLs)),
-			Target:   state.Target,
-			Artifact: "spray",
-			Input:    map[string]interface{}{"base_urls": sprayBaseURLs, "wordlist_mode": "full"},
-			Priority: 80,
-			Reason:   "expand attack surface with full path discovery",
-			Status:   "candidate",
-			Evidence: stringEvidence("url", sprayBaseURLs, 0),
-			Risk:     "medium",
-			Cost:     45,
-			DedupKey: actionDedupKey(state.Target, "spray", "full", joinKey(sprayBaseURLs)),
+			ID:         data.GenerateID("action", state.Target, "spray", "full", joinKey(sprayBaseURLs)),
+			CampaignID: state.CampaignID,
+			Target:     state.Target,
+			Artifact:   "spray",
+			Input:      map[string]interface{}{"base_urls": sprayBaseURLs, "wordlist_mode": "full"},
+			Priority:   80,
+			Reason:     "expand attack surface with full path discovery",
+			Status:     "candidate",
+			Evidence:   stringEvidence("url", sprayBaseURLs, 0),
+			Risk:       "medium",
+			Cost:       45,
+			DedupKey:   actionDedupKey(state.Target, "spray", "full", joinKey(sprayBaseURLs)),
 		})
 	}
 
@@ -207,17 +250,18 @@ func PlanFromState(state State) []Action {
 	if len(templateIDs) > 0 {
 		cveEvidence := append(cveEvidence(state.CVEs), graphEvidence(state.Evidence)...)
 		actions = append(actions, Action{
-			ID:       data.GenerateID("action", state.Target, "nuclei", "ids", joinKey(templateIDs)),
-			Target:   state.Target,
-			Artifact: "nuclei",
-			Input:    map[string]interface{}{"targets": nucleiTargets, "ids": templateIDs},
-			Priority: maxPriority(80, cveAssetPriority(state.CVEs)),
-			Reason:   "enrichment produced precise nuclei template IDs",
-			Status:   "candidate",
-			Evidence: append(stringEvidence("template", templateIDs, 70), cveEvidence...),
-			Risk:     "medium",
-			Cost:     35,
-			DedupKey: actionDedupKey(state.Target, "nuclei", "ids", joinKey(templateIDs)),
+			ID:         data.GenerateID("action", state.Target, "nuclei", "ids", joinKey(templateIDs)),
+			CampaignID: state.CampaignID,
+			Target:     state.Target,
+			Artifact:   "nuclei",
+			Input:      map[string]interface{}{"targets": nucleiTargets, "ids": templateIDs},
+			Priority:   maxPriority(80, cveAssetPriority(state.CVEs)),
+			Reason:     "enrichment produced precise nuclei template IDs",
+			Status:     "candidate",
+			Evidence:   append(stringEvidence("template", templateIDs, 70), cveEvidence...),
+			Risk:       "medium",
+			Cost:       35,
+			DedupKey:   actionDedupKey(state.Target, "nuclei", "ids", joinKey(templateIDs)),
 		})
 	} else if len(tags) > 0 || len(fingerprints) > 0 {
 		filterTags := tags
@@ -225,17 +269,18 @@ func PlanFromState(state State) []Action {
 			filterTags = fingerprints
 		}
 		actions = append(actions, Action{
-			ID:       data.GenerateID("action", state.Target, "nuclei", "tags", joinKey(filterTags)),
-			Target:   state.Target,
-			Artifact: "nuclei",
-			Input:    map[string]interface{}{"targets": nucleiTargets, "tags": filterTags},
-			Priority: 55,
-			Reason:   "no precise template IDs exist; using tags/fingerprints as a broader filter",
-			Status:   "candidate",
-			Evidence: append(append(stringEvidence("tag", tags, 20), stringEvidence("fingerprint", fingerprints, 15)...), graphEvidence(state.Evidence)...),
-			Risk:     "medium",
-			Cost:     60,
-			DedupKey: actionDedupKey(state.Target, "nuclei", "tags", joinKey(filterTags)),
+			ID:         data.GenerateID("action", state.Target, "nuclei", "tags", joinKey(filterTags)),
+			CampaignID: state.CampaignID,
+			Target:     state.Target,
+			Artifact:   "nuclei",
+			Input:      map[string]interface{}{"targets": nucleiTargets, "tags": filterTags},
+			Priority:   55,
+			Reason:     "no precise template IDs exist; using tags/fingerprints as a broader filter",
+			Status:     "candidate",
+			Evidence:   append(append(stringEvidence("tag", tags, 20), stringEvidence("fingerprint", fingerprints, 15)...), graphEvidence(state.Evidence)...),
+			Risk:       "medium",
+			Cost:       60,
+			DedupKey:   actionDedupKey(state.Target, "nuclei", "tags", joinKey(filterTags)),
 		})
 	}
 
@@ -256,6 +301,137 @@ func finalizeActions(actions []Action, records []data.ActionRecord) []Action {
 		return actions[i].Score > actions[j].Score
 	})
 	return filterBlockedActions(actions, records)
+}
+
+func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
+	actions = append([]Action{}, actions...)
+	sort.SliceStable(actions, func(i, j int) bool {
+		if dagStage(actions[i].Artifact) == dagStage(actions[j].Artifact) {
+			if actions[i].Score == actions[j].Score {
+				return actions[i].ID < actions[j].ID
+			}
+			return actions[i].Score > actions[j].Score
+		}
+		return dagStage(actions[i].Artifact) < dagStage(actions[j].Artifact)
+	})
+
+	byArtifact := make(map[string][]string)
+	nodes := make([]DAGPlanNode, 0, len(actions))
+	for _, action := range actions {
+		if action.CampaignID == "" {
+			action.CampaignID = campaignID
+		}
+		nodeID := actionNodeID(action)
+		node := DAGPlanNode{
+			ID:         nodeID,
+			Artifact:   action.Artifact,
+			Target:     action.Target,
+			CampaignID: action.CampaignID,
+			Input:      action.Input,
+			DependsOn:  actionDependsOn(action, byArtifact),
+			RunIf:      actionRunIf(action),
+			Priority:   action.Priority,
+			Reason:     action.Reason,
+			Risk:       action.Risk,
+			Cost:       action.Cost,
+			Score:      action.Score,
+			Evidence:   action.Evidence,
+		}
+		nodes = append(nodes, node)
+		byArtifact[action.Artifact] = append(byArtifact[action.Artifact], nodeID)
+	}
+	return DAGPlan{
+		Target:     target,
+		CampaignID: campaignID,
+		Nodes:      nodes,
+		Actions:    actions,
+	}
+}
+
+func dagStage(artifact string) int {
+	switch artifact {
+	case "gogo":
+		return 10
+	case "fingers":
+		return 20
+	case "spray":
+		return 30
+	case "nuclei", "neutron":
+		return 40
+	default:
+		return 50
+	}
+}
+
+func actionNodeID(action Action) string {
+	parts := []string{"node", action.Artifact}
+	if action.DedupKey != "" {
+		parts = append(parts, action.DedupKey)
+	} else if action.ID != "" {
+		parts = append(parts, action.ID)
+	}
+	return data.GenerateID(parts...)
+}
+
+func actionDependsOn(action Action, byArtifact map[string][]string) []string {
+	var deps []string
+	add := func(ids []string) {
+		for _, id := range ids {
+			if id != "" {
+				deps = append(deps, id)
+			}
+		}
+	}
+	switch action.Artifact {
+	case "fingers":
+		add(byArtifact["gogo"])
+	case "spray":
+		if len(byArtifact["fingers"]) > 0 {
+			add(byArtifact["fingers"])
+		} else {
+			add(byArtifact["gogo"])
+		}
+	case "nuclei", "neutron":
+		add(byArtifact["fingers"])
+		add(byArtifact["spray"])
+	}
+	return unique(deps)
+}
+
+func actionRunIf(action Action) *ConditionRequest {
+	switch action.Artifact {
+	case "fingers":
+		return &ConditionRequest{
+			Target:     action.Target,
+			CampaignID: action.CampaignID,
+			Any: []AssetCondition{
+				{Type: "service", MinCount: 1},
+				{Type: "url", MinCount: 1},
+			},
+		}
+	case "spray":
+		return &ConditionRequest{
+			Target:     action.Target,
+			CampaignID: action.CampaignID,
+			Any: []AssetCondition{
+				{Type: "service", MinCount: 1},
+				{Type: "url", MinCount: 1},
+			},
+		}
+	case "nuclei", "neutron":
+		return &ConditionRequest{
+			Target:     action.Target,
+			CampaignID: action.CampaignID,
+			Any: []AssetCondition{
+				{Type: "template", MinCount: 1},
+				{Type: "tag", MinCount: 1},
+				{Type: "fingerprint", MinCount: 1},
+				{Type: "cve", MinCount: 1},
+			},
+		}
+	default:
+		return nil
+	}
 }
 
 func (a Action) PersistInput() map[string]interface{} {
@@ -287,6 +463,7 @@ func scoreAction(action Action) int {
 		score += ev.Priority / 5
 		score += evidenceTypeBoost(ev.Type)
 		score += evidencePathBoost(ev.Path)
+		score += evidenceValueBoost(ev)
 		switch ev.Severity {
 		case "critical", "CRITICAL":
 			score += 20
@@ -335,10 +512,73 @@ func evidencePathBoost(path []EvidencePathStep) int {
 			score += 3
 		}
 	}
-	if score > 25 {
-		return 25
+	if seenTypes["fingerprint"] && seenTypes["product"] && seenTypes["cve"] && seenTypes["template"] && seenTypes["intel"] {
+		score += 30
+	} else if seenTypes["product"] && seenTypes["cve"] && seenTypes["template"] && seenTypes["intel"] {
+		score += 24
+	} else if seenTypes["cve"] && seenTypes["template"] {
+		score += 15
+	} else if seenTypes["product"] && seenTypes["cve"] {
+		score += 10
+	}
+	if score > 55 {
+		return 55
 	}
 	return score
+}
+
+func evidenceValueBoost(ev Evidence) int {
+	value := strings.ToUpper(ev.Value)
+	score := 0
+	if ev.Type == "template" {
+		score += 6
+	}
+	if ev.Type == "tag" || ev.Type == "fingerprint" {
+		score -= 2
+	}
+	if strings.Contains(value, " KEV") || strings.Contains(value, "KEV ") {
+		score += 25
+	}
+	if strings.Contains(value, "CISA") {
+		score += 8
+	}
+	if epss, ok := numberAfterToken(value, "EPSS"); ok {
+		switch {
+		case epss >= 0.9:
+			score += 18
+		case epss >= 0.7:
+			score += 12
+		case epss >= 0.4:
+			score += 6
+		}
+	}
+	if cvss, ok := numberAfterToken(value, "CVSS"); ok {
+		switch {
+		case cvss >= 9:
+			score += 18
+		case cvss >= 7:
+			score += 12
+		case cvss >= 4:
+			score += 6
+		}
+	}
+	return score
+}
+
+func numberAfterToken(value, token string) (float64, bool) {
+	fields := strings.Fields(value)
+	for i, field := range fields {
+		field = strings.Trim(field, ":=")
+		if field != token || i+1 >= len(fields) {
+			continue
+		}
+		raw := strings.Trim(fields[i+1], ",;()[]{}")
+		n, err := strconv.ParseFloat(raw, 64)
+		if err == nil {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 func filterBlockedActions(actions []Action, records []data.ActionRecord) []Action {

@@ -28,6 +28,96 @@ func TestSprayExtractor(t *testing.T) {
 	if admin == nil || admin.Priority < 60 {
 		t.Fatalf("expected high-value admin URL priority, got %#v", admin)
 	}
+	if admin.Status != "candidate" {
+		t.Fatalf("expected admin URL candidate status, got %#v", admin)
+	}
+	missing := findEntity(result.Entities, "url", "https://example.com/missing")
+	if missing == nil || missing.Status != "noise" {
+		t.Fatalf("expected missing URL to be noise, got %#v", missing)
+	}
+}
+
+func TestSprayExtractorNormalURLsAreQueued(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{"url": "HTTP://Example.COM:80/a/../normal?b=2&a=1", "status_code": 200, "content_length": 512},
+		},
+		"total": 1,
+	})
+	result, err := (&SprayExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	normal := findEntity(result.Entities, "url", "http://example.com/normal?a=1&b=2")
+	if normal == nil {
+		t.Fatalf("expected normalized URL entity, got %#v", result.Entities)
+	}
+	if normal.Status != "queued" {
+		t.Fatalf("expected normal spray URL to be queued, got %#v", normal)
+	}
+}
+
+func TestSprayExtractorSimilarResponsesBecomeNoise(t *testing.T) {
+	results := make([]map[string]interface{}, 0, 6)
+	for _, p := range []string{"a", "b", "c", "d", "e"} {
+		results = append(results, map[string]interface{}{
+			"url":            "https://example.com/" + p,
+			"status_code":    200,
+			"title":          "same",
+			"content_length": 1234,
+		})
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"results": results, "total": len(results)})
+	result, err := (&SprayExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	for _, entity := range result.Entities {
+		if entity.Status != "noise" {
+			t.Fatalf("expected similar response cluster to be noise, got %#v", entity)
+		}
+	}
+}
+
+func TestSprayExtractorUsesSDKInvalidSignal(t *testing.T) {
+	valid := false
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{"url": "https://example.com/hidden", "status_code": 200, "valid": valid, "reason": "baseline filtered"},
+		},
+		"total": 1,
+	})
+	result, err := (&SprayExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	entity := findEntity(result.Entities, "url", "https://example.com/hidden")
+	if entity == nil || entity.Status != "noise" {
+		t.Fatalf("expected SDK invalid result to be noise, got %#v", entity)
+	}
+	if entity.Quality == nil || !containsString(entity.Quality.Reasons, "sdk_invalid") || !containsString(entity.Quality.Reasons, "sdk_reason:baseline filtered") {
+		t.Fatalf("expected SDK quality reasons, got %#v", entity)
+	}
+}
+
+func TestSprayExtractorUsesSDKFuzzySignal(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{"url": "https://example.com/fuzzy", "status_code": 200, "valid": true, "fuzzy": true, "reason": "similar baseline"},
+		},
+		"total": 1,
+	})
+	result, err := (&SprayExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	entity := findEntity(result.Entities, "url", "https://example.com/fuzzy")
+	if entity == nil || entity.Status != "noise" {
+		t.Fatalf("expected SDK fuzzy result to be noise, got %#v", entity)
+	}
+	if entity.Quality == nil || !containsString(entity.Quality.Reasons, "sdk_fuzzy") {
+		t.Fatalf("expected SDK fuzzy reason, got %#v", entity)
+	}
 }
 
 func TestZombieExtractor(t *testing.T) {
@@ -124,6 +214,15 @@ func TestTemplateMatchesCVE(t *testing.T) {
 func hasRelationType(relations []Relation, relType string) bool {
 	for _, relation := range relations {
 		if relation.Type == relType {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

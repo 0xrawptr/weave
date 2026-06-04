@@ -12,9 +12,31 @@ type Target struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Campaign is the top-level unit for a HW/SRC/ASM operation.
+type Campaign struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Status      string    `json:"status"` // active, paused, completed, archived
+	Targets     []string  `json:"targets,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CampaignTarget records an input scope item attached to a campaign.
+type CampaignTarget struct {
+	ID         string    `json:"id"`
+	CampaignID string    `json:"campaign_id"`
+	Type       string    `json:"type"` // domain, ip, cidr, url, unknown
+	Value      string    `json:"value"`
+	Status     string    `json:"status"` // active, excluded
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // Asset represents a discovered asset.
 type Asset struct {
 	ID          string    `json:"id"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
 	Type        string    `json:"type"` // domain, subdomain, ip, port, url, service, fingerprint, template, cve, vulnerability
 	Value       string    `json:"value"`
 	Source      string    `json:"source"` // which artifact discovered it
@@ -23,11 +45,27 @@ type Asset struct {
 	Confidence  float64   `json:"confidence,omitempty"`
 	Severity    string    `json:"severity,omitempty"`
 	Priority    int       `json:"priority,omitempty"`
-	Status      string    `json:"status,omitempty"` // observed, candidate, confirmed, false_positive, ignored, interesting
+	Status      string    `json:"status,omitempty"` // observed, queued, noise, candidate, confirmed, false_positive, ignored, interesting
+	Lifecycle   string    `json:"lifecycle_status,omitempty"`
+	RawHash     string    `json:"raw_hash,omitempty"`
 	SourceRunID string    `json:"source_run_id,omitempty"`
 	FirstSeen   time.Time `json:"first_seen"`
 	LastSeen    time.Time `json:"last_seen"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// AssetEvent records lifecycle transitions for an asset.
+type AssetEvent struct {
+	ID           string    `json:"id"`
+	AssetID      string    `json:"asset_id"`
+	CampaignID   string    `json:"campaign_id,omitempty"`
+	EventType    string    `json:"event_type"` // new, reproduced, changed, disappeared, status_changed
+	PreviousHash string    `json:"previous_hash,omitempty"`
+	NewHash      string    `json:"new_hash,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	TargetID     string    `json:"target_id,omitempty"`
+	Details      []byte    `json:"details,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Scan represents a workflow execution record.
@@ -57,6 +95,7 @@ type ScanResult struct {
 // ActionRecord tracks planner/manual action execution across workflows.
 type ActionRecord struct {
 	ID          string    `json:"id"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
 	Target      string    `json:"target"`
 	Artifact    string    `json:"artifact"`
 	Input       []byte    `json:"input"`
@@ -72,9 +111,41 @@ type ActionRecord struct {
 	CompletedAt time.Time `json:"completed_at"`
 }
 
+// BatchRun tracks a large target batch, such as a HW CIDR portscan batch.
+type BatchRun struct {
+	ID          string    `json:"id"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
+	WorkflowID  string    `json:"workflow_id"`
+	Type        string    `json:"type"`
+	Target      string    `json:"target"`
+	Ports       string    `json:"ports,omitempty"`
+	Status      string    `json:"status"` // running, completed, failed, partial
+	TotalChunks int       `json:"total_chunks"`
+	Completed   int       `json:"completed"`
+	Failed      int       `json:"failed"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// BatchChunk tracks a single executable chunk in a batch run.
+type BatchChunk struct {
+	ID          string    `json:"id"`
+	BatchID     string    `json:"batch_id"`
+	Target      string    `json:"target"`
+	Chunk       string    `json:"chunk"`
+	WorkflowID  string    `json:"workflow_id"`
+	Status      string    `json:"status"` // pending, running, completed, failed
+	Error       string    `json:"error,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+}
+
 // RawEvent stores artifact output exactly as produced, before any transformation.
 type RawEvent struct {
 	ID         string    `json:"id"`
+	CampaignID string    `json:"campaign_id,omitempty"`
 	Artifact   string    `json:"artifact"`
 	TargetID   string    `json:"target_id"`
 	TargetType string    `json:"target_type"` // "cidr", "domain", "ip"

@@ -4,7 +4,44 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	sdktypes "github.com/chainreactors/sdk/pkg/types"
 )
+
+func TestTemplateToRefMapsSDKTemplateMetadata(t *testing.T) {
+	ref := templateToRef(&sdktypes.Template{
+		Id: "CVE-2020-14882",
+		Info: sdktypes.TemplateInfo{
+			Name:     "Oracle WebLogic Server Console RCE",
+			Severity: "critical",
+			Tags:     "cve,cve2020,weblogic,oracle,rce",
+			Metadata: map[string]interface{}{
+				"vendor":  "Oracle",
+				"product": "WebLogic Server",
+			},
+			Classification: &sdktypes.Classification{
+				CVEID: "CVE-2020-14882",
+				CPE:   "cpe:2.3:a:oracle:weblogic_server:*:*:*:*:*:*:*:*",
+			},
+		},
+	})
+
+	if ref.ID != "CVE-2020-14882" || ref.Name != "Oracle WebLogic Server Console RCE" || ref.Severity != "critical" {
+		t.Fatalf("unexpected template ref basics: %#v", ref)
+	}
+	if ref.Vendor != "Oracle" || ref.Product != "WebLogic Server" {
+		t.Fatalf("unexpected product metadata: %#v", ref)
+	}
+	if !contains(ref.Tags, "weblogic") || !contains(ref.Tags, "oracle") {
+		t.Fatalf("expected normalized tags, got %#v", ref.Tags)
+	}
+	if !contains(ref.CVEs, "CVE-2020-14882") {
+		t.Fatalf("expected CVE, got %#v", ref.CVEs)
+	}
+	if !contains(ref.CPEs, "cpe:2.3:a:oracle:weblogic_server:*:*:*:*:*:*:*:*") {
+		t.Fatalf("expected CPE, got %#v", ref.CPEs)
+	}
+}
 
 func TestLookupProductFromNucleiTemplates(t *testing.T) {
 	dir := t.TempDir()
