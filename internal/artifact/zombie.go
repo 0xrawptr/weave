@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/chainreactors/sdk/pkg/types"
 	sdkzombie "github.com/chainreactors/sdk/zombie"
@@ -114,7 +115,11 @@ func (z *ZombieArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		return Output{Artifact: z.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 
-	zombieCtx := sdkzombie.NewContext().WithContext(ctx)
+	started := time.Now()
+	collector := newStatCollector(func(latest ExecutionStat, count int) {
+		recordArtifactHeartbeat(ctx, z.Name(), input.Target, "sdk_stats", started, statHeartbeatFields(latest, count))
+	})
+	zombieCtx := sdkzombie.NewContext().WithContext(ctx).SetStatsHandler(collector.Handler())
 
 	// Convert string targets to zombie.Target (which is types.ZombieTarget)
 	targets := make([]sdkzombie.Target, len(zin.Targets))
@@ -130,6 +135,11 @@ func (z *ZombieArtifact) Execute(ctx context.Context, input Input) (Output, erro
 
 	switch zin.Mode {
 	case "clusterbomb":
+		recordArtifactHeartbeat(ctx, z.Name(), input.Target, "clusterbomb", started, map[string]interface{}{
+			"targets":   len(targets),
+			"users":     len(zin.Users),
+			"passwords": len(zin.Passwords),
+		})
 		r, err := z.engine.Brute(zombieCtx, targets, zin.Users, zin.Passwords)
 		if err != nil {
 			return Output{Artifact: z.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
@@ -139,6 +149,10 @@ func (z *ZombieArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		if len(zin.Auths) == 0 {
 			return Output{Artifact: z.Name(), Target: input.Target, Success: false, Error: "pitchfork mode requires auths"}, nil
 		}
+		recordArtifactHeartbeat(ctx, z.Name(), input.Target, "pitchfork", started, map[string]interface{}{
+			"targets": len(targets),
+			"auths":   len(zin.Auths),
+		})
 		auths := make([]sdkzombie.Auth, len(zin.Auths))
 		for i, a := range zin.Auths {
 			auths[i] = sdkzombie.Auth{Username: a.Username, Password: a.Password}
@@ -149,6 +163,9 @@ func (z *ZombieArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		}
 		results = r
 	case "sniper":
+		recordArtifactHeartbeat(ctx, z.Name(), input.Target, "sniper", started, map[string]interface{}{
+			"targets": len(targets),
+		})
 		r, err := z.engine.Sniper(zombieCtx, targets)
 		if err != nil {
 			return Output{Artifact: z.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
@@ -157,6 +174,9 @@ func (z *ZombieArtifact) Execute(ctx context.Context, input Input) (Output, erro
 	default:
 		return Output{Artifact: z.Name(), Target: input.Target, Success: false, Error: "unsupported mode: " + zin.Mode}, nil
 	}
+	recordArtifactHeartbeat(ctx, z.Name(), input.Target, "completed", started, map[string]interface{}{
+		"results": len(results),
+	})
 
 	var items []ZombieResultItem
 	for _, r := range results {
@@ -174,6 +194,7 @@ func (z *ZombieArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		Target:   input.Target,
 		Success:  true,
 		Data:     data,
+		Stats:    collector.Stats(),
 	}, nil
 }
 

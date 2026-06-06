@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/0xrawptr/weave/internal/artifact"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -42,16 +41,13 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 
 	// Stage 0: CDN / WAF / Cloud detection
 	{
-		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: 30 * time.Second,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-		})
+		cdnCtx := shortArtifactActivityContext(ctx, "cdncheck", 30*time.Second, 2)
 		var cdnResult artifact.ActivityResult
-		err := workflow.ExecuteActivity(ctx, "cdncheck", artifact.Input{
+		err := workflow.ExecuteActivity(cdnCtx, "cdncheck", artifact.Input{
 			Target:     input.Domain,
 			CampaignID: input.CampaignID,
 			Data:       mustMarshal(map[string]interface{}{"target": input.Domain}),
-		}).Get(ctx, &cdnResult)
+		}).Get(cdnCtx, &cdnResult)
 		if err == nil {
 			result.Cdncheck = &cdnResult
 		}
@@ -78,16 +74,13 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		webURLs = []string{"http://" + input.Domain, "https://" + input.Domain}
 	} else {
 		// Stage 1: gogo port scan
-		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: 10 * time.Minute,
-			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-		})
+		gogoCtx := shortArtifactActivityContext(ctx, "gogo", 10*time.Minute, 2)
 		var gogoResult artifact.ActivityResult
-		err := workflow.ExecuteActivity(ctx, "gogo", artifact.Input{
+		err := workflow.ExecuteActivity(gogoCtx, "gogo", artifact.Input{
 			Target:     input.Domain,
 			CampaignID: input.CampaignID,
 			Data:       mustMarshal(map[string]interface{}{"ip": input.Domain, "ports": "top1000"}),
-		}).Get(ctx, &gogoResult)
+		}).Get(gogoCtx, &gogoResult)
 		if err != nil {
 			return result, err
 		}
@@ -97,42 +90,45 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 
 	if len(webURLs) > 0 {
 		// Stage 2: spray path brute
+		sprayCtx := artifactActivityContext(ctx, "spray", 0)
 		var sprayResult artifact.ActivityResult
-		err := workflow.ExecuteActivity(ctx, "spray", artifact.Input{
+		err := workflow.ExecuteActivity(sprayCtx, "spray", artifact.Input{
 			Target:     input.Domain,
 			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"urls": webURLs,
 			}),
-		}).Get(ctx, &sprayResult)
+		}).Get(sprayCtx, &sprayResult)
 		if err == nil {
 			result.Spray = &sprayResult
 		}
 
 		// Stage 3: fingers fingerprint
+		fingersCtx := artifactActivityContext(ctx, "fingers", 0)
 		var fingersResult artifact.ActivityResult
-		err = workflow.ExecuteActivity(ctx, "fingers", artifact.Input{
+		err = workflow.ExecuteActivity(fingersCtx, "fingers", artifact.Input{
 			Target:     input.Domain,
 			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"mode": "http_match",
 				"urls": webURLs,
 			}),
-		}).Get(ctx, &fingersResult)
+		}).Get(fingersCtx, &fingersResult)
 		if err == nil {
 			result.Fingers = &fingersResult
 		}
 
 		// Stage 4: nuclei vuln scan
 		for _, url := range webURLs {
+			nucleiCtx := artifactActivityContext(ctx, "nuclei", 0)
 			var nucleiResult artifact.ActivityResult
-			err = workflow.ExecuteActivity(ctx, "nuclei", artifact.Input{
+			err = workflow.ExecuteActivity(nucleiCtx, "nuclei", artifact.Input{
 				Target:     input.Domain,
 				CampaignID: input.CampaignID,
 				Data: mustMarshal(map[string]interface{}{
 					"targets": []string{url},
 				}),
-			}).Get(ctx, &nucleiResult)
+			}).Get(nucleiCtx, &nucleiResult)
 			if err == nil && nucleiResult.Success {
 				result.Neutron = &nucleiResult
 			}

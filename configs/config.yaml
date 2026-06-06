@@ -7,6 +7,48 @@ temporal:
   port: 7233
   namespace: default
   task_queue: weave-task-queue
+  # Artifact activities run on dedicated Temporal task queues:
+  # weave-artifact-gogo, weave-artifact-spray, weave-artifact-nuclei, ...
+  workers:
+    control:
+      max_concurrent_workflow_tasks: 32
+      max_concurrent_activity_tasks: 32
+      max_concurrent_workflow_task_pollers: 4
+      max_concurrent_activity_task_pollers: 4
+      worker_stop_timeout: 30s
+    default_artifact:
+      max_concurrent_activity_tasks: 4
+      max_concurrent_activity_task_pollers: 2
+      worker_stop_timeout: 30s
+    artifacts:
+      gogo:
+        max_concurrent_activity_tasks: 4
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
+      spray:
+        max_concurrent_activity_tasks: 2
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
+      nuclei:
+        max_concurrent_activity_tasks: 3
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
+      neutron:
+        max_concurrent_activity_tasks: 2
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
+      zombie:
+        max_concurrent_activity_tasks: 1
+        max_concurrent_activity_task_pollers: 1
+        worker_stop_timeout: 30s
+      fingers:
+        max_concurrent_activity_tasks: 8
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
+      cdncheck:
+        max_concurrent_activity_tasks: 8
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
 
 postgres:
   host: localhost
@@ -43,9 +85,11 @@ knowledge:
 artifacts:
   gogo:
     threads: 100
+    capacity: 6000
     timeout: 300s
   spray:
     threads: 50
+    capacity: 300
     timeout: 120s
   fingers:
     timeout: 60s

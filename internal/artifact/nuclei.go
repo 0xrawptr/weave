@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	nuclei "github.com/projectdiscovery/nuclei/v3/lib"
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
@@ -98,6 +99,7 @@ func (n *NucleiArtifact) OutputSchema() OutputSchema {
 }
 
 func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, error) {
+	started := time.Now()
 	var nin NucleiInput
 	if err := json.Unmarshal(input.Data, &nin); err != nil {
 		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
@@ -130,6 +132,11 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		Tags: tags,
 		IDs:  ids,
 	}
+	recordArtifactHeartbeat(ctx, n.Name(), input.Target, "loading", started, map[string]interface{}{
+		"targets": len(targets),
+		"tags":    len(tags),
+		"ids":     len(ids),
+	})
 
 	ne, err := nuclei.NewNucleiEngineCtx(ctx,
 		nuclei.WithTemplateFilters(filters),
@@ -141,14 +148,19 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 	defer ne.Close()
 
 	ne.LoadTargets(targets, false)
+	recordArtifactHeartbeat(ctx, n.Name(), input.Target, "executing", started, map[string]interface{}{
+		"targets": len(targets),
+		"tags":    len(tags),
+		"ids":     len(ids),
+	})
 
 	var (
 		mu    sync.Mutex
 		items []NucleiResultItem
 	)
 	err = ne.ExecuteWithCallback(func(result *output.ResultEvent) {
+		var count int
 		mu.Lock()
-		defer mu.Unlock()
 		items = append(items, NucleiResultItem{
 			TemplateID:    result.TemplateID,
 			TemplatePath:  result.TemplatePath,
@@ -177,10 +189,24 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 			item.CVSSScore = result.Info.Classification.CVSSScore
 			item.EPSSScore = result.Info.Classification.EPSSScore
 		}
+		count = len(items)
+		mu.Unlock()
+		recordArtifactHeartbeat(ctx, n.Name(), input.Target, "finding", started, map[string]interface{}{
+			"findings":      count,
+			"last_template": result.TemplateID,
+			"last_target":   nucleiFirstNonEmpty(result.URL, result.Host, result.Matched),
+			"last_severity": result.Info.SeverityHolder.Severity.String(),
+		})
 	})
 	if err != nil {
 		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
+	recordArtifactHeartbeat(ctx, n.Name(), input.Target, "completed", started, map[string]interface{}{
+		"findings": len(items),
+		"targets":  len(targets),
+		"tags":     len(tags),
+		"ids":      len(ids),
+	})
 
 	data, _ := json.Marshal(NucleiOutput{Results: items, Total: len(items)})
 	return Output{

@@ -149,6 +149,23 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS artifact_stats (
+		id TEXT PRIMARY KEY,
+		campaign_id TEXT NOT NULL DEFAULT '',
+		workflow_id TEXT NOT NULL DEFAULT '',
+		artifact TEXT NOT NULL,
+		target TEXT NOT NULL DEFAULT '',
+		engine TEXT NOT NULL DEFAULT '',
+		task TEXT NOT NULL DEFAULT '',
+		targets BIGINT NOT NULL DEFAULT 0,
+		tasks BIGINT NOT NULL DEFAULT 0,
+		requests BIGINT NOT NULL DEFAULT 0,
+		results BIGINT NOT NULL DEFAULT 0,
+		errors BIGINT NOT NULL DEFAULT 0,
+		duration_ms BIGINT NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
 	CREATE TABLE IF NOT EXISTS raw_events (
 			id TEXT PRIMARY KEY,
 			campaign_id TEXT NOT NULL DEFAULT '',
@@ -207,6 +224,30 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		completed_at TIMESTAMPTZ
 	);
 
+	CREATE TABLE IF NOT EXISTS work_items (
+		id TEXT PRIMARY KEY,
+		campaign_id TEXT NOT NULL DEFAULT '',
+		batch_id TEXT NOT NULL DEFAULT '',
+		parent_id TEXT NOT NULL DEFAULT '',
+		type TEXT NOT NULL,
+		target TEXT NOT NULL,
+		artifact TEXT NOT NULL DEFAULT '',
+		queue TEXT NOT NULL DEFAULT '',
+		input JSONB,
+		priority INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'pending',
+		attempts INTEGER NOT NULL DEFAULT 0,
+		max_attempts INTEGER NOT NULL DEFAULT 1,
+		workflow_id TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW(),
+		heartbeat_at TIMESTAMPTZ,
+		lease_expires_at TIMESTAMPTZ,
+		started_at TIMESTAMPTZ,
+		completed_at TIMESTAMPTZ
+	);
+
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION DEFAULT 1.0;
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT '';
@@ -221,6 +262,8 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE action_records ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
+	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 	ALTER TABLE asset_campaigns ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 
 	CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
@@ -242,6 +285,10 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_raw_events_artifact ON raw_events(artifact);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_campaign ON raw_events(campaign_id);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_target ON raw_events(target_id);
+	CREATE INDEX IF NOT EXISTS idx_artifact_stats_campaign ON artifact_stats(campaign_id);
+	CREATE INDEX IF NOT EXISTS idx_artifact_stats_workflow ON artifact_stats(workflow_id);
+	CREATE INDEX IF NOT EXISTS idx_artifact_stats_artifact ON artifact_stats(artifact);
+	CREATE INDEX IF NOT EXISTS idx_artifact_stats_target ON artifact_stats(target);
 	CREATE INDEX IF NOT EXISTS idx_action_records_target ON action_records(target);
 	CREATE INDEX IF NOT EXISTS idx_action_records_campaign ON action_records(campaign_id);
 	CREATE INDEX IF NOT EXISTS idx_action_records_status ON action_records(status);
@@ -251,6 +298,13 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_batch_runs_type ON batch_runs(type);
 	CREATE INDEX IF NOT EXISTS idx_batch_chunks_batch ON batch_chunks(batch_id);
 	CREATE INDEX IF NOT EXISTS idx_batch_chunks_status ON batch_chunks(status);
+	CREATE INDEX IF NOT EXISTS idx_work_items_campaign ON work_items(campaign_id);
+	CREATE INDEX IF NOT EXISTS idx_work_items_batch ON work_items(batch_id);
+	CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status);
+	CREATE INDEX IF NOT EXISTS idx_work_items_type ON work_items(type);
+	CREATE INDEX IF NOT EXISTS idx_work_items_artifact ON work_items(artifact);
+	CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(queue);
+	CREATE INDEX IF NOT EXISTS idx_work_items_priority ON work_items(priority);
 	CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id);
 	CREATE INDEX IF NOT EXISTS idx_scans_workflow ON scans(workflow_id);
 	`
@@ -538,6 +592,64 @@ func (p *PostgresStore) InsertScanResult(ctx context.Context, sr *ScanResult) er
 	return err
 }
 
+func (p *PostgresStore) InsertArtifactStat(ctx context.Context, stat ArtifactStat) error {
+	if stat.ID == "" {
+		stat.ID = GenerateID("artifact_stat", stat.WorkflowID, stat.Artifact, stat.Target, stat.Engine, stat.Task, fmt.Sprintf("%d", time.Now().UnixNano()))
+	}
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO artifact_stats (id, campaign_id, workflow_id, artifact, target, engine, task, targets, tasks, requests, results, errors, duration_ms)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		 ON CONFLICT (id) DO NOTHING`,
+		stat.ID, stat.CampaignID, stat.WorkflowID, stat.Artifact, stat.Target, stat.Engine, stat.Task,
+		stat.Targets, stat.Tasks, stat.Requests, stat.Results, stat.Errors, stat.DurationMs)
+	return err
+}
+
+func (p *PostgresStore) QueryArtifactStats(ctx context.Context, campaignID, workflowID, artifactName, target string, limit, offset int) ([]ArtifactStat, error) {
+	query := `SELECT id, campaign_id, workflow_id, artifact, target, engine, task, targets, tasks, requests, results, errors, duration_ms, created_at
+		FROM artifact_stats WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	if workflowID != "" {
+		query += fmt.Sprintf(" AND workflow_id = $%d", argIdx)
+		args = append(args, workflowID)
+		argIdx++
+	}
+	if artifactName != "" {
+		query += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		args = append(args, artifactName)
+		argIdx++
+	}
+	if target != "" {
+		query += fmt.Sprintf(" AND target = $%d", argIdx)
+		args = append(args, target)
+		argIdx++
+	}
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []ArtifactStat
+	for rows.Next() {
+		var stat ArtifactStat
+		if err := rows.Scan(&stat.ID, &stat.CampaignID, &stat.WorkflowID, &stat.Artifact, &stat.Target, &stat.Engine, &stat.Task, &stat.Targets, &stat.Tasks, &stat.Requests, &stat.Results, &stat.Errors, &stat.DurationMs, &stat.CreatedAt); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+	return stats, rows.Err()
+}
+
 func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionRecord) (bool, error) {
 	if record.Status == "" {
 		record.Status = "running"
@@ -756,6 +868,533 @@ func (p *PostgresStore) QueryBatchChunks(ctx context.Context, batchID, status st
 		chunks = append(chunks, chunk)
 	}
 	return chunks, rows.Err()
+}
+
+func (p *PostgresStore) UpsertWorkItem(ctx context.Context, item WorkItem) error {
+	if item.Status == "" {
+		item.Status = WorkItemStatusPending
+	}
+	if !ValidWorkItemStatus(item.Status) {
+		return fmt.Errorf("invalid work item status: %s", item.Status)
+	}
+	if item.MaxAttempts <= 0 {
+		item.MaxAttempts = 1
+	}
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO work_items (id, campaign_id, batch_id, parent_id, type, target, artifact, queue, input, priority, status, attempts, max_attempts, workflow_id, error, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+		 ON CONFLICT (id) DO UPDATE SET
+			campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE work_items.campaign_id END,
+			batch_id = CASE WHEN EXCLUDED.batch_id <> '' THEN EXCLUDED.batch_id ELSE work_items.batch_id END,
+			parent_id = CASE WHEN EXCLUDED.parent_id <> '' THEN EXCLUDED.parent_id ELSE work_items.parent_id END,
+			type = EXCLUDED.type,
+			target = EXCLUDED.target,
+			artifact = EXCLUDED.artifact,
+			queue = EXCLUDED.queue,
+			input = CASE WHEN EXCLUDED.input IS NOT NULL THEN EXCLUDED.input ELSE work_items.input END,
+			priority = EXCLUDED.priority,
+			status = CASE
+				WHEN work_items.status IN ('running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
+				ELSE EXCLUDED.status
+			END,
+			attempts = CASE WHEN EXCLUDED.attempts > work_items.attempts THEN EXCLUDED.attempts ELSE work_items.attempts END,
+			max_attempts = EXCLUDED.max_attempts,
+			workflow_id = CASE WHEN EXCLUDED.workflow_id <> '' THEN EXCLUDED.workflow_id ELSE work_items.workflow_id END,
+			error = EXCLUDED.error,
+			updated_at = NOW()`,
+		item.ID, item.CampaignID, item.BatchID, item.ParentID, item.Type, item.Target, item.Artifact, item.Queue, item.Input, item.Priority,
+		item.Status, item.Attempts, item.MaxAttempts, item.WorkflowID, item.Error)
+	return err
+}
+
+func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaimRequest) (*WorkItem, error) {
+	if request.LeaseSeconds <= 0 {
+		request.LeaseSeconds = 24 * 60 * 60
+	}
+	query := `WITH candidate AS (
+		SELECT wi.id FROM work_items wi
+		WHERE wi.status = 'pending' AND wi.attempts < wi.max_attempts`
+	args := []interface{}{}
+	argIdx := 1
+	if request.CampaignID != "" {
+		query += fmt.Sprintf(" AND wi.campaign_id = $%d", argIdx)
+		args = append(args, request.CampaignID)
+		argIdx++
+	}
+	if request.BatchID != "" {
+		query += fmt.Sprintf(" AND wi.batch_id = $%d", argIdx)
+		args = append(args, request.BatchID)
+		argIdx++
+	}
+	if request.Type != "" {
+		query += fmt.Sprintf(" AND wi.type = $%d", argIdx)
+		args = append(args, request.Type)
+		argIdx++
+	}
+	if request.Artifact != "" {
+		query += fmt.Sprintf(" AND wi.artifact = $%d", argIdx)
+		args = append(args, request.Artifact)
+		argIdx++
+	}
+	if request.Queue != "" {
+		query += fmt.Sprintf(" AND wi.queue = $%d", argIdx)
+		args = append(args, request.Queue)
+		argIdx++
+	}
+	if request.Target != "" {
+		query += fmt.Sprintf(" AND wi.target = $%d", argIdx)
+		args = append(args, request.Target)
+		argIdx++
+	}
+	if request.MaxRunning > 0 {
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.queue = wi.queue) < $%d", argIdx)
+		args = append(args, request.MaxRunning)
+		argIdx++
+	}
+	if request.MaxRunningPerArtifact > 0 {
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.artifact = wi.artifact) < $%d", argIdx)
+		args = append(args, request.MaxRunningPerArtifact)
+		argIdx++
+	}
+	if request.MaxRunningPerCampaign > 0 {
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.campaign_id = wi.campaign_id) < $%d", argIdx)
+		args = append(args, request.MaxRunningPerCampaign)
+		argIdx++
+	}
+	if request.MaxRunningPerTarget > 0 {
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.target = wi.target) < $%d", argIdx)
+		args = append(args, request.MaxRunningPerTarget)
+		argIdx++
+	}
+	query += fmt.Sprintf(` ORDER BY wi.priority DESC, wi.created_at ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	)
+	UPDATE work_items SET
+		status = 'running',
+		attempts = attempts + 1,
+		workflow_id = $%d,
+		error = '',
+		heartbeat_at = NOW(),
+		lease_expires_at = NOW() + ($%d * INTERVAL '1 second'),
+		started_at = NOW(),
+		updated_at = NOW()
+	FROM candidate
+	WHERE work_items.id = candidate.id
+	RETURNING work_items.id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), priority, status, attempts, max_attempts, workflow_id, error,
+		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)`, argIdx, argIdx+1)
+	args = append(args, request.WorkflowID, request.LeaseSeconds)
+
+	var item WorkItem
+	err := p.pool.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Priority, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workflowID, errorMessage string, incrementAttempt bool) error {
+	if !ValidWorkItemStatus(status) {
+		return fmt.Errorf("invalid work item status: %s", status)
+	}
+
+	var current string
+	var attempts int
+	var maxAttempts int
+	err := p.pool.QueryRow(ctx, `SELECT status, attempts, max_attempts FROM work_items WHERE id = $1`, id).Scan(&current, &attempts, &maxAttempts)
+	if err != nil {
+		return err
+	}
+	if status == WorkItemStatusFailed && attempts >= maxAttempts {
+		status = WorkItemStatusDead
+		if errorMessage == "" {
+			errorMessage = "max attempts reached"
+		}
+	}
+	if !CanTransitionWorkItemStatus(current, status) {
+		return fmt.Errorf("invalid work item status transition: %s -> %s", current, status)
+	}
+
+	_, err = p.pool.Exec(ctx,
+		`UPDATE work_items SET
+			status = $2,
+			workflow_id = CASE WHEN $3 <> '' THEN $3 ELSE workflow_id END,
+			error = $4,
+			attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END,
+			started_at = CASE WHEN $2 = 'running' THEN NOW() ELSE started_at END,
+			heartbeat_at = CASE WHEN $2 = 'running' THEN NOW() ELSE heartbeat_at END,
+			lease_expires_at = CASE WHEN $2 IN ('completed', 'failed', 'retry_waiting', 'paused', 'cancelled', 'skipped', 'dead') THEN NULL ELSE lease_expires_at END,
+			completed_at = CASE WHEN $2 IN ('completed', 'cancelled', 'skipped', 'dead') THEN NOW() ELSE completed_at END,
+			updated_at = NOW()
+		 WHERE id = $1`,
+		id, status, workflowID, errorMessage, incrementAttempt)
+	return err
+}
+
+func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemHeartbeatRequest) error {
+	if request.ID == "" {
+		return fmt.Errorf("work item id is required")
+	}
+	if request.LeaseSeconds <= 0 {
+		request.LeaseSeconds = 24 * 60 * 60
+	}
+	query := `UPDATE work_items SET
+		heartbeat_at = NOW(),
+		lease_expires_at = NOW() + ($2 * INTERVAL '1 second'),
+		updated_at = NOW()
+		WHERE id = $1 AND status = 'running'`
+	args := []interface{}{request.ID, request.LeaseSeconds}
+	if request.WorkflowID != "" {
+		query += ` AND workflow_id = $3`
+		args = append(args, request.WorkflowID)
+	}
+	_, err := p.pool.Exec(ctx, query, args...)
+	return err
+}
+
+func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID, status, itemType, artifactName, target string, limit, offset int) ([]WorkItem, error) {
+	query := `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), priority, status, attempts, max_attempts, workflow_id, error,
+		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
+		FROM work_items WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	if batchID != "" {
+		query += fmt.Sprintf(" AND batch_id = $%d", argIdx)
+		args = append(args, batchID)
+		argIdx++
+	}
+	if status != "" {
+		query += fmt.Sprintf(" AND status = $%d", argIdx)
+		args = append(args, status)
+		argIdx++
+	}
+	if itemType != "" {
+		query += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, itemType)
+		argIdx++
+	}
+	if artifactName != "" {
+		query += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		args = append(args, artifactName)
+		argIdx++
+	}
+	if target != "" {
+		query += fmt.Sprintf(" AND target = $%d", argIdx)
+		args = append(args, target)
+		argIdx++
+	}
+	query += fmt.Sprintf(" ORDER BY priority DESC, updated_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []WorkItem
+	for rows.Next() {
+		var item WorkItem
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Priority, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (p *PostgresStore) CountWorkItemsByStatus(ctx context.Context, campaignID, batchID, itemType, artifactName string) (map[string]int, error) {
+	query := `SELECT status, COUNT(*) FROM work_items WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	if batchID != "" {
+		query += fmt.Sprintf(" AND batch_id = $%d", argIdx)
+		args = append(args, batchID)
+		argIdx++
+	}
+	if itemType != "" {
+		query += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, itemType)
+		argIdx++
+	}
+	if artifactName != "" {
+		query += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		args = append(args, artifactName)
+	}
+	query += ` GROUP BY status`
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+	return counts, rows.Err()
+}
+
+func (p *PostgresStore) RetryWorkItems(ctx context.Context, request WorkItemRetryRequest) (WorkItemBulkResult, error) {
+	fromStatuses := request.FromStatuses
+	if len(fromStatuses) == 0 {
+		fromStatuses = []string{WorkItemStatusFailed, WorkItemStatusRetryWaiting}
+	}
+	for _, status := range fromStatuses {
+		if !ValidWorkItemStatus(status) {
+			return WorkItemBulkResult{}, fmt.Errorf("invalid work item status: %s", status)
+		}
+	}
+
+	query := `UPDATE work_items SET
+		status = 'pending',
+		error = '',
+		workflow_id = '',
+		attempts = CASE WHEN $1 THEN 0 ELSE attempts END,
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		started_at = NULL,
+		completed_at = NULL,
+		updated_at = NOW()
+		WHERE status = ANY($2)`
+	args := []interface{}{request.ResetAttempts, fromStatuses}
+	argIdx := 3
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, request.Filter, false)
+	query += ` RETURNING id`
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	defer rows.Close()
+
+	updated := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return WorkItemBulkResult{}, err
+		}
+		updated++
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+}
+
+func (p *PostgresStore) ResumeWorkItems(ctx context.Context, filter WorkItemFilter) (WorkItemBulkResult, error) {
+	filter.Status = WorkItemStatusPaused
+	query := `UPDATE work_items SET
+		status = 'pending',
+		error = '',
+		workflow_id = '',
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		started_at = NULL,
+		completed_at = NULL,
+		updated_at = NOW()
+		WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, true)
+	query += ` RETURNING id`
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	defer rows.Close()
+
+	updated := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return WorkItemBulkResult{}, err
+		}
+		updated++
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+}
+
+func (p *PostgresStore) PauseWorkItems(ctx context.Context, filter WorkItemFilter) (WorkItemBulkResult, error) {
+	query := `UPDATE work_items SET
+		status = 'paused',
+		error = '',
+		workflow_id = '',
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		started_at = NULL,
+		completed_at = NULL,
+		updated_at = NOW()
+		WHERE status IN ('pending', 'retry_waiting')`
+	args := []interface{}{}
+	argIdx := 1
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
+	query += ` RETURNING id`
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	defer rows.Close()
+
+	updated := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return WorkItemBulkResult{}, err
+		}
+		updated++
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+}
+
+func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkItemFilter, limit int) (WorkItemBulkResult, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	query := `WITH stale AS (
+		SELECT id FROM work_items
+		WHERE status = 'running'
+		  AND lease_expires_at IS NOT NULL
+		  AND lease_expires_at < NOW()`
+	args := []interface{}{}
+	argIdx := 1
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
+	query += fmt.Sprintf(` ORDER BY lease_expires_at ASC LIMIT $%d
+	)
+	UPDATE work_items SET
+		status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'retry_waiting' END,
+		error = CASE WHEN attempts >= max_attempts THEN 'stale running item exceeded max attempts' ELSE 'stale running item recovered' END,
+		workflow_id = '',
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		completed_at = CASE WHEN attempts >= max_attempts THEN NOW() ELSE completed_at END,
+		updated_at = NOW()
+	FROM stale
+	WHERE work_items.id = stale.id
+	RETURNING work_items.id`, argIdx)
+	args = append(args, limit)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	defer rows.Close()
+
+	updated := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return WorkItemBulkResult{}, err
+		}
+		updated++
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+}
+
+func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {
+	if minAgeSeconds < 0 {
+		minAgeSeconds = 0
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	query := `WITH retryable AS (
+		SELECT id FROM work_items
+		WHERE status = 'retry_waiting'
+		  AND attempts < max_attempts`
+	args := []interface{}{}
+	argIdx := 1
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
+	query += fmt.Sprintf(` AND updated_at <= NOW() - ($%d * INTERVAL '1 second')
+		ORDER BY priority DESC, updated_at ASC
+		LIMIT $%d
+	)
+	UPDATE work_items SET
+		status = 'pending',
+		workflow_id = '',
+		error = '',
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		updated_at = NOW()
+	FROM retryable
+	WHERE work_items.id = retryable.id
+	RETURNING work_items.id`, argIdx, argIdx+1)
+	args = append(args, minAgeSeconds, limit)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	defer rows.Close()
+
+	updated := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return WorkItemBulkResult{}, err
+		}
+		updated++
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+}
+
+func appendWorkItemFilterSQL(query string, args []interface{}, argIdx int, filter WorkItemFilter, includeStatus bool) (string, []interface{}, int) {
+	if filter.ID != "" {
+		query += fmt.Sprintf(" AND id = $%d", argIdx)
+		args = append(args, filter.ID)
+		argIdx++
+	}
+	if filter.CampaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, filter.CampaignID)
+		argIdx++
+	}
+	if filter.BatchID != "" {
+		query += fmt.Sprintf(" AND batch_id = $%d", argIdx)
+		args = append(args, filter.BatchID)
+		argIdx++
+	}
+	if includeStatus && filter.Status != "" {
+		query += fmt.Sprintf(" AND status = $%d", argIdx)
+		args = append(args, filter.Status)
+		argIdx++
+	}
+	if filter.Type != "" {
+		query += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, filter.Type)
+		argIdx++
+	}
+	if filter.Artifact != "" {
+		query += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		args = append(args, filter.Artifact)
+		argIdx++
+	}
+	if filter.Target != "" {
+		query += fmt.Sprintf(" AND target = $%d", argIdx)
+		args = append(args, filter.Target)
+		argIdx++
+	}
+	return query, args, argIdx
 }
 
 func (p *PostgresStore) QueryAssets(ctx context.Context, targetID string, assetType string, limit, offset int) ([]Asset, error) {

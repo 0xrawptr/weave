@@ -10,7 +10,11 @@ import (
 	"github.com/0xrawptr/weave/internal/etl"
 	"github.com/0xrawptr/weave/internal/knowledge"
 	sdkclient "github.com/chainreactors/sdk/client"
+	sdkgogo "github.com/chainreactors/sdk/gogo"
+	sdkneutron "github.com/chainreactors/sdk/neutron"
 	"github.com/chainreactors/sdk/pkg/provider"
+	sdkspray "github.com/chainreactors/sdk/spray"
+	sdkzombie "github.com/chainreactors/sdk/zombie"
 )
 
 type Pipelines struct {
@@ -36,13 +40,14 @@ type App struct {
 func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	repo := initRepository(ctx, cfg)
 
-	sdkCli := sdkclient.New(sdkclient.WithProvider(provider.NewEmbedProvider()), sdkclient.WithIndex(nil))
+	sdkCli := buildSDKClient(cfg)
 	reg, err := artifact.NewRegistryFromClient(sdkCli)
 	if err != nil {
 		sdkCli.Close()
 		repo.Close()
 		return nil, err
 	}
+	configureArtifactDefaults(reg, cfg)
 
 	loader := etl.MakeLoader(repo)
 	kb, knowledgeEnricher := initKnowledge(cfg)
@@ -67,6 +72,62 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}
 	runtime.WireResolvers()
 	return runtime, nil
+}
+
+func configureArtifactDefaults(reg *artifact.Registry, cfg *config.Config) {
+	if reg == nil || cfg == nil {
+		return
+	}
+	if cfg.Artifacts.Gogo.Threads > 0 {
+		if a, err := reg.Get("gogo"); err == nil {
+			if gogoArtifact, ok := a.(*artifact.GogoArtifact); ok {
+				gogoArtifact.SetThreads(cfg.Artifacts.Gogo.Threads)
+			}
+		}
+	}
+	if cfg.Artifacts.Spray.Threads > 0 {
+		if a, err := reg.Get("spray"); err == nil {
+			if sprayArtifact, ok := a.(*artifact.SprayArtifact); ok {
+				sprayArtifact.SetDefaultThreads(cfg.Artifacts.Spray.Threads)
+			}
+		}
+	}
+}
+
+func buildSDKClient(cfg *config.Config) *sdkclient.Client {
+	opts := []sdkclient.Option{
+		sdkclient.WithProvider(provider.NewEmbedProvider()),
+		sdkclient.WithIndex(nil),
+	}
+	if cfg == nil {
+		return sdkclient.New(opts...)
+	}
+
+	gogoCfg := sdkgogo.NewConfig()
+	if cfg.Artifacts.Gogo.Capacity > 0 {
+		gogoCfg.WithCapacity(cfg.Artifacts.Gogo.Capacity)
+		opts = append(opts, sdkclient.WithGogoConfig(gogoCfg))
+	}
+
+	sprayCfg := sdkspray.NewConfig()
+	if cfg.Artifacts.Spray.Capacity > 0 {
+		sprayCfg.WithCapacity(cfg.Artifacts.Spray.Capacity)
+		opts = append(opts, sdkclient.WithSprayConfig(sprayCfg))
+	}
+
+	neutronCfg := sdkneutron.NewConfig()
+	if cfg.Artifacts.Neutron.Capacity > 0 {
+		neutronCfg.Capacity = cfg.Artifacts.Neutron.Capacity
+		opts = append(opts, sdkclient.WithNeutronConfig(neutronCfg))
+	}
+
+	zombieCfg := sdkzombie.NewConfig()
+	if cfg.Artifacts.Zombie.Capacity > 0 {
+		zombieCfg.WithCapacity(cfg.Artifacts.Zombie.Capacity)
+		opts = append(opts, sdkclient.WithZombieConfig(zombieCfg))
+	}
+
+	return sdkclient.New(opts...)
 }
 
 func (a *App) WireResolvers() {

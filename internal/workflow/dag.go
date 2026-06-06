@@ -13,11 +13,12 @@ import (
 )
 
 type DAGWorkflowInput struct {
-	Target            string    `json:"target"`
-	CampaignID        string    `json:"campaign_id,omitempty"`
-	Nodes             []DAGNode `json:"nodes"`
-	MaxConcurrency    int       `json:"max_concurrency,omitempty"`
-	ContinueOnFailure bool      `json:"continue_on_failure,omitempty"`
+	Target                 string    `json:"target"`
+	CampaignID             string    `json:"campaign_id,omitempty"`
+	Nodes                  []DAGNode `json:"nodes"`
+	MaxConcurrency         int       `json:"max_concurrency,omitempty"`
+	ContinueOnFailure      bool      `json:"continue_on_failure,omitempty"`
+	ActivityTimeoutSeconds int       `json:"activity_timeout_seconds,omitempty"`
 }
 
 type DAGNode struct {
@@ -88,12 +89,6 @@ func DAGWorkflow(ctx workflow.Context, input DAGWorkflowInput) (*DAGWorkflowResu
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
-	actionCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 2 * time.Hour,
-		HeartbeatTimeout:    30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
-	})
-
 	status := make(map[string]string, len(nodes))
 	byID := make(map[string]DAGNode, len(nodes))
 	for _, node := range nodes {
@@ -189,6 +184,7 @@ func DAGWorkflow(ctx workflow.Context, input DAGWorkflowInput) (*DAGWorkflowResu
 				continue
 			}
 
+			actionCtx := artifactActivityContext(ctx, node.Artifact, input.ActivityTimeoutSeconds)
 			future := workflow.ExecuteActivity(actionCtx, node.Artifact, artifact.Input{
 				Target:     node.Target,
 				CampaignID: node.CampaignID,
@@ -204,6 +200,7 @@ func DAGWorkflow(ctx workflow.Context, input DAGWorkflowInput) (*DAGWorkflowResu
 				Target:   item.node.Target,
 			}
 			var activityResult artifact.ActivityResult
+			actionCtx := artifactActivityContext(ctx, item.node.Artifact, input.ActivityTimeoutSeconds)
 			err := item.future.Get(actionCtx, &activityResult)
 			success := err == nil && activityResult.Success
 			if err != nil {

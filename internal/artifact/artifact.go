@@ -20,6 +20,19 @@ type Output struct {
 	Error    string          `json:"error,omitempty"`
 	Data     json.RawMessage `json:"data,omitempty"`      // lightweight, for workflow
 	FullData json.RawMessage `json:"full_data,omitempty"` // complete, for persist
+	Stats    []ExecutionStat `json:"stats,omitempty"`
+}
+
+// ExecutionStat is a normalized SDK execution counter emitted by artifacts.
+type ExecutionStat struct {
+	Engine     string `json:"engine"`
+	Task       string `json:"task"`
+	Targets    int64  `json:"targets,omitempty"`
+	Tasks      int64  `json:"tasks,omitempty"`
+	Requests   int64  `json:"requests,omitempty"`
+	Results    int64  `json:"results,omitempty"`
+	Errors     int64  `json:"errors,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
 }
 
 // InputSchema describes the expected input format for an artifact.

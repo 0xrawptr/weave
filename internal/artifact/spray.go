@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	sdkspray "github.com/chainreactors/sdk/spray"
@@ -14,7 +15,8 @@ import (
 
 // SprayArtifact wraps the SDK spray engine for HTTP path fuzzing and URL discovery.
 type SprayArtifact struct {
-	engine *sdkspray.SprayEngine
+	engine         *sdkspray.SprayEngine
+	defaultThreads int
 }
 
 // SprayInput defines the input for spray operations.
@@ -23,6 +25,30 @@ type SprayInput struct {
 	BaseURLs     []string `json:"base_urls,omitempty"`     // for brute mode
 	Wordlist     []string `json:"wordlist,omitempty"`      // for brute mode
 	WordlistMode string   `json:"wordlist_mode,omitempty"` // "full" expands embedded spray dictionaries
+
+	Threads        int      `json:"threads,omitempty"`
+	Timeout        int      `json:"timeout,omitempty"`
+	Method         string   `json:"method,omitempty"`
+	Headers        []string `json:"headers,omitempty"`
+	Host           string   `json:"host,omitempty"`
+	Mode           string   `json:"mode,omitempty"` // path, host, param
+	Filter         string   `json:"filter,omitempty"`
+	Match          string   `json:"match,omitempty"`
+	Proxies        []string `json:"proxies,omitempty"`
+	Advance        bool     `json:"advance,omitempty"`
+	ActivePlugin   bool     `json:"active_plugin,omitempty"`
+	ReconPlugin    bool     `json:"recon_plugin,omitempty"`
+	BakPlugin      bool     `json:"bak_plugin,omitempty"`
+	FuzzuliPlugin  bool     `json:"fuzzuli_plugin,omitempty"`
+	CommonPlugin   bool     `json:"common_plugin,omitempty"`
+	CrawlPlugin    bool     `json:"crawl_plugin,omitempty"`
+	CrawlDepth     int      `json:"crawl_depth,omitempty"`
+	Finger         bool     `json:"finger,omitempty"`
+	Extracts       []string `json:"extracts,omitempty"`
+	RecursiveDepth int      `json:"recursive_depth,omitempty"`
+	Dictionaries   []string `json:"dictionaries,omitempty"`
+	Rules          []string `json:"rules,omitempty"`
+	Word           string   `json:"word,omitempty"`
 }
 
 // SprayOutput contains the spray results.
@@ -70,6 +96,12 @@ func NewSprayArtifactFromEngine(engine *sdkspray.SprayEngine) *SprayArtifact {
 	return &SprayArtifact{engine: engine}
 }
 
+func (s *SprayArtifact) SetDefaultThreads(threads int) {
+	if threads > 0 {
+		s.defaultThreads = threads
+	}
+}
+
 func (s *SprayArtifact) Name() string { return "spray" }
 
 func (s *SprayArtifact) Descriptor() Descriptor {
@@ -91,6 +123,29 @@ func (s *SprayArtifact) InputSchema() InputSchema {
 			{Name: "base_urls", Type: "[]string", Required: false, Description: "Base URLs for brute force"},
 			{Name: "wordlist", Type: "[]string", Required: false, Description: "Wordlist for path brute force"},
 			{Name: "wordlist_mode", Type: "string", Required: false, Description: "Wordlist mode, e.g. full"},
+			{Name: "threads", Type: "int", Required: false, Description: "Worker threads"},
+			{Name: "timeout", Type: "int", Required: false, Description: "HTTP timeout in seconds"},
+			{Name: "method", Type: "string", Required: false, Description: "HTTP method"},
+			{Name: "headers", Type: "[]string", Required: false, Description: "Custom headers"},
+			{Name: "host", Type: "string", Required: false, Description: "Custom Host header"},
+			{Name: "mode", Type: "string", Required: false, Description: "Spray mode: path, host, param"},
+			{Name: "filter", Type: "string", Required: false, Description: "Filter expression"},
+			{Name: "match", Type: "string", Required: false, Description: "Match expression"},
+			{Name: "proxies", Type: "[]string", Required: false, Description: "Execution proxy chain"},
+			{Name: "advance", Type: "bool", Required: false, Description: "Enable all plugins"},
+			{Name: "active_plugin", Type: "bool", Required: false, Description: "Enable active fingerprint path plugin"},
+			{Name: "recon_plugin", Type: "bool", Required: false, Description: "Enable recon extractors"},
+			{Name: "bak_plugin", Type: "bool", Required: false, Description: "Enable backup-file discovery"},
+			{Name: "fuzzuli_plugin", Type: "bool", Required: false, Description: "Enable fuzzuli plugin"},
+			{Name: "common_plugin", Type: "bool", Required: false, Description: "Enable common-file discovery"},
+			{Name: "crawl_plugin", Type: "bool", Required: false, Description: "Enable crawler plugin"},
+			{Name: "crawl_depth", Type: "int", Required: false, Description: "Crawler depth"},
+			{Name: "finger", Type: "bool", Required: false, Description: "Enable active fingerprinting"},
+			{Name: "extracts", Type: "[]string", Required: false, Description: "Extractor groups"},
+			{Name: "recursive_depth", Type: "int", Required: false, Description: "Recursive depth"},
+			{Name: "dictionaries", Type: "[]string", Required: false, Description: "Dictionary names"},
+			{Name: "rules", Type: "[]string", Required: false, Description: "Rule names"},
+			{Name: "word", Type: "string", Required: false, Description: "Single fuzz word"},
 		},
 	}
 }
@@ -110,7 +165,14 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 		return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 
-	sprayCtx := sdkspray.NewContext().WithContext(ctx)
+	started := time.Now()
+	collector := newStatCollector(func(latest ExecutionStat, count int) {
+		recordArtifactHeartbeat(ctx, s.Name(), input.Target, "sdk_stats", started, statHeartbeatFields(latest, count))
+	})
+	if sprayIn.Threads <= 0 {
+		sprayIn.Threads = s.defaultThreads
+	}
+	sprayCtx := configureSprayContext(sdkspray.NewContext().WithContext(ctx).SetStatsHandler(collector.Handler()), sprayIn)
 
 	var items []SprayResultItem
 
@@ -122,6 +184,11 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 	}
 
 	if len(sprayIn.BaseURLs) > 0 && len(sprayIn.Wordlist) > 0 {
+		recordArtifactHeartbeat(ctx, s.Name(), input.Target, "brute", started, map[string]interface{}{
+			"base_urls": len(sprayIn.BaseURLs),
+			"wordlist":  len(sprayIn.Wordlist),
+			"threads":   sprayIn.Threads,
+		})
 		results, err := s.engine.BruteMany(sprayCtx, sprayIn.BaseURLs, sprayIn.Wordlist)
 		if err != nil {
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
@@ -130,6 +197,10 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 			items = append(items, sprayResultItem(r))
 		}
 	} else if len(sprayIn.URLs) > 0 {
+		recordArtifactHeartbeat(ctx, s.Name(), input.Target, "check", started, map[string]interface{}{
+			"urls":    len(sprayIn.URLs),
+			"threads": sprayIn.Threads,
+		})
 		results, err := s.engine.Check(sprayCtx, sprayIn.URLs)
 		if err != nil {
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
@@ -140,6 +211,9 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 	} else {
 		return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: "no valid input: provide urls or base_urls+wordlist"}, nil
 	}
+	recordArtifactHeartbeat(ctx, s.Name(), input.Target, "completed", started, map[string]interface{}{
+		"results": len(items),
+	})
 
 	fullData, _ := json.Marshal(SprayOutput{Results: items, Total: len(items)})
 	summaryData, _ := json.Marshal(spraySummary(items))
@@ -149,6 +223,7 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 		Success:  true,
 		Data:     summaryData,
 		FullData: fullData,
+		Stats:    collector.Stats(),
 	}, nil
 }
 
@@ -157,6 +232,10 @@ func (s *SprayArtifact) Close() error {
 }
 
 func fullSprayWordlist() []string {
+	return FullSprayWordlist()
+}
+
+func FullSprayWordlist() []string {
 	seen := make(map[string]bool)
 	var words []string
 	for _, dict := range spraypkg.Dicts {
@@ -170,6 +249,79 @@ func fullSprayWordlist() []string {
 	}
 	sort.Strings(words)
 	return words
+}
+
+func configureSprayContext(sprayCtx *sdkspray.Context, input SprayInput) *sdkspray.Context {
+	if input.Threads > 0 {
+		sprayCtx.SetThreads(input.Threads)
+	}
+	if input.Timeout > 0 {
+		sprayCtx.SetTimeout(input.Timeout)
+	}
+	if input.Method != "" {
+		sprayCtx.SetMethod(input.Method)
+	}
+	if len(input.Headers) > 0 {
+		sprayCtx.SetHeaders(input.Headers)
+	}
+	if input.Host != "" {
+		sprayCtx.SetHost(input.Host)
+	}
+	if input.Mode != "" {
+		sprayCtx.SetMod(input.Mode)
+	}
+	if input.Filter != "" {
+		sprayCtx.SetFilter(input.Filter)
+	}
+	if input.Match != "" {
+		sprayCtx.SetMatch(input.Match)
+	}
+	if len(input.Proxies) > 0 {
+		sprayCtx.SetProxy(input.Proxies...)
+	}
+	if input.Advance {
+		sprayCtx.SetAdvance(true)
+	}
+	if input.ActivePlugin {
+		sprayCtx.SetActivePlugin(true)
+	}
+	if input.ReconPlugin {
+		sprayCtx.SetReconPlugin(true)
+	}
+	if input.BakPlugin {
+		sprayCtx.SetBakPlugin(true)
+	}
+	if input.FuzzuliPlugin {
+		sprayCtx.SetFuzzuliPlugin(true)
+	}
+	if input.CommonPlugin {
+		sprayCtx.SetCommonPlugin(true)
+	}
+	if input.CrawlPlugin {
+		sprayCtx.SetCrawlPlugin(true)
+	}
+	if input.CrawlDepth > 0 {
+		sprayCtx.SetCrawlDepth(input.CrawlDepth)
+	}
+	if input.Finger {
+		sprayCtx.SetFinger(true)
+	}
+	if len(input.Extracts) > 0 {
+		sprayCtx.SetExtracts(input.Extracts)
+	}
+	if input.RecursiveDepth > 0 {
+		sprayCtx.SetRecursiveDepth(input.RecursiveDepth)
+	}
+	if len(input.Dictionaries) > 0 {
+		sprayCtx.SetDictionaries(input.Dictionaries)
+	}
+	if len(input.Rules) > 0 {
+		sprayCtx.SetRules(input.Rules)
+	}
+	if input.Word != "" {
+		sprayCtx.SetWord(input.Word)
+	}
+	return sprayCtx
 }
 
 func spraySummary(items []SprayResultItem) SpraySummary {

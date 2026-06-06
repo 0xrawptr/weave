@@ -8,11 +8,11 @@ import (
 	sdkgogo "github.com/chainreactors/sdk/gogo"
 	"github.com/chainreactors/sdk/pkg/types"
 	"github.com/chainreactors/utils/iutils"
-	"go.temporal.io/sdk/activity"
 )
 
 type GogoArtifact struct {
 	engine        *sdkgogo.GogoEngine
+	threads       int
 	resultHandler func(ctx context.Context, target string, result *types.GOGOResult) // streaming persist
 }
 
@@ -36,11 +36,17 @@ func NewGogoArtifact(cfg *sdkgogo.Config) (*GogoArtifact, error) {
 	if err := engine.Init(); err != nil {
 		return nil, err
 	}
-	return &GogoArtifact{engine: engine}, nil
+	return &GogoArtifact{engine: engine, threads: gogoThreads()}, nil
 }
 
 func NewGogoArtifactFromEngine(engine *sdkgogo.GogoEngine) *GogoArtifact {
-	return &GogoArtifact{engine: engine}
+	return &GogoArtifact{engine: engine, threads: gogoThreads()}
+}
+
+func (g *GogoArtifact) SetThreads(threads int) {
+	if threads > 0 {
+		g.threads = threads
+	}
 }
 
 // SetResultHandler injects a per-result callback for streaming persist.
@@ -86,7 +92,11 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 
-	gogoCtx := sdkgogo.NewContext().WithContext(ctx).SetThreads(gogoThreads())
+	started := time.Now()
+	collector := newStatCollector(func(latest ExecutionStat, count int) {
+		recordArtifactHeartbeat(ctx, g.Name(), input.Target, "sdk_stats", started, statHeartbeatFields(latest, count))
+	})
+	gogoCtx := sdkgogo.NewContext().WithContext(ctx).SetThreads(g.threads).SetStatsHandler(collector.Handler())
 	wf := &types.Workflow{IP: gogoIn.IP, Ports: gogoIn.Ports}
 
 	resultCh, err := g.engine.WorkflowStream(gogoCtx, wf)
@@ -98,7 +108,6 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 		count    int
 		webURLs  []string
 		latestIP string
-		started  = time.Now()
 	)
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
@@ -113,6 +122,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 					Target:   input.Target,
 					Success:  true,
 					Data:     summaryData,
+					Stats:    collector.Stats(),
 				}, nil
 			}
 			if result != nil {
@@ -131,12 +141,17 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 				"elapsed_sec": int(time.Since(started).Seconds()),
 				"latest":      latestIP,
 			}
+			if latest, statCount, ok := collector.Latest(); ok {
+				for k, v := range statHeartbeatFields(latest, statCount) {
+					h[k] = v
+				}
+			}
 			if gogoIn.ChunkTotal > 0 {
 				h["chunk"] = gogoIn.IP
 				h["chunk_idx"] = gogoIn.ChunkIdx
 				h["chunk_total"] = gogoIn.ChunkTotal
 			}
-			activity.RecordHeartbeat(ctx, h)
+			recordArtifactHeartbeat(ctx, g.Name(), input.Target, "streaming", started, h)
 		case <-ctx.Done():
 			return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: ctx.Err().Error()}, nil
 		}

@@ -1,18 +1,16 @@
 package workflow
 
 import (
-	"time"
-
 	"github.com/0xrawptr/weave/internal/artifact"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
 // PortScanInput is a gogo-only scan without vulnerability detection.
 type PortScanInput struct {
-	IP         string `json:"ip"`
-	CampaignID string `json:"campaign_id,omitempty"`
-	Ports      string `json:"ports"`
+	IP                     string `json:"ip"`
+	CampaignID             string `json:"campaign_id,omitempty"`
+	Ports                  string `json:"ports"`
+	ActivityTimeoutSeconds int    `json:"activity_timeout_seconds,omitempty"`
 }
 
 // PortScanResult contains only the gogo scan results.
@@ -33,13 +31,7 @@ type PortScanChunkResult struct {
 
 // PortScanWorkflow runs a gogo port scan only (no fingers, no neutron).
 func PortScanWorkflow(ctx workflow.Context, input PortScanInput) (*PortScanResult, error) {
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 4 * time.Hour,
-		HeartbeatTimeout:    30 * time.Second,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: 1, // no retry for long-running scans
-		},
-	})
+	ctx = artifactActivityContext(ctx, "gogo", input.ActivityTimeoutSeconds)
 
 	if input.Ports == "" {
 		input.Ports = "top1000"

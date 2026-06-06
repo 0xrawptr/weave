@@ -4,6 +4,18 @@ import (
 	"time"
 )
 
+const (
+	WorkItemStatusPending      = "pending"
+	WorkItemStatusRunning      = "running"
+	WorkItemStatusCompleted    = "completed"
+	WorkItemStatusFailed       = "failed"
+	WorkItemStatusRetryWaiting = "retry_waiting"
+	WorkItemStatusPaused       = "paused"
+	WorkItemStatusCancelled    = "cancelled"
+	WorkItemStatusSkipped      = "skipped"
+	WorkItemStatusDead         = "dead"
+)
+
 // Target represents a scan target.
 type Target struct {
 	ID        string    `json:"id"`
@@ -92,6 +104,24 @@ type ScanResult struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// ArtifactStat records engine-neutral execution counters emitted by SDK artifacts.
+type ArtifactStat struct {
+	ID         string    `json:"id"`
+	CampaignID string    `json:"campaign_id,omitempty"`
+	WorkflowID string    `json:"workflow_id,omitempty"`
+	Artifact   string    `json:"artifact"`
+	Target     string    `json:"target"`
+	Engine     string    `json:"engine"`
+	Task       string    `json:"task"`
+	Targets    int64     `json:"targets,omitempty"`
+	Tasks      int64     `json:"tasks,omitempty"`
+	Requests   int64     `json:"requests,omitempty"`
+	Results    int64     `json:"results,omitempty"`
+	Errors     int64     `json:"errors,omitempty"`
+	DurationMs int64     `json:"duration_ms,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // ActionRecord tracks planner/manual action execution across workflows.
 type ActionRecord struct {
 	ID          string    `json:"id"`
@@ -134,12 +164,79 @@ type BatchChunk struct {
 	Target      string    `json:"target"`
 	Chunk       string    `json:"chunk"`
 	WorkflowID  string    `json:"workflow_id"`
-	Status      string    `json:"status"` // pending, running, completed, failed
+	Status      string    `json:"status"` // pending, running, planning, completed, partial, failed
 	Error       string    `json:"error,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`
+}
+
+// WorkItem is the durable scheduling unit for large ASM campaigns.
+type WorkItem struct {
+	ID             string    `json:"id"`
+	CampaignID     string    `json:"campaign_id,omitempty"`
+	BatchID        string    `json:"batch_id,omitempty"`
+	ParentID       string    `json:"parent_id,omitempty"`
+	Type           string    `json:"type"` // portscan_chunk, planned_dag_followup, spray_shard, nuclei_group
+	Target         string    `json:"target"`
+	Artifact       string    `json:"artifact"`
+	Queue          string    `json:"queue,omitempty"`
+	Input          []byte    `json:"input,omitempty"`
+	Priority       int       `json:"priority"`
+	Status         string    `json:"status"` // pending, running, completed, failed, retry_waiting, paused, cancelled, skipped, dead
+	Attempts       int       `json:"attempts"`
+	MaxAttempts    int       `json:"max_attempts"`
+	WorkflowID     string    `json:"workflow_id,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	HeartbeatAt    time.Time `json:"heartbeat_at"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	StartedAt      time.Time `json:"started_at"`
+	CompletedAt    time.Time `json:"completed_at"`
+}
+
+type WorkItemClaimRequest struct {
+	CampaignID            string `json:"campaign_id,omitempty"`
+	BatchID               string `json:"batch_id,omitempty"`
+	Type                  string `json:"type,omitempty"`
+	Artifact              string `json:"artifact,omitempty"`
+	Queue                 string `json:"queue,omitempty"`
+	Target                string `json:"target,omitempty"`
+	WorkflowID            string `json:"workflow_id,omitempty"`
+	LeaseSeconds          int    `json:"lease_seconds,omitempty"`
+	MaxRunning            int    `json:"max_running,omitempty"`
+	MaxRunningPerArtifact int    `json:"max_running_per_artifact,omitempty"`
+	MaxRunningPerCampaign int    `json:"max_running_per_campaign,omitempty"`
+	MaxRunningPerTarget   int    `json:"max_running_per_target,omitempty"`
+}
+
+type WorkItemHeartbeatRequest struct {
+	ID           string `json:"id"`
+	WorkflowID   string `json:"workflow_id,omitempty"`
+	LeaseSeconds int    `json:"lease_seconds,omitempty"`
+}
+
+type WorkItemFilter struct {
+	CampaignID string `json:"campaign_id,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Artifact   string `json:"artifact,omitempty"`
+	Target     string `json:"target,omitempty"`
+	ID         string `json:"id,omitempty"`
+}
+
+type WorkItemRetryRequest struct {
+	Filter        WorkItemFilter `json:"filter"`
+	FromStatuses  []string       `json:"from_statuses,omitempty"`
+	ResetAttempts bool           `json:"reset_attempts,omitempty"`
+}
+
+type WorkItemBulkResult struct {
+	Matched int `json:"matched"`
+	Updated int `json:"updated"`
 }
 
 // RawEvent stores artifact output exactly as produced, before any transformation.

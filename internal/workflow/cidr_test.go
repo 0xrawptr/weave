@@ -1,6 +1,11 @@
 package workflow
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/planner"
+)
 
 func TestSplitCIDRToPrefix(t *testing.T) {
 	tests := []struct {
@@ -37,5 +42,178 @@ func TestBuildPortScanChunksDeduplicates(t *testing.T) {
 	}
 	if chunks[0].Chunk != "10.0.0.0/24" || chunks[1].Chunk != "10.0.1.0/24" || chunks[2].Chunk != "10.0.2.1" {
 		t.Fatalf("unexpected chunks: %#v", chunks)
+	}
+}
+
+func TestPrioritizePortScanChunks(t *testing.T) {
+	chunks := buildPortScanChunks([]string{
+		"10.0.0.0/23",
+		"10.0.2.0/24",
+	}, 24)
+	got := prioritizePortScanChunks(chunks, []string{"10.0.1.0/24"}, 24)
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].Chunk != "10.0.1.0/24" {
+		t.Fatalf("priority chunk was not first: %#v", got)
+	}
+	if got[1].Chunk != "10.0.0.0/24" || got[2].Chunk != "10.0.2.0/24" {
+		t.Fatalf("non-priority order changed unexpectedly: %#v", got)
+	}
+}
+
+func TestFollowUpResultTotals(t *testing.T) {
+	result := &PlannedDAGWorkflowResult{
+		Runs: []DAGWorkflowResult{
+			{Completed: 2, Failed: 1, Skipped: 3},
+			{Completed: 4, Failed: 0, Skipped: 1},
+		},
+	}
+	if got := followUpResultCompleted(result); got != 6 {
+		t.Fatalf("completed = %d, want 6", got)
+	}
+	if got := followUpResultFailed(result); got != 1 {
+		t.Fatalf("failed = %d, want 1", got)
+	}
+	if got := followUpResultSkipped(result); got != 4 {
+		t.Fatalf("skipped = %d, want 4", got)
+	}
+}
+
+func TestActionWorkItemFromDAGNode(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:              "camp-1",
+			MaxAttempts:             2,
+			PlannedDAGMaxIterations: 3,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	node := planner.DAGPlanNode{
+		ID:       "node-spray",
+		Artifact: "spray",
+		Target:   "10.0.0.0/24",
+		Input:    map[string]any{"base_urls": []string{"http://10.0.0.1:8080"}, "wordlist_mode": "full"},
+		Priority: 90,
+		Reason:   "expand attack surface",
+	}
+
+	item := actionWorkItemFromDAGNode(input, parent, node, 2, 3)
+	if item.Type != "spray_shard" || item.Artifact != "spray" || item.Queue != "spray" {
+		t.Fatalf("unexpected work item mapping: %#v", item)
+	}
+	if item.ParentID != parent.ID || item.Priority != 90 || item.MaxAttempts != 2 {
+		t.Fatalf("unexpected work item metadata: %#v", item)
+	}
+
+	parsed := parseSchedulerWorkItemInput(item)
+	if parsed.Iteration != 2 || parsed.MaxIterations != 3 {
+		t.Fatalf("missing replan iteration metadata: %#v", parsed)
+	}
+	if parsed.ActionInput["wordlist_mode"] != "full" {
+		t.Fatalf("missing action input: %#v", parsed.ActionInput)
+	}
+}
+
+func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:         "camp-1",
+			MaxAttempts:        2,
+			SprayShardBaseURLs: 1,
+			SprayShardWords:    2,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	node := planner.DAGPlanNode{
+		ID:       "node-spray",
+		Artifact: "spray",
+		Target:   "10.0.0.0/24",
+		Input: map[string]any{
+			"base_urls": []string{"http://10.0.0.1:8080", "http://10.0.0.2:8080"},
+			"wordlist":  []string{"a", "b", "c"},
+		},
+		Priority: 90,
+	}
+
+	items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3)
+	if len(items) != 4 {
+		t.Fatalf("len(items) = %d, want 4: %#v", len(items), items)
+	}
+	for i, item := range items {
+		if item.Type != "spray_shard" || item.Queue != "spray" || item.Artifact != "spray" {
+			t.Fatalf("unexpected item %d: %#v", i, item)
+		}
+		parsed := parseSchedulerWorkItemInput(item)
+		if parsed.ShardIndex != i+1 {
+			t.Fatalf("shard index = %d, want %d", parsed.ShardIndex, i+1)
+		}
+		baseURLs := stringSliceFromActionInput(parsed.ActionInput, "base_urls")
+		if len(baseURLs) != 1 {
+			t.Fatalf("base url shard size = %d, want 1: %#v", len(baseURLs), parsed.ActionInput)
+		}
+		words := stringSliceFromActionInput(parsed.ActionInput, "wordlist")
+		if len(words) == 0 || len(words) > 2 {
+			t.Fatalf("word shard size = %d, want 1..2: %#v", len(words), parsed.ActionInput)
+		}
+	}
+}
+
+func TestNucleiGroupWorkItemsFromDAGNode(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:           "camp-1",
+			MaxAttempts:          1,
+			NucleiGroupTargets:   2,
+			NucleiGroupTemplates: 2,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	node := planner.DAGPlanNode{
+		ID:       "node-nuclei",
+		Artifact: "nuclei",
+		Target:   "10.0.0.0/24",
+		Input: map[string]any{
+			"targets": []string{"http://a", "http://b", "http://c"},
+			"ids":     []string{"tpl-1", "tpl-2", "tpl-3"},
+		},
+		Priority: 95,
+	}
+
+	items := nucleiGroupWorkItemsFromDAGNode(input, parent, node, 1, 3)
+	if len(items) != 4 {
+		t.Fatalf("len(items) = %d, want 4: %#v", len(items), items)
+	}
+	for i, item := range items {
+		if item.Type != "nuclei_group" || item.Queue != "nuclei" || item.Artifact != "nuclei" {
+			t.Fatalf("unexpected item %d: %#v", i, item)
+		}
+		parsed := parseSchedulerWorkItemInput(item)
+		if parsed.ShardIndex != i+1 {
+			t.Fatalf("shard index = %d, want %d", parsed.ShardIndex, i+1)
+		}
+		targets := stringSliceFromActionInput(parsed.ActionInput, "targets")
+		ids := stringSliceFromActionInput(parsed.ActionInput, "ids")
+		if len(targets) == 0 || len(targets) > 2 {
+			t.Fatalf("target group size = %d, want 1..2: %#v", len(targets), parsed.ActionInput)
+		}
+		if len(ids) == 0 || len(ids) > 2 {
+			t.Fatalf("template group size = %d, want 1..2: %#v", len(ids), parsed.ActionInput)
+		}
+	}
+}
+
+func TestSchedulerFailureStatus(t *testing.T) {
+	if got := schedulerFailureStatus(data.WorkItem{Attempts: 1, MaxAttempts: 3}); got != "retry_waiting" {
+		t.Fatalf("failure status = %q, want retry_waiting", got)
+	}
+	if got := schedulerFailureStatus(data.WorkItem{Attempts: 3, MaxAttempts: 3}); got != "failed" {
+		t.Fatalf("failure status = %q, want failed", got)
+	}
+	if got := schedulerFailureStatus(data.WorkItem{Attempts: 1, MaxAttempts: 0}); got != "failed" {
+		t.Fatalf("failure status = %q, want failed", got)
 	}
 }

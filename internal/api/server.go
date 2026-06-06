@@ -66,6 +66,7 @@ func (s *Server) setupRoutes() {
 		// Result endpoints
 		v1.GET("/results", s.ListResults)
 		v1.GET("/events", s.ListEvents)
+		v1.GET("/stats", s.ListArtifactStats)
 		v1.GET("/results/graph", s.QueryGraph)
 		v1.GET("/results/:id", s.GetResult)
 		v1.GET("/results/:id/events", s.ListResultEvents)
@@ -73,6 +74,12 @@ func (s *Server) setupRoutes() {
 		v1.GET("/batches", s.ListBatches)
 		v1.GET("/batches/:id/chunks", s.ListBatchChunks)
 		v1.POST("/batches/:id/retry_failed", s.RetryFailedBatchChunks)
+		v1.GET("/work-items", s.ListWorkItems)
+		v1.GET("/work-items/summary", s.WorkItemSummary)
+		v1.POST("/work-items/retry", s.RetryWorkItems)
+		v1.POST("/work-items/pause", s.PauseWorkItems)
+		v1.POST("/work-items/resume", s.ResumeWorkItems)
+		v1.POST("/work-items/recover-stale", s.RecoverStaleWorkItems)
 
 		// Planner endpoints
 		v1.GET("/plan", s.PlanTarget)

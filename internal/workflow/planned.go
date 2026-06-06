@@ -10,10 +10,11 @@ import (
 )
 
 type PlannedWorkflowInput struct {
-	Target        string `json:"target"`
-	CampaignID    string `json:"campaign_id,omitempty"`
-	MaxIterations int    `json:"max_iterations,omitempty"`
-	MaxActions    int    `json:"max_actions,omitempty"`
+	Target                 string `json:"target"`
+	CampaignID             string `json:"campaign_id,omitempty"`
+	MaxIterations          int    `json:"max_iterations,omitempty"`
+	MaxActions             int    `json:"max_actions,omitempty"`
+	ActivityTimeoutSeconds int    `json:"activity_timeout_seconds,omitempty"`
 }
 
 type PlannedWorkflowResult struct {
@@ -45,12 +46,6 @@ func PlannedWorkflow(ctx workflow.Context, input PlannedWorkflowInput) (*Planned
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
-	actionCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 2 * time.Hour,
-		HeartbeatTimeout:    30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
-	})
-
 	for iteration := 0; iteration < input.MaxIterations && len(result.Executed) < input.MaxActions; iteration++ {
 		result.Iterations = iteration + 1
 
@@ -84,6 +79,7 @@ func PlannedWorkflow(ctx workflow.Context, input PlannedWorkflowInput) (*Planned
 			}
 
 			var activityResult artifact.ActivityResult
+			actionCtx := artifactActivityContext(ctx, action.Artifact, input.ActivityTimeoutSeconds)
 			err := workflow.ExecuteActivity(actionCtx, action.Artifact, artifact.Input{
 				Target:     action.Target,
 				CampaignID: action.CampaignID,

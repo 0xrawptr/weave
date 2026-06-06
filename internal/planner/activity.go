@@ -15,6 +15,14 @@ const CompleteActionActivityName = "complete_action"
 const EvaluateConditionActivityName = "evaluate_condition"
 const UpsertBatchRunActivityName = "upsert_batch_run"
 const UpsertBatchChunkActivityName = "upsert_batch_chunk"
+const UpsertWorkItemActivityName = "upsert_work_item"
+const ClaimWorkItemActivityName = "claim_work_item"
+const SetWorkItemStatusActivityName = "set_work_item_status"
+const HeartbeatWorkItemActivityName = "heartbeat_work_item"
+const GetCampaignStatusActivityName = "get_campaign_status"
+const WorkItemSummaryActivityName = "work_item_summary"
+const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
+const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_items"
 
 type Activity struct {
 	planner *Planner
@@ -167,4 +175,110 @@ func (a *Activity) UpsertBatchChunk(ctx context.Context, chunk data.BatchChunk) 
 		return nil
 	}
 	return a.planner.repo.UpsertBatchChunk(ctx, chunk)
+}
+
+func (a *Activity) UpsertWorkItem(ctx context.Context, item data.WorkItem) error {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return nil
+	}
+	return a.planner.repo.UpsertWorkItem(ctx, item)
+}
+
+func (a *Activity) ClaimWorkItem(ctx context.Context, request data.WorkItemClaimRequest) (data.WorkItem, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.WorkItem{}, nil
+	}
+	item, err := a.planner.repo.ClaimWorkItem(ctx, request)
+	if err != nil || item == nil {
+		return data.WorkItem{}, err
+	}
+	return *item, nil
+}
+
+type WorkItemStatusUpdate struct {
+	ID               string `json:"id"`
+	Status           string `json:"status"`
+	WorkflowID       string `json:"workflow_id,omitempty"`
+	Error            string `json:"error,omitempty"`
+	IncrementAttempt bool   `json:"increment_attempt,omitempty"`
+}
+
+func (a *Activity) SetWorkItemStatus(ctx context.Context, update WorkItemStatusUpdate) error {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return nil
+	}
+	return a.planner.repo.SetWorkItemStatus(ctx, update.ID, update.Status, update.WorkflowID, update.Error, update.IncrementAttempt)
+}
+
+func (a *Activity) HeartbeatWorkItem(ctx context.Context, request data.WorkItemHeartbeatRequest) error {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return nil
+	}
+	return a.planner.repo.HeartbeatWorkItem(ctx, request)
+}
+
+func (a *Activity) GetCampaignStatus(ctx context.Context, campaignID string) (string, error) {
+	if campaignID == "" || a == nil || a.planner == nil || a.planner.repo == nil {
+		return "active", nil
+	}
+	campaign, err := a.planner.repo.GetCampaign(ctx, campaignID)
+	if err != nil {
+		return "active", nil
+	}
+	if campaign.Status == "" {
+		return "active", nil
+	}
+	return campaign.Status, nil
+}
+
+type WorkItemSummaryRequest struct {
+	CampaignID string `json:"campaign_id,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Artifact   string `json:"artifact,omitempty"`
+}
+
+type WorkItemSummary struct {
+	ByStatus map[string]int `json:"by_status"`
+	Total    int            `json:"total"`
+}
+
+func (a *Activity) WorkItemSummary(ctx context.Context, request WorkItemSummaryRequest) (WorkItemSummary, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return WorkItemSummary{}, nil
+	}
+	counts, err := a.planner.repo.CountWorkItemsByStatus(ctx, request.CampaignID, request.BatchID, request.Type, request.Artifact)
+	if err != nil {
+		return WorkItemSummary{}, err
+	}
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	return WorkItemSummary{ByStatus: counts, Total: total}, nil
+}
+
+type RecoverStaleWorkItemsRequest struct {
+	Filter data.WorkItemFilter `json:"filter"`
+	Limit  int                 `json:"limit,omitempty"`
+}
+
+func (a *Activity) RecoverStaleWorkItems(ctx context.Context, request RecoverStaleWorkItemsRequest) (data.WorkItemBulkResult, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.WorkItemBulkResult{}, nil
+	}
+	return a.planner.repo.RecoverStaleWorkItems(ctx, request.Filter, request.Limit)
+}
+
+type RequeueRetryWaitingWorkItemsRequest struct {
+	Filter        data.WorkItemFilter `json:"filter"`
+	MinAgeSeconds int                 `json:"min_age_seconds,omitempty"`
+	Limit         int                 `json:"limit,omitempty"`
+}
+
+func (a *Activity) RequeueRetryWaitingWorkItems(ctx context.Context, request RequeueRetryWaitingWorkItemsRequest) (data.WorkItemBulkResult, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.WorkItemBulkResult{}, nil
+	}
+	return a.planner.repo.RequeueRetryWaitingWorkItems(ctx, request.Filter, request.MinAgeSeconds, request.Limit)
 }

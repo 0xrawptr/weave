@@ -1,10 +1,7 @@
 package workflow
 
 import (
-	"time"
-
 	"github.com/0xrawptr/weave/internal/artifact"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -26,13 +23,6 @@ type CompanyWorkflowResult struct {
 // Stage 1 (optional): company info → discover domains
 // Stage 2: For each domain, run DomainWorkflow as a child workflow
 func CompanyWorkflow(ctx workflow.Context, input CompanyWorkflowInput) (*CompanyWorkflowResult, error) {
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: 2,
-		},
-	})
-
 	result := &CompanyWorkflowResult{Company: input.Company}
 
 	domains := input.Domains
@@ -40,15 +30,16 @@ func CompanyWorkflow(ctx workflow.Context, input CompanyWorkflowInput) (*Company
 	// If no pre-discovered domains, try spray to find company-related domains
 	if len(domains) == 0 {
 		// Search for company-related assets via spray
+		sprayCtx := artifactActivityContext(ctx, "spray", 0)
 		var sprayResult artifact.ActivityResult
-		err := workflow.ExecuteActivity(ctx, "spray", artifact.Input{
+		err := workflow.ExecuteActivity(sprayCtx, "spray", artifact.Input{
 			Target:     input.Company,
 			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"base_urls": []string{input.Company},
 				"wordlist":  []string{"admin", "login", "api", "docs", "portal"},
 			}),
-		}).Get(ctx, &sprayResult)
+		}).Get(sprayCtx, &sprayResult)
 		if err == nil {
 			result.Spray = &sprayResult
 		}

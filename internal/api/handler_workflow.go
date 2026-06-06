@@ -152,10 +152,11 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.PlannedWorkflow,
 			workflow.PlannedWorkflowInput{
-				Target:        target,
-				CampaignID:    campaignID,
-				MaxIterations: inputInt(req.Input, "max_iterations"),
-				MaxActions:    inputInt(req.Input, "max_actions"),
+				Target:                 target,
+				CampaignID:             campaignID,
+				MaxIterations:          inputInt(req.Input, "max_iterations"),
+				MaxActions:             inputInt(req.Input, "max_actions"),
+				ActivityTimeoutSeconds: inputInt(req.Input, "activity_timeout_seconds"),
 			},
 		)
 		if err != nil {
@@ -180,11 +181,12 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.PlannedDAGWorkflow,
 			workflow.PlannedDAGWorkflowInput{
-				Target:            target,
-				CampaignID:        campaignID,
-				MaxIterations:     inputInt(req.Input, "max_iterations"),
-				MaxConcurrency:    inputInt(req.Input, "max_concurrency"),
-				ContinueOnFailure: inputBool(req.Input, "continue_on_failure"),
+				Target:                 target,
+				CampaignID:             campaignID,
+				MaxIterations:          inputInt(req.Input, "max_iterations"),
+				MaxConcurrency:         inputInt(req.Input, "max_concurrency"),
+				ContinueOnFailure:      inputBool(req.Input, "continue_on_failure"),
+				ActivityTimeoutSeconds: inputInt(req.Input, "activity_timeout_seconds"),
 			},
 		)
 		if err != nil {
@@ -219,7 +221,12 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		var err error
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.IPWorkflow,
-			workflow.IPWorkflowInput{IP: ip, CampaignID: campaignID, Ports: ports},
+			workflow.IPWorkflowInput{
+				IP:                     ip,
+				CampaignID:             campaignID,
+				Ports:                  ports,
+				ActivityTimeoutSeconds: inputInt(req.Input, "activity_timeout_seconds"),
+			},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -238,7 +245,12 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		var err error
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.PortScanWorkflow,
-			workflow.PortScanInput{IP: ip, CampaignID: campaignID, Ports: ports},
+			workflow.PortScanInput{
+				IP:                     ip,
+				CampaignID:             campaignID,
+				Ports:                  ports,
+				ActivityTimeoutSeconds: inputInt(req.Input, "activity_timeout_seconds"),
+			},
 		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -266,12 +278,25 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 		run, err = s.temporal.ExecuteWorkflow(ctx, opts,
 			workflow.BatchPortScanWorkflow,
 			workflow.BatchPortScanInput{
-				Targets:        targets,
-				CampaignID:     campaignID,
-				Ports:          ports,
-				MaxConcurrency: inputInt(req.Input, "max_concurrency"),
-				ChunkPrefix:    inputInt(req.Input, "chunk_prefix"),
-				MaxAttempts:    inputInt(req.Input, "max_attempts"),
+				Targets:                 targets,
+				PriorityTargets:         inputStringSlice(req.Input, "priority_targets"),
+				CampaignID:              campaignID,
+				Ports:                   ports,
+				MaxConcurrency:          inputInt(req.Input, "max_concurrency"),
+				ChunkPrefix:             inputInt(req.Input, "chunk_prefix"),
+				MaxAttempts:             inputInt(req.Input, "max_attempts"),
+				RetryDelaySeconds:       inputInt(req.Input, "retry_delay_seconds"),
+				ActivityTimeoutSeconds:  inputInt(req.Input, "activity_timeout_seconds"),
+				QueueLimits:             inputIntMap(req.Input, "queue_limits"),
+				ResourceLimits:          inputResourceLimits(req.Input),
+				RunPlannedDAG:           inputBool(req.Input, "run_planned_dag"),
+				PlannedDAGConcurrency:   inputInt(req.Input, "planned_dag_concurrency"),
+				PlannedDAGMaxIterations: inputInt(req.Input, "planned_dag_max_iterations"),
+				PlannedDAGContinue:      inputBool(req.Input, "planned_dag_continue_on_failure"),
+				SprayShardBaseURLs:      inputInt(req.Input, "spray_shard_base_urls"),
+				SprayShardWords:         inputInt(req.Input, "spray_shard_words"),
+				NucleiGroupTargets:      inputInt(req.Input, "nuclei_group_targets"),
+				NucleiGroupTemplates:    inputInt(req.Input, "nuclei_group_templates"),
 			},
 		)
 		if err != nil {
@@ -398,6 +423,78 @@ func inputBool(input map[string]interface{}, key string) bool {
 	}
 	value, _ := input[key].(bool)
 	return value
+}
+
+func inputIntMap(input map[string]interface{}, key string) map[string]int {
+	if input == nil {
+		return nil
+	}
+	raw, ok := input[key].(map[string]interface{})
+	if !ok {
+		if typed, ok := input[key].(map[string]int); ok {
+			return typed
+		}
+		return nil
+	}
+	out := make(map[string]int, len(raw))
+	for k, v := range raw {
+		switch value := v.(type) {
+		case int:
+			out[k] = value
+		case int64:
+			out[k] = int(value)
+		case float64:
+			out[k] = int(value)
+		case jsonNumber:
+			i, _ := value.Int64()
+			out[k] = int(i)
+		}
+	}
+	return out
+}
+
+func inputResourceLimits(input map[string]interface{}) workflow.ResourceLimits {
+	if input == nil {
+		return workflow.ResourceLimits{}
+	}
+	raw, ok := input["resource_limits"].(map[string]interface{})
+	if !ok {
+		return workflow.ResourceLimits{}
+	}
+	limits := workflow.ResourceLimits{}
+	if queue, ok := raw["queue"].(map[string]interface{}); ok {
+		limits.Queue = intMapFromRaw(queue)
+	}
+	if artifact, ok := raw["artifact"].(map[string]interface{}); ok {
+		limits.Artifact = intMapFromRaw(artifact)
+	}
+	limits.MaxRunningCampaign = intFromAny(raw["max_running_campaign"])
+	limits.MaxRunningTarget = intFromAny(raw["max_running_target"])
+	return limits
+}
+
+func intMapFromRaw(raw map[string]interface{}) map[string]int {
+	out := make(map[string]int, len(raw))
+	for k, v := range raw {
+		out[k] = intFromAny(v)
+	}
+	return out
+}
+
+func intFromAny(v interface{}) int {
+	switch value := v.(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case jsonNumber:
+		i, _ := value.Int64()
+		return int(i)
+	default:
+		return 0
+	}
 }
 
 func inputStringSlice(input map[string]interface{}, key string) []string {

@@ -10,11 +10,12 @@ import (
 )
 
 type PlannedDAGWorkflowInput struct {
-	Target            string `json:"target"`
-	CampaignID        string `json:"campaign_id,omitempty"`
-	MaxIterations     int    `json:"max_iterations,omitempty"`
-	MaxConcurrency    int    `json:"max_concurrency,omitempty"`
-	ContinueOnFailure bool   `json:"continue_on_failure,omitempty"`
+	Target                 string `json:"target"`
+	CampaignID             string `json:"campaign_id,omitempty"`
+	MaxIterations          int    `json:"max_iterations,omitempty"`
+	MaxConcurrency         int    `json:"max_concurrency,omitempty"`
+	ContinueOnFailure      bool   `json:"continue_on_failure,omitempty"`
+	ActivityTimeoutSeconds int    `json:"activity_timeout_seconds,omitempty"`
 }
 
 type PlannedDAGWorkflowResult struct {
@@ -59,7 +60,7 @@ func PlannedDAGWorkflow(ctx workflow.Context, input PlannedDAGWorkflowInput) (*P
 			WorkflowID: childID,
 		})
 		var dagResult DAGWorkflowResult
-		if err := workflow.ExecuteChildWorkflow(childCtx, DAGWorkflow, dagInputFromPlan(plan, input.MaxConcurrency, input.ContinueOnFailure)).Get(childCtx, &dagResult); err != nil {
+		if err := workflow.ExecuteChildWorkflow(childCtx, DAGWorkflow, dagInputFromPlan(plan, input.MaxConcurrency, input.ContinueOnFailure, input.ActivityTimeoutSeconds)).Get(childCtx, &dagResult); err != nil {
 			return result, err
 		}
 		result.Runs = append(result.Runs, dagResult)
@@ -71,7 +72,7 @@ func PlannedDAGWorkflow(ctx workflow.Context, input PlannedDAGWorkflowInput) (*P
 	return result, nil
 }
 
-func dagInputFromPlan(plan planner.DAGPlan, maxConcurrency int, continueOnFailure bool) DAGWorkflowInput {
+func dagInputFromPlan(plan planner.DAGPlan, maxConcurrency int, continueOnFailure bool, activityTimeoutSeconds int) DAGWorkflowInput {
 	nodes := make([]DAGNode, 0, len(plan.Nodes))
 	for _, node := range plan.Nodes {
 		nodes = append(nodes, DAGNode{
@@ -89,11 +90,12 @@ func dagInputFromPlan(plan planner.DAGPlan, maxConcurrency int, continueOnFailur
 		})
 	}
 	return DAGWorkflowInput{
-		Target:            plan.Target,
-		CampaignID:        plan.CampaignID,
-		Nodes:             nodes,
-		MaxConcurrency:    maxConcurrency,
-		ContinueOnFailure: continueOnFailure,
+		Target:                 plan.Target,
+		CampaignID:             plan.CampaignID,
+		Nodes:                  nodes,
+		MaxConcurrency:         maxConcurrency,
+		ContinueOnFailure:      continueOnFailure,
+		ActivityTimeoutSeconds: activityTimeoutSeconds,
 	}
 }
 

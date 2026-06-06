@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/0xrawptr/weave/internal/artifact"
 	"go.temporal.io/sdk/workflow"
@@ -10,9 +9,10 @@ import (
 
 // IPWorkflowInput is the input for the IP scanning workflow.
 type IPWorkflowInput struct {
-	IP         string `json:"ip"`
-	CampaignID string `json:"campaign_id,omitempty"`
-	Ports      string `json:"ports"`
+	IP                     string `json:"ip"`
+	CampaignID             string `json:"campaign_id,omitempty"`
+	Ports                  string `json:"ports"`
+	ActivityTimeoutSeconds int    `json:"activity_timeout_seconds,omitempty"`
 }
 
 // IPWorkflowResult aggregates results from the IP scan pipeline.
@@ -37,10 +37,7 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 
 	// Stage 1: gogo per chunk.
 	{
-		chunkCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: 2 * time.Hour,
-			HeartbeatTimeout:    30 * time.Second,
-		})
+		chunkCtx := artifactActivityContext(ctx, "gogo", input.ActivityTimeoutSeconds)
 		for i, chunk := range chunks {
 			var gr artifact.ActivityResult
 			err := workflow.ExecuteActivity(chunkCtx, "gogo", artifact.Input{
@@ -62,28 +59,26 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 
 	// Stage 2 & 3: fingers + nuclei run after all chunks.
 	{
-		postCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-			StartToCloseTimeout: 2 * time.Hour,
-		})
-
 		var fingersResult artifact.ActivityResult
-		err := workflow.ExecuteActivity(postCtx, "fingers", artifact.Input{
+		fingersCtx := artifactActivityContext(ctx, "fingers", input.ActivityTimeoutSeconds)
+		err := workflow.ExecuteActivity(fingersCtx, "fingers", artifact.Input{
 			Target:     input.IP,
 			CampaignID: input.CampaignID,
 			Data: mustMarshal(map[string]interface{}{
 				"mode": "http_match",
 			}),
-		}).Get(postCtx, &fingersResult)
+		}).Get(fingersCtx, &fingersResult)
 		if err == nil {
 			result.Fingers = &fingersResult
 		}
 
 		var nucleiResult artifact.ActivityResult
-		err = workflow.ExecuteActivity(postCtx, "nuclei", artifact.Input{
+		nucleiCtx := artifactActivityContext(ctx, "nuclei", input.ActivityTimeoutSeconds)
+		err = workflow.ExecuteActivity(nucleiCtx, "nuclei", artifact.Input{
 			Target:     input.IP,
 			CampaignID: input.CampaignID,
 			Data:       mustMarshal(map[string]interface{}{}),
-		}).Get(postCtx, &nucleiResult)
+		}).Get(nucleiCtx, &nucleiResult)
 		if err == nil && nucleiResult.Success {
 			result.Nuclei = &nucleiResult
 		}

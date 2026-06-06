@@ -11,10 +11,11 @@ import (
 )
 
 type StartActionRequest struct {
-	Artifact   string                 `json:"artifact"`
-	Target     string                 `json:"target"`
-	CampaignID string                 `json:"campaign_id,omitempty"`
-	Input      map[string]interface{} `json:"input"`
+	Artifact               string                 `json:"artifact"`
+	Target                 string                 `json:"target"`
+	CampaignID             string                 `json:"campaign_id,omitempty"`
+	Input                  map[string]interface{} `json:"input"`
+	ActivityTimeoutSeconds int                    `json:"activity_timeout_seconds,omitempty"`
 }
 
 type ActionRecordResponse struct {
@@ -93,10 +94,11 @@ func (s *Server) StartAction(c *gin.Context) {
 		ID:        workflowID,
 		TaskQueue: s.cfg.Temporal.TaskQueue,
 	}, workflow.ActionWorkflow, workflow.ActionWorkflowInput{
-		Artifact:   req.Artifact,
-		Target:     req.Target,
-		CampaignID: req.CampaignID,
-		Input:      req.Input,
+		Artifact:               req.Artifact,
+		Target:                 req.Target,
+		CampaignID:             req.CampaignID,
+		Input:                  req.Input,
+		ActivityTimeoutSeconds: req.ActivityTimeoutSeconds,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

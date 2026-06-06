@@ -10,12 +10,13 @@ import (
 
 // ActivityResult wraps the output for Temporal activity registration.
 type ActivityResult struct {
-	Artifact string `json:"artifact"`
-	Target   string `json:"target"`
-	Success  bool   `json:"success"`
-	Error    string `json:"error,omitempty"`
-	Data     []byte `json:"data,omitempty"`
-	Duration int64  `json:"duration_ms"`
+	Artifact string          `json:"artifact"`
+	Target   string          `json:"target"`
+	Success  bool            `json:"success"`
+	Error    string          `json:"error,omitempty"`
+	Data     []byte          `json:"data,omitempty"`
+	Duration int64           `json:"duration_ms"`
+	Stats    []ExecutionStat `json:"stats,omitempty"`
 }
 
 // ActivityFunc is the signature that all Temporal activities must match.
@@ -33,8 +34,11 @@ type MarkDoneHook func(ctx context.Context, target, artifact string, input []byt
 // RawEventHandler stores raw artifact output before any transformation.
 type RawEventHandler func(ctx context.Context, artifact, target, workflowID, campaignID string, data []byte)
 
+// StatsHook stores normalized SDK execution counters emitted by artifacts.
+type StatsHook func(ctx context.Context, artifact, target, workflowID, campaignID string, stats []ExecutionStat) error
+
 // NewActivityFunc creates a named Temporal activity function for the given artifact.
-func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook, rawEvent RawEventHandler) ActivityFunc {
+func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook, rawEvent RawEventHandler, statsHook StatsHook) ActivityFunc {
 	return func(ctx context.Context, input Input) (*ActivityResult, error) {
 		logger := activity.GetLogger(ctx)
 		logger.Info("artifact started", "artifact", a.Name(), "target", input.Target)
@@ -48,6 +52,8 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 		}
 
 		start := time.Now()
+		stopHeartbeat := startActivityHeartbeat(ctx, a.Name(), input.Target, start)
+		defer stopHeartbeat()
 
 		if err := validateInput(a.InputSchema(), input); err != nil {
 			return &ActivityResult{
@@ -67,6 +73,7 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 			Success:  output.Success && err == nil,
 			Data:     output.Data,
 			Duration: duration,
+			Stats:    output.Stats,
 		}
 
 		if output.Error != "" {
@@ -74,6 +81,13 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 		}
 		if err != nil {
 			result.Error = err.Error()
+		}
+
+		if statsHook != nil && len(result.Stats) > 0 {
+			wfInfo := activity.GetInfo(ctx)
+			if statsErr := statsHook(ctx, a.Name(), input.Target, wfInfo.WorkflowExecution.ID, input.CampaignID, result.Stats); statsErr != nil {
+				logger.Error("failed to persist artifact stats", "error", statsErr)
+			}
 		}
 
 		// Save raw event — untouched artifact output.
@@ -114,6 +128,59 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 			"duration_ms", duration)
 
 		return result, nil
+	}
+}
+
+func startActivityHeartbeat(ctx context.Context, artifactName, target string, start time.Time) func() {
+	done := make(chan struct{})
+	record := func() {
+		recordArtifactHeartbeat(ctx, artifactName, target, "running", start, nil)
+	}
+	record()
+	go func() {
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				record()
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+func recordArtifactHeartbeat(ctx context.Context, artifactName, target, stage string, start time.Time, fields map[string]interface{}) {
+	defer func() {
+		_ = recover()
+	}()
+	payload := map[string]interface{}{
+		"artifact":   artifactName,
+		"target":     target,
+		"stage":      stage,
+		"elapsed_ms": time.Since(start).Milliseconds(),
+	}
+	for k, v := range fields {
+		payload[k] = v
+	}
+	activity.RecordHeartbeat(ctx, payload)
+}
+
+func statHeartbeatFields(latest ExecutionStat, count int) map[string]interface{} {
+	return map[string]interface{}{
+		"stats_count":       count,
+		"stats_engine":      latest.Engine,
+		"stats_task":        latest.Task,
+		"stats_targets":     latest.Targets,
+		"stats_tasks":       latest.Tasks,
+		"stats_requests":    latest.Requests,
+		"stats_results":     latest.Results,
+		"stats_errors":      latest.Errors,
+		"stats_duration_ms": latest.DurationMs,
 	}
 }
 

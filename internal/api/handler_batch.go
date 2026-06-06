@@ -13,8 +13,21 @@ import (
 )
 
 type RetryFailedBatchChunksRequest struct {
-	MaxConcurrency int `json:"max_concurrency,omitempty"`
-	MaxAttempts    int `json:"max_attempts,omitempty"`
+	MaxConcurrency          int                     `json:"max_concurrency,omitempty"`
+	MaxAttempts             int                     `json:"max_attempts,omitempty"`
+	RetryDelaySeconds       int                     `json:"retry_delay_seconds,omitempty"`
+	PriorityTargets         []string                `json:"priority_targets,omitempty"`
+	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
+	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
+	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
+	RunPlannedDAG           bool                    `json:"run_planned_dag,omitempty"`
+	PlannedDAGConcurrency   int                     `json:"planned_dag_concurrency,omitempty"`
+	PlannedDAGMaxIterations int                     `json:"planned_dag_max_iterations,omitempty"`
+	PlannedDAGContinue      bool                    `json:"planned_dag_continue_on_failure,omitempty"`
+	SprayShardBaseURLs      int                     `json:"spray_shard_base_urls,omitempty"`
+	SprayShardWords         int                     `json:"spray_shard_words,omitempty"`
+	NucleiGroupTargets      int                     `json:"nuclei_group_targets,omitempty"`
+	NucleiGroupTemplates    int                     `json:"nuclei_group_templates,omitempty"`
 }
 
 func (s *Server) ListBatches(c *gin.Context) {
@@ -112,11 +125,24 @@ func (s *Server) RetryFailedBatchChunks(c *gin.Context) {
 		ID:        workflowID,
 		TaskQueue: s.cfg.Temporal.TaskQueue,
 	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
-		Targets:        targets,
-		CampaignID:     run.CampaignID,
-		Ports:          ports,
-		MaxConcurrency: req.MaxConcurrency,
-		MaxAttempts:    req.MaxAttempts,
+		Targets:                 targets,
+		PriorityTargets:         req.PriorityTargets,
+		CampaignID:              run.CampaignID,
+		Ports:                   ports,
+		MaxConcurrency:          req.MaxConcurrency,
+		MaxAttempts:             req.MaxAttempts,
+		RetryDelaySeconds:       req.RetryDelaySeconds,
+		ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
+		QueueLimits:             req.QueueLimits,
+		ResourceLimits:          req.ResourceLimits,
+		RunPlannedDAG:           req.RunPlannedDAG,
+		PlannedDAGConcurrency:   req.PlannedDAGConcurrency,
+		PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,
+		PlannedDAGContinue:      req.PlannedDAGContinue,
+		SprayShardBaseURLs:      req.SprayShardBaseURLs,
+		SprayShardWords:         req.SprayShardWords,
+		NucleiGroupTargets:      req.NucleiGroupTargets,
+		NucleiGroupTemplates:    req.NucleiGroupTemplates,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
