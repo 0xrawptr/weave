@@ -74,12 +74,14 @@ func (s *Server) setupRoutes() {
 		v1.GET("/batches", s.ListBatches)
 		v1.GET("/batches/:id/chunks", s.ListBatchChunks)
 		v1.POST("/batches/:id/retry_failed", s.RetryFailedBatchChunks)
+		v1.POST("/batches/:id/resume_scheduler", s.ResumeBatchScheduler)
 		v1.GET("/work-items", s.ListWorkItems)
 		v1.GET("/work-items/summary", s.WorkItemSummary)
 		v1.POST("/work-items/retry", s.RetryWorkItems)
 		v1.POST("/work-items/pause", s.PauseWorkItems)
 		v1.POST("/work-items/resume", s.ResumeWorkItems)
 		v1.POST("/work-items/recover-stale", s.RecoverStaleWorkItems)
+		v1.GET("/stats/summary", s.ArtifactStatsSummary)
 
 		// Planner endpoints
 		v1.GET("/plan", s.PlanTarget)

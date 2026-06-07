@@ -163,6 +163,8 @@ func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target, 
 		etlErr = runtimeApp.Pipelines.Zombie.Process(ctx, target, eventData)
 	case "cdncheck":
 		etlErr = runtimeApp.Pipelines.Cdncheck.Process(ctx, target, eventData)
+	case "dnsx":
+		etlErr = runtimeApp.Pipelines.DNSX.Process(ctx, target, eventData)
 	case "nuclei":
 		etlErr = runtimeApp.Pipelines.Nuclei.Process(ctx, target, eventData)
 	}

@@ -13,6 +13,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/projectdiscovery/cdncheck v1.2.37
+	github.com/projectdiscovery/dnsx v1.2.2
 	github.com/projectdiscovery/mapcidr v1.1.97
 	github.com/projectdiscovery/nuclei/v3 v3.8.0
 	go.temporal.io/sdk v1.44.1

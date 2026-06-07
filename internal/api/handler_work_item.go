@@ -81,25 +81,42 @@ func (s *Server) WorkItemSummary(c *gin.Context) {
 		return
 	}
 
-	counts, err := s.repo.CountWorkItemsByStatus(
+	filter := data.WorkItemFilter{
+		CampaignID: c.Query("campaign_id"),
+		BatchID:    c.Query("batch_id"),
+		Status:     c.Query("status"),
+		Type:       c.Query("type"),
+		Artifact:   c.Query("artifact"),
+		Target:     c.Query("target"),
+	}
+	summary, err := s.repo.GetWorkItemProgressSummary(c.Request.Context(), filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	artifactStats, err := s.repo.GetArtifactStatSummary(
 		c.Request.Context(),
 		c.Query("campaign_id"),
-		c.Query("batch_id"),
-		c.Query("type"),
+		"",
 		c.Query("artifact"),
+		c.Query("target"),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	total := 0
-	for _, count := range counts {
-		total += count
-	}
 	c.JSON(http.StatusOK, gin.H{
-		"by_status": counts,
-		"total":     total,
+		"by_status":          summary.ByStatus,
+		"total":              summary.Total,
+		"overall":            summary.Overall,
+		"by_type":            summary.ByType,
+		"by_queue":           summary.ByQueue,
+		"by_artifact":        summary.ByArtifact,
+		"eta_seconds":        summary.ETASeconds,
+		"throughput_per_min": summary.ThroughputPerMin,
+		"artifact_stats":     artifactStats,
+		"generated_at":       summary.GeneratedAt,
 	})
 }
 

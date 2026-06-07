@@ -650,6 +650,96 @@ func (p *PostgresStore) QueryArtifactStats(ctx context.Context, campaignID, work
 	return stats, rows.Err()
 }
 
+func (p *PostgresStore) QueryArtifactStatSummary(ctx context.Context, campaignID, workflowID, artifactName, target string) ([]ArtifactStatSummary, error) {
+	query := `SELECT artifact,
+		COUNT(*)::INT AS total_runs,
+		COALESCE(SUM(targets), 0)::BIGINT,
+		COALESCE(SUM(tasks), 0)::BIGINT,
+		COALESCE(SUM(requests), 0)::BIGINT,
+		COALESCE(SUM(results), 0)::BIGINT,
+		COALESCE(SUM(errors), 0)::BIGINT,
+		COALESCE(SUM(duration_ms), 0)::BIGINT,
+		COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0)::BIGINT,
+		MIN(created_at),
+		MAX(created_at)
+	FROM artifact_stats WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	if workflowID != "" {
+		query += fmt.Sprintf(" AND workflow_id = $%d", argIdx)
+		args = append(args, workflowID)
+		argIdx++
+	}
+	if artifactName != "" {
+		query += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		args = append(args, artifactName)
+		argIdx++
+	}
+	if target != "" {
+		query += fmt.Sprintf(" AND target = $%d", argIdx)
+		args = append(args, target)
+	}
+	query += " GROUP BY artifact ORDER BY COALESCE(SUM(errors), 0) DESC, COALESCE(SUM(results), 0) DESC, COUNT(*) DESC"
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []ArtifactStatSummary
+	for rows.Next() {
+		var summary ArtifactStatSummary
+		var firstSeen, lastSeen time.Time
+		if err := rows.Scan(
+			&summary.Artifact,
+			&summary.TotalRuns,
+			&summary.Targets,
+			&summary.Tasks,
+			&summary.Requests,
+			&summary.Results,
+			&summary.Errors,
+			&summary.DurationMs,
+			&summary.AvgDurationMs,
+			&firstSeen,
+			&lastSeen,
+		); err != nil {
+			return nil, err
+		}
+		completeArtifactStatSummary(&summary, firstSeen, lastSeen)
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
+}
+
+func completeArtifactStatSummary(summary *ArtifactStatSummary, firstSeen, lastSeen time.Time) {
+	denominator := summary.Requests
+	if denominator <= 0 {
+		denominator = summary.Tasks
+	}
+	if denominator <= 0 {
+		denominator = int64(summary.TotalRuns)
+	}
+	if denominator > 0 && summary.Errors > 0 {
+		summary.ErrorRatePercent = int(summary.Errors * 100 / denominator)
+	}
+	elapsedMinutes := int64(lastSeen.Sub(firstSeen).Minutes())
+	if elapsedMinutes <= 0 {
+		elapsedMinutes = 1
+	}
+	if summary.Results > 0 {
+		summary.ThroughputPerMin = summary.Results / elapsedMinutes
+		if summary.ThroughputPerMin <= 0 {
+			summary.ThroughputPerMin = 1
+		}
+	}
+}
+
 func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionRecord) (bool, error) {
 	if record.Status == "" {
 		record.Status = "running"
@@ -897,7 +987,11 @@ func (p *PostgresStore) UpsertWorkItem(ctx context.Context, item WorkItem) error
 				WHEN work_items.status IN ('running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
 				ELSE EXCLUDED.status
 			END,
-			attempts = CASE WHEN EXCLUDED.attempts > work_items.attempts THEN EXCLUDED.attempts ELSE work_items.attempts END,
+			attempts = CASE
+				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('running', 'completed') THEN EXCLUDED.attempts
+				WHEN EXCLUDED.attempts > work_items.attempts THEN EXCLUDED.attempts
+				ELSE work_items.attempts
+			END,
 			max_attempts = EXCLUDED.max_attempts,
 			workflow_id = CASE WHEN EXCLUDED.workflow_id <> '' THEN EXCLUDED.workflow_id ELSE work_items.workflow_id END,
 			error = EXCLUDED.error,
@@ -1154,6 +1248,156 @@ func (p *PostgresStore) CountWorkItemsByStatus(ctx context.Context, campaignID, 
 		counts[status] = count
 	}
 	return counts, rows.Err()
+}
+
+func (p *PostgresStore) GetWorkItemProgressSummary(ctx context.Context, filter WorkItemFilter) (WorkItemProgressSummary, error) {
+	overall, err := p.queryWorkItemGroupSummary(ctx, filter, "")
+	if err != nil {
+		return WorkItemProgressSummary{}, err
+	}
+	byType, err := p.queryWorkItemGroupSummary(ctx, filter, "type")
+	if err != nil {
+		return WorkItemProgressSummary{}, err
+	}
+	byQueue, err := p.queryWorkItemGroupSummary(ctx, filter, "queue")
+	if err != nil {
+		return WorkItemProgressSummary{}, err
+	}
+	byArtifact, err := p.queryWorkItemGroupSummary(ctx, filter, "artifact")
+	if err != nil {
+		return WorkItemProgressSummary{}, err
+	}
+
+	summary := WorkItemProgressSummary{
+		ByStatus:    map[string]int{},
+		ByType:      byType,
+		ByQueue:     byQueue,
+		ByArtifact:  byArtifact,
+		GeneratedAt: time.Now(),
+	}
+	if len(overall) > 0 {
+		summary.Overall = overall[0]
+		summary.Total = summary.Overall.Total
+		summary.ETASeconds = summary.Overall.ETASeconds
+		summary.ThroughputPerMin = summary.Overall.ThroughputPerMin
+		summary.ByStatus = map[string]int{
+			WorkItemStatusPending:      summary.Overall.Pending,
+			WorkItemStatusRunning:      summary.Overall.Running,
+			WorkItemStatusCompleted:    summary.Overall.Completed,
+			WorkItemStatusFailed:       summary.Overall.Failed,
+			WorkItemStatusRetryWaiting: summary.Overall.RetryWaiting,
+			WorkItemStatusPaused:       summary.Overall.Paused,
+			WorkItemStatusCancelled:    summary.Overall.Cancelled,
+			WorkItemStatusSkipped:      summary.Overall.Skipped,
+			WorkItemStatusDead:         summary.Overall.Dead,
+		}
+	}
+	return summary, nil
+}
+
+func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter WorkItemFilter, groupBy string) ([]WorkItemGroupSummary, error) {
+	groupExpr := "''"
+	orderExpr := "total DESC"
+	switch groupBy {
+	case "":
+	case "type", "queue", "artifact":
+		groupExpr = groupBy
+		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
+	default:
+		return nil, fmt.Errorf("unsupported work item summary group: %s", groupBy)
+	}
+
+	query := fmt.Sprintf(`SELECT
+		COALESCE(%[1]s, '') AS group_key,
+		COUNT(*)::INT AS total,
+		COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending,
+		COUNT(*) FILTER (WHERE status = 'running')::INT AS running,
+		COUNT(*) FILTER (WHERE status = 'completed')::INT AS completed,
+		COUNT(*) FILTER (WHERE status = 'failed')::INT AS failed,
+		COUNT(*) FILTER (WHERE status = 'retry_waiting')::INT AS retry_waiting,
+		COUNT(*) FILTER (WHERE status = 'paused')::INT AS paused,
+		COUNT(*) FILTER (WHERE status = 'cancelled')::INT AS cancelled,
+		COUNT(*) FILTER (WHERE status = 'skipped')::INT AS skipped,
+		COUNT(*) FILTER (WHERE status = 'dead')::INT AS dead,
+		COALESCE(AVG(EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000) FILTER (
+			WHERE completed_at > started_at AND status IN ('completed', 'failed', 'dead')
+		), 0)::BIGINT AS avg_duration_ms,
+		COUNT(*) FILTER (
+			WHERE completed_at >= NOW() - INTERVAL '15 minutes'
+			  AND status IN ('completed', 'failed', 'dead', 'cancelled', 'skipped')
+		)::INT AS done_last_15m,
+		COALESCE((ARRAY_AGG(error ORDER BY updated_at DESC) FILTER (WHERE error <> ''))[1], '') AS last_error,
+		COALESCE(TO_CHAR(MAX(updated_at) FILTER (WHERE error <> ''), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS last_error_updated_at
+	FROM work_items
+	WHERE 1=1`, groupExpr)
+	args := []interface{}{}
+	argIdx := 1
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, true)
+	query += fmt.Sprintf(" GROUP BY group_key ORDER BY %s", orderExpr)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []WorkItemGroupSummary
+	for rows.Next() {
+		var group WorkItemGroupSummary
+		var doneLast15m int
+		if err := rows.Scan(
+			&group.Key,
+			&group.Total,
+			&group.Pending,
+			&group.Running,
+			&group.Completed,
+			&group.Failed,
+			&group.RetryWaiting,
+			&group.Paused,
+			&group.Cancelled,
+			&group.Skipped,
+			&group.Dead,
+			&group.AvgDurationMs,
+			&doneLast15m,
+			&group.LastError,
+			&group.LastErrorUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		completeWorkItemGroupSummary(&group, doneLast15m)
+		groups = append(groups, group)
+	}
+	return groups, rows.Err()
+}
+
+func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) {
+	group.Queued = group.Pending + group.RetryWaiting + group.Paused
+	group.Done = group.Completed + group.Cancelled + group.Skipped
+	group.Error = group.Failed + group.Dead
+	if group.Total > 0 {
+		group.ProgressPercent = (group.Done + group.Error) * 100 / group.Total
+	}
+	if doneLast15m > 0 {
+		group.ThroughputPerMin = maxInt(1, doneLast15m/15)
+	}
+	remaining := group.Queued + group.Running
+	if remaining <= 0 {
+		return
+	}
+	if group.ThroughputPerMin > 0 {
+		group.ETASeconds = int64((remaining*60 + group.ThroughputPerMin - 1) / group.ThroughputPerMin)
+		return
+	}
+	if group.AvgDurationMs > 0 && group.Running > 0 {
+		group.ETASeconds = int64((remaining*int(group.AvgDurationMs) + group.Running - 1) / group.Running / 1000)
+	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (p *PostgresStore) RetryWorkItems(ctx context.Context, request WorkItemRetryRequest) (WorkItemBulkResult, error) {

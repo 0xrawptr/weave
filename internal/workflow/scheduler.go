@@ -60,6 +60,7 @@ type schedulerWorkItemInput struct {
 	Reason        string                    `json:"reason,omitempty"`
 	Risk          string                    `json:"risk,omitempty"`
 	Cost          int                       `json:"cost,omitempty"`
+	DedupKey      string                    `json:"dedup_key,omitempty"`
 	RunIf         *planner.ConditionRequest `json:"run_if,omitempty"`
 	Iteration     int                       `json:"iteration,omitempty"`
 	MaxIterations int                       `json:"max_iterations,omitempty"`
@@ -229,9 +230,6 @@ func schedulePlannedDAGFollowUps(ctx, stateCtx workflow.Context, input Scheduler
 			iteration = 1
 		}
 		childID := fmt.Sprintf("%s-planned-dag-%s-%d", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts)
-		if err := upsertPortScanBatchChunk(stateCtx, input.BatchID, batchPortScanChunk{Target: item.Target, Chunk: item.Target}, childID, "planning", ""); err != nil {
-			return schedulerChild{}, err
-		}
 		if err := setBatchWorkItemStatus(stateCtx, item.ID, "running", childID, "", false); err != nil {
 			return schedulerChild{}, err
 		}
@@ -265,13 +263,6 @@ func schedulePlannedDAGFollowUps(ctx, stateCtx workflow.Context, input Scheduler
 			finalStatus = "failed"
 			finalError = childErr.Error()
 		}
-		chunkStatus := "completed"
-		if finalError != "" {
-			chunkStatus = "partial"
-		}
-		if err := upsertPortScanBatchChunk(stateCtx, input.BatchID, batchPortScanChunk{Target: child.Item.Target, Chunk: child.Item.Target}, child.WorkflowID, chunkStatus, finalError); err != nil {
-			return err
-		}
 		return setBatchWorkItemStatus(stateCtx, child.Item.ID, finalStatus, child.WorkflowID, finalError, false)
 	})
 }
@@ -302,13 +293,27 @@ func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWork
 				return schedulerChild{}, err
 			}
 			if !conditionOK {
+				if err := skipScheduledActionRecord(stateCtx, item, itemInput, conditionMessage); err != nil {
+					return schedulerChild{}, err
+				}
 				if err := setBatchWorkItemStatus(stateCtx, item.ID, "skipped", "", conditionMessage, false); err != nil {
 					return schedulerChild{}, err
 				}
 				return schedulerChild{Item: item, WorkflowID: "", Future: nil}, nil
 			}
 		}
-		childID := fmt.Sprintf("%s-%s-%s-%d", input.BatchID, itemType, safeWorkflowIDPart(actionTarget), item.Attempts)
+		childID := actionChildWorkflowID(input.BatchID, itemType, actionTarget, item.ID, item.Attempts)
+		claimed, err := claimScheduledActionRecord(stateCtx, item, itemInput, childID)
+		if err != nil {
+			return schedulerChild{}, err
+		}
+		if !claimed {
+			reason := "action already running or completed"
+			if err := setBatchWorkItemStatus(stateCtx, item.ID, "skipped", childID, reason, false); err != nil {
+				return schedulerChild{}, err
+			}
+			return schedulerChild{Item: item, WorkflowID: "", Future: nil}, nil
+		}
 		if err := setBatchWorkItemStatus(stateCtx, item.ID, "running", childID, "", false); err != nil {
 			return schedulerChild{}, err
 		}
@@ -328,9 +333,15 @@ func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWork
 		var actionResult artifact.ActivityResult
 		childErr := child.Future.Get(ctx, &actionResult)
 		if childErr != nil {
+			if err := completeScheduledActionRecord(stateCtx, child.Item.ID, false, "", childErr.Error()); err != nil {
+				return err
+			}
 			return setBatchWorkItemStatus(stateCtx, child.Item.ID, schedulerFailureStatus(child.Item), child.WorkflowID, childErr.Error(), false)
 		}
 		if !actionResult.Success {
+			if err := completeScheduledActionRecord(stateCtx, child.Item.ID, false, "", actionResult.Error); err != nil {
+				return err
+			}
 			return setBatchWorkItemStatus(stateCtx, child.Item.ID, schedulerFailureStatus(child.Item), child.WorkflowID, actionResult.Error, false)
 		}
 		if shouldReplanAfterAction(child.Item.Type) {
@@ -338,8 +349,71 @@ func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWork
 				return err
 			}
 		}
+		if err := completeScheduledActionRecord(stateCtx, child.Item.ID, true, "", ""); err != nil {
+			return err
+		}
 		return setBatchWorkItemStatus(stateCtx, child.Item.ID, "completed", child.WorkflowID, "", false)
 	})
+}
+
+func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) (bool, error) {
+	action := scheduledPlannerAction(item, itemInput)
+	action.Status = "running"
+	var claimed bool
+	err := workflow.ExecuteActivity(ctx, planner.ClaimActionActivityName, action).Get(ctx, &claimed)
+	return claimed, err
+}
+
+func skipScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, reason string) error {
+	claimed, err := claimScheduledActionRecord(ctx, item, itemInput, "")
+	if err != nil || !claimed {
+		return err
+	}
+	return completeScheduledActionRecord(ctx, item.ID, false, "skipped", reason)
+}
+
+func completeScheduledActionRecord(ctx workflow.Context, actionID string, success bool, status, errorMessage string) error {
+	return workflow.ExecuteActivity(ctx, planner.CompleteActionActivityName, planner.ActionCompletion{
+		ID:      actionID,
+		Success: success,
+		Status:  status,
+		Error:   errorMessage,
+	}).Get(ctx, nil)
+}
+
+func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput) planner.Action {
+	input := copyActionInput(itemInput.ActionInput)
+	plannerMeta, _ := input["_planner"].(map[string]interface{})
+	if plannerMeta == nil {
+		plannerMeta = map[string]interface{}{}
+		input["_planner"] = plannerMeta
+	}
+	if itemInput.DedupKey != "" {
+		plannerMeta["dedup_key"] = itemInput.DedupKey
+	}
+	if itemInput.Risk != "" {
+		plannerMeta["risk"] = itemInput.Risk
+	}
+	if itemInput.Cost > 0 {
+		plannerMeta["cost"] = itemInput.Cost
+	}
+	return planner.Action{
+		ID:         item.ID,
+		CampaignID: item.CampaignID,
+		Target:     item.Target,
+		Artifact:   item.Artifact,
+		Input:      input,
+		Priority:   item.Priority,
+		Reason:     itemInput.Reason,
+		Status:     item.Status,
+		Risk:       itemInput.Risk,
+		Cost:       itemInput.Cost,
+		DedupKey:   itemInput.DedupKey,
+	}
+}
+
+func actionChildWorkflowID(batchID, itemType, target, itemID string, attempts int) string {
+	return fmt.Sprintf("%s-%s-%s-%s-%d", batchID, itemType, safeWorkflowIDPart(target), itemID, attempts)
 }
 
 func evaluateActionWorkItemCondition(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput) (bool, string, error) {
@@ -377,7 +451,7 @@ func scheduleWorkItemPhase(ctx, stateCtx workflow.Context, input SchedulerWorkfl
 		}
 
 		running := make([]schedulerChild, 0, maxConcurrency)
-		for len(running) < maxConcurrency {
+		for len(running) < maxConcurrency && processed < input.ContinueAfter {
 			item, err := claimScheduledWorkItem(stateCtx, input, itemType)
 			if err != nil {
 				return processed, false, err
@@ -396,9 +470,6 @@ func scheduleWorkItemPhase(ctx, stateCtx workflow.Context, input SchedulerWorkfl
 			running = append(running, child)
 		}
 		if len(running) == 0 {
-			if processed > 0 {
-				continue
-			}
 			return processed, false, nil
 		}
 
@@ -886,6 +957,7 @@ func actionWorkItemInputFromDAGNode(node planner.DAGPlanNode, target string, act
 		Reason:        node.Reason,
 		Risk:          node.Risk,
 		Cost:          node.Cost,
+		DedupKey:      node.DedupKey,
 		RunIf:         node.RunIf,
 		Iteration:     iteration,
 		MaxIterations: maxIterations,

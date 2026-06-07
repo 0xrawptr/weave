@@ -71,6 +71,7 @@ type ArtifactsConfig struct {
 	Gogo    ArtifactOpts `yaml:"gogo"`
 	Spray   ArtifactOpts `yaml:"spray"`
 	Fingers ArtifactOpts `yaml:"fingers"`
+	DNSX    ArtifactOpts `yaml:"dnsx"`
 	Neutron ArtifactOpts `yaml:"neutron"`
 	Zombie  ArtifactOpts `yaml:"zombie"`
 }
@@ -190,6 +191,11 @@ func (c *Config) setWorkerDefaults() {
 			WorkerStopTimeout:                30 * time.Second,
 		},
 		"cdncheck": {
+			MaxConcurrentActivityTasks:       8,
+			MaxConcurrentActivityTaskPollers: 2,
+			WorkerStopTimeout:                30 * time.Second,
+		},
+		"dnsx": {
 			MaxConcurrentActivityTasks:       8,
 			MaxConcurrentActivityTaskPollers: 2,
 			WorkerStopTimeout:                30 * time.Second,

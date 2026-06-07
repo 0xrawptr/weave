@@ -18,8 +18,8 @@ func TestSprayExtractor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract failed: %v", err)
 	}
-	if len(result.Entities) != 2 {
-		t.Fatalf("expected 2 URL entities, got %d", len(result.Entities))
+	if len(result.Entities) != 1 {
+		t.Fatalf("expected 1 actionable URL entity, got %d", len(result.Entities))
 	}
 	if !hasEntityType(result.Entities, "url") {
 		t.Fatalf("expected url entity, got %#v", result.Entities)
@@ -32,8 +32,8 @@ func TestSprayExtractor(t *testing.T) {
 		t.Fatalf("expected admin URL candidate status, got %#v", admin)
 	}
 	missing := findEntity(result.Entities, "url", "https://example.com/missing")
-	if missing == nil || missing.Status != "noise" {
-		t.Fatalf("expected missing URL to be noise, got %#v", missing)
+	if missing != nil {
+		t.Fatalf("expected missing URL noise to be dropped, got %#v", missing)
 	}
 }
 
@@ -72,10 +72,8 @@ func TestSprayExtractorSimilarResponsesBecomeNoise(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract failed: %v", err)
 	}
-	for _, entity := range result.Entities {
-		if entity.Status != "noise" {
-			t.Fatalf("expected similar response cluster to be noise, got %#v", entity)
-		}
+	if len(result.Entities) != 0 {
+		t.Fatalf("expected similar response noise to be dropped, got %#v", result.Entities)
 	}
 }
 
@@ -92,11 +90,8 @@ func TestSprayExtractorUsesSDKInvalidSignal(t *testing.T) {
 		t.Fatalf("Extract failed: %v", err)
 	}
 	entity := findEntity(result.Entities, "url", "https://example.com/hidden")
-	if entity == nil || entity.Status != "noise" {
-		t.Fatalf("expected SDK invalid result to be noise, got %#v", entity)
-	}
-	if entity.Quality == nil || !containsString(entity.Quality.Reasons, "sdk_invalid") || !containsString(entity.Quality.Reasons, "sdk_reason:baseline filtered") {
-		t.Fatalf("expected SDK quality reasons, got %#v", entity)
+	if entity != nil {
+		t.Fatalf("expected SDK invalid noise to be dropped, got %#v", entity)
 	}
 }
 
@@ -112,11 +107,8 @@ func TestSprayExtractorUsesSDKFuzzySignal(t *testing.T) {
 		t.Fatalf("Extract failed: %v", err)
 	}
 	entity := findEntity(result.Entities, "url", "https://example.com/fuzzy")
-	if entity == nil || entity.Status != "noise" {
-		t.Fatalf("expected SDK fuzzy result to be noise, got %#v", entity)
-	}
-	if entity.Quality == nil || !containsString(entity.Quality.Reasons, "sdk_fuzzy") {
-		t.Fatalf("expected SDK fuzzy reason, got %#v", entity)
+	if entity != nil {
+		t.Fatalf("expected SDK fuzzy noise to be dropped, got %#v", entity)
 	}
 }
 
@@ -159,6 +151,32 @@ func TestCdncheckExtractor(t *testing.T) {
 	}
 	if !hasRelationType(result.Relations, RelProtectedBy) {
 		t.Fatalf("expected %s relation, got %#v", RelProtectedBy, result.Relations)
+	}
+}
+
+func TestDNSXExtractor(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"host":  "example.com",
+				"a":     []string{"1.1.1.1"},
+				"aaaa":  []string{"2606:4700:4700::1111"},
+				"cname": []string{"edge.example.net"},
+				"ns":    []string{"ns1.example.com"},
+				"txt":   []string{"v=spf1 -all"},
+			},
+		},
+		"total": 1,
+	})
+	result, err := (&DNSXExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEntityType(result.Entities, "domain") || !hasEntityType(result.Entities, "ip") || !hasEntityType(result.Entities, "dns_record") {
+		t.Fatalf("expected domain, ip and dns_record entities, got %#v", result.Entities)
+	}
+	if !hasRelationType(result.Relations, RelResolvesTo) || !hasRelationType(result.Relations, RelRelatesTo) {
+		t.Fatalf("expected DNS relations, got %#v", result.Relations)
 	}
 }
 

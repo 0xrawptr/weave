@@ -44,6 +44,13 @@ func (r *Repository) CountWorkItemsByStatus(ctx context.Context, campaignID, bat
 	return r.Postgres.CountWorkItemsByStatus(ctx, campaignID, batchID, itemType, artifactName)
 }
 
+func (r *Repository) GetWorkItemProgressSummary(ctx context.Context, filter WorkItemFilter) (WorkItemProgressSummary, error) {
+	if r == nil || r.Postgres == nil {
+		return WorkItemProgressSummary{ByStatus: map[string]int{}}, nil
+	}
+	return r.Postgres.GetWorkItemProgressSummary(ctx, filter)
+}
+
 func (r *Repository) RetryWorkItems(ctx context.Context, request WorkItemRetryRequest) (WorkItemBulkResult, error) {
 	if r == nil || r.Postgres == nil {
 		return WorkItemBulkResult{}, nil

@@ -15,3 +15,10 @@ func (r *Repository) GetArtifactStats(ctx context.Context, campaignID, workflowI
 	}
 	return r.Postgres.QueryArtifactStats(ctx, campaignID, workflowID, artifactName, target, limit, offset)
 }
+
+func (r *Repository) GetArtifactStatSummary(ctx context.Context, campaignID, workflowID, artifactName, target string) ([]ArtifactStatSummary, error) {
+	if r == nil || r.Postgres == nil {
+		return nil, nil
+	}
+	return r.Postgres.QueryArtifactStatSummary(ctx, campaignID, workflowID, artifactName, target)
+}

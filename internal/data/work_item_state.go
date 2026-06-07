@@ -35,6 +35,7 @@ func CanTransitionWorkItemStatus(from, to string) bool {
 			to == WorkItemStatusFailed ||
 			to == WorkItemStatusRetryWaiting ||
 			to == WorkItemStatusCancelled ||
+			to == WorkItemStatusSkipped ||
 			to == WorkItemStatusDead
 	case WorkItemStatusFailed:
 		return to == WorkItemStatusRetryWaiting ||

@@ -201,6 +201,31 @@ func TestPlanFromStatePrioritizesHighValueSprayURLsForNuclei(t *testing.T) {
 	}
 }
 
+func TestPlanFromStateUsesHighValueURLNucleiFallback(t *testing.T) {
+	actions := PlanFromState(State{
+		Target:        "example.com",
+		BaseURLs:      []string{"https://example.com"},
+		SprayURLs:     []string{"https://example.com/actuator/env"},
+		HighValueURLs: []string{"https://example.com/actuator/env"},
+		URLs:          []string{"https://example.com", "https://example.com/actuator/env"},
+	})
+	nuclei := findAction(actions, "nuclei")
+	if nuclei == nil {
+		t.Fatalf("missing high-value URL nuclei fallback: %#v", actions)
+	}
+	targets, ok := nuclei.Input["targets"].([]string)
+	if !ok || len(targets) != 1 || targets[0] != "https://example.com/actuator/env" {
+		t.Fatalf("expected high-value URL target, got %#v", nuclei.Input)
+	}
+	tags, ok := nuclei.Input["tags"].([]string)
+	if !ok || len(tags) == 0 {
+		t.Fatalf("expected fallback tag filter, got %#v", nuclei.Input)
+	}
+	if nuclei.DedupKey == "" {
+		t.Fatalf("expected fallback dedup key")
+	}
+}
+
 func TestPlanFromStateScoresPreciseTemplateAboveBroadTags(t *testing.T) {
 	precise := PlanFromState(State{
 		Target:       "example.com",
@@ -345,6 +370,9 @@ func TestPlanDAGFromActionsOrdersAndLinksStages(t *testing.T) {
 	sprayID := plan.Nodes[1].ID
 	if !contains(plan.Nodes[1].DependsOn, fingersID) {
 		t.Fatalf("expected spray to depend on fingers, got %#v", plan.Nodes[1].DependsOn)
+	}
+	if plan.Nodes[1].RunIf != nil {
+		t.Fatalf("full spray should not be gated by run_if, got %#v", plan.Nodes[1].RunIf)
 	}
 	if !contains(plan.Nodes[2].DependsOn, fingersID) || !contains(plan.Nodes[2].DependsOn, sprayID) {
 		t.Fatalf("expected nuclei to depend on fingers and spray, got %#v", plan.Nodes[2].DependsOn)

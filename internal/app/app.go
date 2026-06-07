@@ -24,6 +24,7 @@ type Pipelines struct {
 	Spray    *etl.Pipeline
 	Zombie   *etl.Pipeline
 	Cdncheck *etl.Pipeline
+	DNSX     *etl.Pipeline
 	Nuclei   *etl.Pipeline
 }
 
@@ -67,6 +68,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 			Spray:    etl.NewPipeline(&etl.SprayExtractor{}, loader),
 			Zombie:   etl.NewPipeline(&etl.ZombieExtractor{}, loader),
 			Cdncheck: etl.NewPipeline(&etl.CdncheckExtractor{}, loader),
+			DNSX:     etl.NewPipeline(&etl.DNSXExtractor{}, loader),
 			Nuclei:   etl.NewPipeline(&etl.NucleiExtractor{}, loader),
 		},
 	}

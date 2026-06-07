@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/0xrawptr/weave/internal/data"
@@ -97,6 +98,7 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 		Input:    map[string]any{"base_urls": []string{"http://10.0.0.1:8080"}, "wordlist_mode": "full"},
 		Priority: 90,
 		Reason:   "expand attack surface",
+		DedupKey: "dedup-spray-full",
 	}
 
 	item := actionWorkItemFromDAGNode(input, parent, node, 2, 3)
@@ -113,6 +115,15 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 	}
 	if parsed.ActionInput["wordlist_mode"] != "full" {
 		t.Fatalf("missing action input: %#v", parsed.ActionInput)
+	}
+	if parsed.DedupKey != "dedup-spray-full" {
+		t.Fatalf("missing action dedup key: %#v", parsed)
+	}
+	action := scheduledPlannerAction(item, parsed)
+	persistInput := action.PersistInput()
+	meta, ok := persistInput["_planner"].(map[string]interface{})
+	if !ok || meta["dedup_key"] != "dedup-spray-full" {
+		t.Fatalf("expected persisted planner dedup key, got %#v", persistInput)
 	}
 }
 
@@ -158,6 +169,18 @@ func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 		if len(words) == 0 || len(words) > 2 {
 			t.Fatalf("word shard size = %d, want 1..2: %#v", len(words), parsed.ActionInput)
 		}
+	}
+}
+
+func TestActionChildWorkflowIDIncludesWorkItemID(t *testing.T) {
+	target := "202.205.161.0/24"
+	first := actionChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1)
+	second := actionChildWorkflowID("batch-1", "spray_shard", target, "item-b", 1)
+	if first == second {
+		t.Fatalf("child workflow IDs should be unique per work item: %q", first)
+	}
+	if !strings.Contains(first, "item-a") || !strings.Contains(second, "item-b") {
+		t.Fatalf("child workflow IDs should include work item IDs: first=%q second=%q", first, second)
 	}
 }
 

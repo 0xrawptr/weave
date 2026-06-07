@@ -95,7 +95,7 @@ func (r *Repository) GetDiscoveredURLs(ctx context.Context, scanTarget string) (
 	}
 	out := make([]Asset, 0, len(assets))
 	for _, a := range assets {
-		if a.Source == "spray" && isHTTPURL(a.Value) && plannerVisibleAssetStatus(a.Status) {
+		if a.Source == "spray" && isHTTPURL(a.Value) && plannerConsumableURLStatus(a.Status) {
 			out = append(out, a)
 		}
 	}
@@ -109,6 +109,13 @@ func plannerVisibleAssetStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func plannerConsumableURLStatus(status string) bool {
+	if plannerVisibleAssetStatus(status) {
+		return true
+	}
+	return status == AssetStatusQueued
 }
 
 func ValidAssetStatus(status string) bool {

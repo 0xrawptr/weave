@@ -49,6 +49,10 @@ temporal:
         max_concurrent_activity_tasks: 8
         max_concurrent_activity_task_pollers: 2
         worker_stop_timeout: 30s
+      dnsx:
+        max_concurrent_activity_tasks: 8
+        max_concurrent_activity_task_pollers: 2
+        worker_stop_timeout: 30s
 
 postgres:
   host: localhost
@@ -92,6 +96,8 @@ artifacts:
     capacity: 300
     timeout: 120s
   fingers:
+    timeout: 60s
+  dnsx:
     timeout: 60s
   neutron:
     capacity: 30

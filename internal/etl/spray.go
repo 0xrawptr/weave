@@ -84,6 +84,9 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 			quality.Noise = true
 			quality.Reasons = append(quality.Reasons, "similar_response_cluster")
 		}
+		if !persistSprayURL(quality) {
+			continue
+		}
 		urlID := data.GenerateID("url", scanTarget, candidate.canonical)
 		addEntity(result, entitySet, Entity{
 			ID: urlID, Type: "url", Value: candidate.canonical,
@@ -96,6 +99,10 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 		})
 	}
 	return result, nil
+}
+
+func persistSprayURL(quality Quality) bool {
+	return !quality.Noise
 }
 
 func applySpraySDKQuality(quality *Quality, valid *bool, fuzzy bool, reason string) {

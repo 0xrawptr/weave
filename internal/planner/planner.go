@@ -82,6 +82,7 @@ type DAGPlanNode struct {
 	Risk       string            `json:"risk,omitempty"`
 	Cost       int               `json:"cost,omitempty"`
 	Score      int               `json:"score,omitempty"`
+	DedupKey   string            `json:"dedup_key,omitempty"`
 	Evidence   []Evidence        `json:"evidence,omitempty"`
 }
 
@@ -282,6 +283,22 @@ func PlanFromState(state State) []Action {
 			Cost:       60,
 			DedupKey:   actionDedupKey(state.Target, "nuclei", "tags", joinKey(filterTags)),
 		})
+	} else if len(highValueURLs) > 0 {
+		fallbackTags := []string{"exposure", "panel", "misconfig", "default-login", "discovery"}
+		actions = append(actions, Action{
+			ID:         data.GenerateID("action", state.Target, "nuclei", "high-value-url-fallback", joinKey(highValueURLs)),
+			CampaignID: state.CampaignID,
+			Target:     state.Target,
+			Artifact:   "nuclei",
+			Input:      map[string]interface{}{"targets": highValueURLs, "tags": fallbackTags},
+			Priority:   45,
+			Reason:     "spray discovered high-value URLs but no precise template evidence exists; using lightweight nuclei tag fallback",
+			Status:     "candidate",
+			Evidence:   stringEvidence("url", highValueURLs, 60),
+			Risk:       "medium",
+			Cost:       55,
+			DedupKey:   actionDedupKey(state.Target, "nuclei", "high-value-url-fallback", joinKey(highValueURLs)),
+		})
 	}
 
 	return finalizeActions(actions, state.Actions)
@@ -335,6 +352,7 @@ func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
 			Risk:       action.Risk,
 			Cost:       action.Cost,
 			Score:      action.Score,
+			DedupKey:   action.DedupKey,
 			Evidence:   action.Evidence,
 		}
 		nodes = append(nodes, node)
@@ -410,14 +428,7 @@ func actionRunIf(action Action) *ConditionRequest {
 			},
 		}
 	case "spray":
-		return &ConditionRequest{
-			Target:     action.Target,
-			CampaignID: action.CampaignID,
-			Any: []AssetCondition{
-				{Type: "service", MinCount: 1},
-				{Type: "url", MinCount: 1},
-			},
-		}
+		return nil
 	case "nuclei", "neutron":
 		return &ConditionRequest{
 			Target:     action.Target,
@@ -427,6 +438,9 @@ func actionRunIf(action Action) *ConditionRequest {
 				{Type: "tag", MinCount: 1},
 				{Type: "fingerprint", MinCount: 1},
 				{Type: "cve", MinCount: 1},
+				{Type: "url", Source: "spray", Status: "candidate", MinCount: 1},
+				{Type: "url", Source: "spray", Status: "observed", MinCount: 1},
+				{Type: "url", Source: "spray", Status: "interesting", MinCount: 1},
 			},
 		}
 	default:
