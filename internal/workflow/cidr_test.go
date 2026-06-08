@@ -119,7 +119,10 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 	if parsed.DedupKey != "dedup-spray-full" {
 		t.Fatalf("missing action dedup key: %#v", parsed)
 	}
-	action := scheduledPlannerAction(item, parsed)
+	action := scheduledPlannerAction(item, parsed, "child-workflow-1")
+	if action.WorkflowID != "child-workflow-1" {
+		t.Fatalf("missing action workflow id: %#v", action)
+	}
 	persistInput := action.PersistInput()
 	meta, ok := persistInput["_planner"].(map[string]interface{})
 	if !ok || meta["dedup_key"] != "dedup-spray-full" {
@@ -181,6 +184,26 @@ func TestActionChildWorkflowIDIncludesWorkItemID(t *testing.T) {
 	}
 	if !strings.Contains(first, "item-a") || !strings.Contains(second, "item-b") {
 		t.Fatalf("child workflow IDs should include work item IDs: first=%q second=%q", first, second)
+	}
+}
+
+func TestChunkWorkItems(t *testing.T) {
+	items := []data.WorkItem{
+		{ID: "a"},
+		{ID: "b"},
+		{ID: "c"},
+		{ID: "d"},
+		{ID: "e"},
+	}
+	chunks := chunkWorkItems(items, 2)
+	if len(chunks) != 3 {
+		t.Fatalf("len(chunks) = %d, want 3: %#v", len(chunks), chunks)
+	}
+	if len(chunks[0]) != 2 || len(chunks[1]) != 2 || len(chunks[2]) != 1 {
+		t.Fatalf("unexpected chunk sizes: %#v", chunks)
+	}
+	if chunks[2][0].ID != "e" {
+		t.Fatalf("unexpected final chunk: %#v", chunks[2])
 	}
 }
 

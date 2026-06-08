@@ -53,11 +53,16 @@ func (r *Repository) UpdateAssetStatus(ctx context.Context, id, status string) e
 
 // GetWebURLs returns the web service URLs discovered by gogo for a scan target.
 func (r *Repository) GetWebURLs(ctx context.Context, scanTarget string) ([]string, error) {
+	return r.GetWebURLsInCampaign(ctx, scanTarget, "")
+}
+
+// GetWebURLsInCampaign returns web service URLs scoped to a campaign when provided.
+func (r *Repository) GetWebURLsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
 		return nil, nil
 	}
 	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssets(ctx, targetID, "service", 100000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "service", campaignID, "", 100000, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -85,11 +90,16 @@ func (r *Repository) CountAssetsInCampaign(ctx context.Context, scanTarget, camp
 // GetDiscoveredURLs returns HTTP URLs discovered by URL-expansion artifacts
 // such as spray. These URLs can be fed back into planner iterations.
 func (r *Repository) GetDiscoveredURLs(ctx context.Context, scanTarget string) ([]Asset, error) {
+	return r.GetDiscoveredURLsInCampaign(ctx, scanTarget, "")
+}
+
+// GetDiscoveredURLsInCampaign returns spray-discovered URLs scoped to a campaign when provided.
+func (r *Repository) GetDiscoveredURLsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]Asset, error) {
 	if r.Postgres == nil {
 		return nil, nil
 	}
 	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssets(ctx, targetID, "url", 100000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "url", campaignID, "", 100000, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +150,15 @@ func isHTTPURL(value string) bool {
 
 // GetFingerprints returns the unique fingerprint names discovered by gogo for a target.
 func (r *Repository) GetFingerprints(ctx context.Context, scanTarget string) ([]string, error) {
+	return r.GetFingerprintsInCampaign(ctx, scanTarget, "")
+}
+
+func (r *Repository) GetFingerprintsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
 		return nil, nil
 	}
 	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssets(ctx, targetID, "fingerprint", 10000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "fingerprint", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -162,11 +176,15 @@ func (r *Repository) GetFingerprints(ctx context.Context, scanTarget string) ([]
 // GetTemplateIDs returns template IDs associated with fingerprints for a target.
 // These are populated by the ETL enrichment phase.
 func (r *Repository) GetTemplateIDs(ctx context.Context, scanTarget string) ([]string, error) {
+	return r.GetTemplateIDsInCampaign(ctx, scanTarget, "")
+}
+
+func (r *Repository) GetTemplateIDsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
 		return nil, nil
 	}
 	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssets(ctx, targetID, "template", 10000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "template", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -183,11 +201,15 @@ func (r *Repository) GetTemplateIDs(ctx context.Context, scanTarget string) ([]s
 
 // GetTags returns normalized enrichment tags associated with a target.
 func (r *Repository) GetTags(ctx context.Context, scanTarget string) ([]string, error) {
+	return r.GetTagsInCampaign(ctx, scanTarget, "")
+}
+
+func (r *Repository) GetTagsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
 		return nil, nil
 	}
 	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssets(ctx, targetID, "tag", 10000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "tag", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -204,11 +226,15 @@ func (r *Repository) GetTags(ctx context.Context, scanTarget string) ([]string, 
 
 // GetCVEAssets returns CVE candidate/confirmed assets for a target.
 func (r *Repository) GetCVEAssets(ctx context.Context, scanTarget string) ([]Asset, error) {
+	return r.GetCVEAssetsInCampaign(ctx, scanTarget, "")
+}
+
+func (r *Repository) GetCVEAssetsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]Asset, error) {
 	if r.Postgres == nil {
 		return nil, nil
 	}
 	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssets(ctx, targetID, "cve", 10000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "cve", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +251,13 @@ func (r *Repository) GetCVEAssets(ctx context.Context, scanTarget string) ([]Ass
 // preferred source because it preserves relationships; Postgres is a fallback
 // for local setups that only have normalized assets.
 func (r *Repository) GetKnowledgeEvidence(ctx context.Context, scanTarget string) ([]EvidenceRecord, error) {
+	return r.GetKnowledgeEvidenceInCampaign(ctx, scanTarget, "")
+}
+
+func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTarget, campaignID string) ([]EvidenceRecord, error) {
 	targetID := generateID("target", scanTarget)
 	if r.Neo4j != nil {
-		evidence, err := r.Neo4j.QueryKnowledgeEvidence(ctx, targetID)
+		evidence, err := r.Neo4j.QueryKnowledgeEvidence(ctx, targetID, campaignID)
 		if err == nil && len(evidence) > 0 {
 			return dedupeEvidence(filterPlannerEvidence(evidence)), nil
 		}
@@ -237,7 +267,7 @@ func (r *Repository) GetKnowledgeEvidence(ctx context.Context, scanTarget string
 	}
 	var evidence []EvidenceRecord
 	for _, assetType := range []string{"product", "cve", "template", "intel", "cpe", "cwe"} {
-		assets, err := r.Postgres.QueryAssets(ctx, targetID, assetType, 10000, 0)
+		assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, assetType, campaignID, "", 10000, 0)
 		if err != nil {
 			return nil, err
 		}

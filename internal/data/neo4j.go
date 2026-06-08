@@ -57,6 +57,12 @@ func (n *Neo4jStore) CreateAssetNode(ctx context.Context, asset *Asset) error {
 			 a.value = $value,
 			 a.source = $source,
 			 a.target_id = $targetID,
+			 a.campaign_id = CASE WHEN $campaignID <> '' THEN $campaignID ELSE coalesce(a.campaign_id, '') END,
+			 a.campaign_ids = CASE
+				WHEN $campaignID = '' THEN coalesce(a.campaign_ids, [])
+				WHEN $campaignID IN coalesce(a.campaign_ids, []) THEN coalesce(a.campaign_ids, [])
+				ELSE coalesce(a.campaign_ids, []) + [$campaignID]
+			 END,
 			 a.confidence = $confidence,
 			 a.severity = $severity,
 			 a.priority = $priority,
@@ -67,6 +73,7 @@ func (n *Neo4jStore) CreateAssetNode(ctx context.Context, asset *Asset) error {
 			"value":      asset.Value,
 			"source":     asset.Source,
 			"targetID":   asset.TargetID,
+			"campaignID": asset.CampaignID,
 			"confidence": asset.Confidence,
 			"severity":   asset.Severity,
 			"priority":   asset.Priority,
@@ -138,15 +145,17 @@ func (n *Neo4jStore) QueryGraph(ctx context.Context, assetID string, depth int) 
 }
 
 // QueryKnowledgeEvidence returns normalized knowledge nodes connected to a target.
-func (n *Neo4jStore) QueryKnowledgeEvidence(ctx context.Context, targetID string) ([]EvidenceRecord, error) {
+func (n *Neo4jStore) QueryKnowledgeEvidence(ctx context.Context, targetID, campaignID string) ([]EvidenceRecord, error) {
 	session := n.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 
 	result, err := session.Run(ctx,
 		`MATCH (seed:Asset {target_id: $targetID})
 		 WHERE seed.type IN ['fingerprint', 'product', 'cve']
+		   AND ($campaignID = '' OR seed.campaign_id = $campaignID OR $campaignID IN coalesce(seed.campaign_ids, []))
 		 MATCH p = shortestPath((seed)-[*0..4]-(n:Asset {target_id: $targetID}))
 		 WHERE n.type IN ['fingerprint', 'product', 'cve', 'template', 'intel', 'cpe', 'cwe']
+		   AND ($campaignID = '' OR n.campaign_id = $campaignID OR $campaignID IN coalesce(n.campaign_ids, []))
 		 RETURN DISTINCT n.type AS type,
 			 n.value AS value,
 			 n.source AS source,
@@ -156,7 +165,7 @@ func (n *Neo4jStore) QueryKnowledgeEvidence(ctx context.Context, targetID string
 			 n.status AS status,
 			 [node IN nodes(p) | {type: node.type, value: node.value}] AS path_nodes,
 			 [rel IN relationships(p) | type(rel)] AS path_rels`,
-		map[string]interface{}{"targetID": targetID})
+		map[string]interface{}{"targetID": targetID, "campaignID": campaignID})
 	if err != nil {
 		return nil, err
 	}

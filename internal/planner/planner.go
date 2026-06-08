@@ -14,6 +14,7 @@ import (
 type Action struct {
 	ID         string                 `json:"id"`
 	CampaignID string                 `json:"campaign_id,omitempty"`
+	WorkflowID string                 `json:"workflow_id,omitempty"`
 	Target     string                 `json:"target"`
 	Artifact   string                 `json:"artifact"`
 	Input      map[string]interface{} `json:"input"`
@@ -102,23 +103,23 @@ func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignI
 		return nil, nil
 	}
 
-	urls, err := p.repo.GetWebURLs(ctx, target)
+	urls, err := p.repo.GetWebURLsInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
-	templateIDs, err := p.repo.GetTemplateIDs(ctx, target)
+	templateIDs, err := p.repo.GetTemplateIDsInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
-	tags, err := p.repo.GetTags(ctx, target)
+	tags, err := p.repo.GetTagsInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
-	fingerprints, err := p.repo.GetFingerprints(ctx, target)
+	fingerprints, err := p.repo.GetFingerprintsInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
-	discoveredURLs, err := p.repo.GetDiscoveredURLs(ctx, target)
+	discoveredURLs, err := p.repo.GetDiscoveredURLsInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignI
 			highValueURLs = append(highValueURLs, asset.Value)
 		}
 	}
-	cves, err := p.repo.GetCVEAssets(ctx, target)
+	cves, err := p.repo.GetCVEAssetsInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +139,7 @@ func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignI
 	if err != nil {
 		return nil, err
 	}
-	evidence, err := p.repo.GetKnowledgeEvidence(ctx, target)
+	evidence, err := p.repo.GetKnowledgeEvidenceInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,14 +195,14 @@ func PlanFromState(state State) []Action {
 			CampaignID: state.CampaignID,
 			Target:     state.Target,
 			Artifact:   "gogo",
-			Input:      map[string]interface{}{"ip": state.Target, "ports": "top1000"},
+			Input:      map[string]interface{}{"ip": state.Target, "ports": "top3"},
 			Priority:   40,
 			Reason:     "no web service URLs are available yet",
 			Status:     "candidate",
 			Evidence:   []Evidence{{Type: "target", Value: state.Target}},
 			Risk:       "low",
 			Cost:       40,
-			DedupKey:   actionDedupKey(state.Target, "gogo", "top1000"),
+			DedupKey:   actionDedupKey(state.Target, "gogo", "top3"),
 		})
 		return finalizeActions(actions, state.Actions)
 	}

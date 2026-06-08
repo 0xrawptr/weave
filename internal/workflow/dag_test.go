@@ -4,7 +4,7 @@ import "testing"
 
 func TestNormalizeDAGNodes(t *testing.T) {
 	nodes, err := normalizeDAGNodes("example.com", []DAGNode{
-		{Artifact: "gogo", Input: map[string]interface{}{"ports": "top1000"}},
+		{Artifact: "gogo", Input: map[string]interface{}{"ports": "top3"}},
 	})
 	if err != nil {
 		t.Fatal(err)

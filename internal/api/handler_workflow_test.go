@@ -11,14 +11,14 @@ func TestResolveTarget(t *testing.T) {
 		wantPorts  string
 	}{
 		{"ip with port", "1.1.1.1:789", "ip", "1.1.1.1", "789"},
-		{"plain ip", "1.1.1.1", "ip", "1.1.1.1", "top1000"},
-		{"cidr", "1.1.1.0/24", "ip", "1.1.1.0/24", "top1000"},
+		{"plain ip", "1.1.1.1", "ip", "1.1.1.1", "top3"},
+		{"cidr", "1.1.1.0/24", "ip", "1.1.1.0/24", "top3"},
 		{"domain", "baidu.com", "domain", "baidu.com", ""},
 		{"domain with subdomain", "www.baidu.com", "domain", "www.baidu.com", ""},
 		{"https url", "https://example.com", "domain", "https://example.com", ""},
 		{"http url", "http://example.com", "domain", "http://example.com", ""},
 		{"url with path", "example.com/admin", "", "example.com/admin", ""},
-		{"ipv6", "::1", "ip", "::1", "top1000"},
+		{"ipv6", "::1", "ip", "::1", "top3"},
 		{"host with port but no protocol", "example.com:443", "ip", "example.com", "443"},
 		{"empty", "", "", "", ""},
 	}

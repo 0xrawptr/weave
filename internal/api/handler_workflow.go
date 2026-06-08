@@ -41,14 +41,14 @@ func resolveTarget(raw string) (wfType, target, ports string) {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") && strings.Contains(raw, "/") {
 		afterSlash := raw[strings.LastIndex(raw, "/")+1:]
 		if isNumeric(afterSlash) {
-			return "ip", raw, "top1000"
+			return "ip", raw, "top3"
 		}
 		return "", raw, "" // URL path, not CIDR
 	}
 
 	// Plain IP — e.g. "1.1.1.1"
 	if net.ParseIP(raw) != nil {
-		return "ip", raw, "top1000"
+		return "ip", raw, "top3"
 	}
 
 	// Domain — may have http/https prefix.
@@ -85,7 +85,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 	// Auto-detect workflow type from target format
 	detectedType := req.Type
 	detectedTarget := req.Target
-	detectedPorts := "top1000"
+	detectedPorts := "top3"
 	if req.Type == "auto" || req.Type == "" {
 		detectedType, detectedTarget, detectedPorts = resolveTarget(req.Target)
 		if detectedType == "" {
@@ -269,7 +269,7 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "targets are required for batch_portscan workflow"})
 			return
 		}
-		ports := "top1000"
+		ports := "top3"
 		if p, ok := req.Input["ports"].(string); ok && p != "" {
 			ports = p
 		}

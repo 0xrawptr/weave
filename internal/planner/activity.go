@@ -16,6 +16,7 @@ const EvaluateConditionActivityName = "evaluate_condition"
 const UpsertBatchRunActivityName = "upsert_batch_run"
 const UpsertBatchChunkActivityName = "upsert_batch_chunk"
 const UpsertWorkItemActivityName = "upsert_work_item"
+const UpsertWorkItemsActivityName = "upsert_work_items"
 const ClaimWorkItemActivityName = "claim_work_item"
 const SetWorkItemStatusActivityName = "set_work_item_status"
 const HeartbeatWorkItemActivityName = "heartbeat_work_item"
@@ -57,6 +58,10 @@ func (a *Activity) ClaimAction(ctx context.Context, action Action) (bool, error)
 	}
 	raw, _ := json.Marshal(action.PersistInput())
 	info := activity.GetInfo(ctx)
+	workflowID := action.WorkflowID
+	if workflowID == "" {
+		workflowID = info.WorkflowExecution.ID
+	}
 	return a.planner.repo.ClaimAction(ctx, data.ActionRecord{
 		ID:         action.ID,
 		CampaignID: action.CampaignID,
@@ -66,7 +71,7 @@ func (a *Activity) ClaimAction(ctx context.Context, action Action) (bool, error)
 		Priority:   action.Priority,
 		Reason:     action.Reason,
 		Status:     "running",
-		WorkflowID: info.WorkflowExecution.ID,
+		WorkflowID: workflowID,
 	})
 }
 
@@ -182,6 +187,13 @@ func (a *Activity) UpsertWorkItem(ctx context.Context, item data.WorkItem) error
 		return nil
 	}
 	return a.planner.repo.UpsertWorkItem(ctx, item)
+}
+
+func (a *Activity) UpsertWorkItems(ctx context.Context, items []data.WorkItem) error {
+	if a == nil || a.planner == nil || a.planner.repo == nil || len(items) == 0 {
+		return nil
+	}
+	return a.planner.repo.UpsertWorkItems(ctx, items)
 }
 
 func (a *Activity) ClaimWorkItem(ctx context.Context, request data.WorkItemClaimRequest) (data.WorkItem, error) {

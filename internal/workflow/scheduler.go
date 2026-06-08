@@ -73,7 +73,7 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 		input.BatchID = workflow.GetInfo(ctx).WorkflowExecution.ID
 	}
 	if input.ContinueAfter <= 0 {
-		input.ContinueAfter = 100
+		input.ContinueAfter = 50
 	}
 	if input.IdleWaitSeconds <= 0 {
 		input.IdleWaitSeconds = 30
@@ -249,15 +249,17 @@ func schedulePlannedDAGFollowUps(ctx, stateCtx workflow.Context, input Scheduler
 		var plan planner.DAGPlan
 		if childErr := child.Future.Get(ctx, &plan); childErr == nil {
 			itemInput := parseSchedulerWorkItemInput(child.Item)
+			items := make([]data.WorkItem, 0, len(plan.Nodes))
 			for _, node := range plan.Nodes {
 				for _, item := range actionWorkItemsFromDAGNode(input, child.Item, node, itemInput.Iteration, itemInput.MaxIterations) {
 					if item.ID == "" {
 						continue
 					}
-					if err := upsertBatchWorkItem(stateCtx, item); err != nil {
-						return err
-					}
+					items = append(items, item)
 				}
+			}
+			if err := upsertBatchWorkItems(stateCtx, items); err != nil {
+				return err
 			}
 		} else {
 			finalStatus = "failed"
@@ -357,7 +359,7 @@ func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWork
 }
 
 func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) (bool, error) {
-	action := scheduledPlannerAction(item, itemInput)
+	action := scheduledPlannerAction(item, itemInput, workflowID)
 	action.Status = "running"
 	var claimed bool
 	err := workflow.ExecuteActivity(ctx, planner.ClaimActionActivityName, action).Get(ctx, &claimed)
@@ -381,7 +383,7 @@ func completeScheduledActionRecord(ctx workflow.Context, actionID string, succes
 	}).Get(ctx, nil)
 }
 
-func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput) planner.Action {
+func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) planner.Action {
 	input := copyActionInput(itemInput.ActionInput)
 	plannerMeta, _ := input["_planner"].(map[string]interface{})
 	if plannerMeta == nil {
@@ -400,6 +402,7 @@ func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput
 	return planner.Action{
 		ID:         item.ID,
 		CampaignID: item.CampaignID,
+		WorkflowID: workflowID,
 		Target:     item.Target,
 		Artifact:   item.Artifact,
 		Input:      input,
@@ -1138,7 +1141,7 @@ func stringFromActionInput(input map[string]interface{}, key string) string {
 
 func normalizeBatchPortScanInput(input BatchPortScanInput) BatchPortScanInput {
 	if input.Ports == "" {
-		input.Ports = "top1000"
+		input.Ports = "top3"
 	}
 	if input.MaxConcurrency <= 0 {
 		input.MaxConcurrency = 4

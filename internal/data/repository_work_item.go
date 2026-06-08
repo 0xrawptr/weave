@@ -9,6 +9,13 @@ func (r *Repository) UpsertWorkItem(ctx context.Context, item WorkItem) error {
 	return r.Postgres.UpsertWorkItem(ctx, item)
 }
 
+func (r *Repository) UpsertWorkItems(ctx context.Context, items []WorkItem) error {
+	if r == nil || r.Postgres == nil || len(items) == 0 {
+		return nil
+	}
+	return r.Postgres.UpsertWorkItems(ctx, items)
+}
+
 func (r *Repository) ClaimWorkItem(ctx context.Context, request WorkItemClaimRequest) (*WorkItem, error) {
 	if r == nil || r.Postgres == nil {
 		return nil, nil

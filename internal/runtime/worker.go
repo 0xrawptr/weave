@@ -69,18 +69,23 @@ func wireGogoStreaming(runtimeApp *app.App) {
 	if err != nil {
 		return
 	}
-	a.(*artifact.GogoArtifact).SetResultHandler(func(ctx context.Context, target string, result *sdktypes.GOGOResult) {
+	a.(*artifact.GogoArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, result *sdktypes.GOGOResult) {
 		raw, _ := json.Marshal(result)
+		workflowID := ""
+		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
+			workflowID = info.WorkflowExecution.ID
+		}
 		_ = repo.SaveRawEvent(ctx, &data.RawEvent{
 			ID:         fmt.Sprintf("gogo-stream-%d", time.Now().UnixNano()),
+			CampaignID: campaignID,
 			Artifact:   "gogo",
 			TargetID:   target,
 			TargetType: targetType(target),
-			WorkflowID: "",
+			WorkflowID: workflowID,
 			Data:       raw,
 		})
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}})
-		if err := runtimeApp.Pipelines.Gogo.Process(ctx, target, wrapped); err != nil {
+		if err := runtimeApp.Pipelines.Gogo.Process(etl.WithCampaignID(ctx, campaignID), target, wrapped); err != nil {
 			log.Printf("WARNING: gogo streaming ETL failed: %v", err)
 		}
 	})
@@ -183,6 +188,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	w.RegisterActivityWithOptions(planActivity.UpsertBatchRun, activity.RegisterOptions{Name: planner.UpsertBatchRunActivityName})
 	w.RegisterActivityWithOptions(planActivity.UpsertBatchChunk, activity.RegisterOptions{Name: planner.UpsertBatchChunkActivityName})
 	w.RegisterActivityWithOptions(planActivity.UpsertWorkItem, activity.RegisterOptions{Name: planner.UpsertWorkItemActivityName})
+	w.RegisterActivityWithOptions(planActivity.UpsertWorkItems, activity.RegisterOptions{Name: planner.UpsertWorkItemsActivityName})
 	w.RegisterActivityWithOptions(planActivity.ClaimWorkItem, activity.RegisterOptions{Name: planner.ClaimWorkItemActivityName})
 	w.RegisterActivityWithOptions(planActivity.SetWorkItemStatus, activity.RegisterOptions{Name: planner.SetWorkItemStatusActivityName})
 	w.RegisterActivityWithOptions(planActivity.HeartbeatWorkItem, activity.RegisterOptions{Name: planner.HeartbeatWorkItemActivityName})
@@ -198,6 +204,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	log.Printf("registered activity: %s", planner.UpsertBatchRunActivityName)
 	log.Printf("registered activity: %s", planner.UpsertBatchChunkActivityName)
 	log.Printf("registered activity: %s", planner.UpsertWorkItemActivityName)
+	log.Printf("registered activity: %s", planner.UpsertWorkItemsActivityName)
 	log.Printf("registered activity: %s", planner.ClaimWorkItemActivityName)
 	log.Printf("registered activity: %s", planner.SetWorkItemStatusActivityName)
 	log.Printf("registered activity: %s", planner.HeartbeatWorkItemActivityName)

@@ -78,6 +78,8 @@ type batchPortScanChunk struct {
 	Chunk  string
 }
 
+const workItemUpsertBatchSize = 25
+
 // BatchPortScanWorkflow expands many IP/CIDR targets into scan chunks and runs
 // gogo-only child workflows with bounded concurrency.
 func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*BatchPortScanResult, error) {
@@ -115,13 +117,15 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 	if err := upsertPortScanBatchRun(stateCtx, parentID, input, result, "running"); err != nil {
 		return result, err
 	}
+	workItems := make([]data.WorkItem, 0, len(chunks))
 	for _, chunk := range chunks {
 		if err := upsertPortScanBatchChunk(stateCtx, parentID, chunk, "", "pending", ""); err != nil {
 			return result, err
 		}
-		if err := upsertBatchWorkItem(stateCtx, portScanChunkWorkItem(parentID, input, chunk, "", "pending", "", chunkPriority(chunk, input.PriorityTargets, input.ChunkPrefix))); err != nil {
-			return result, err
-		}
+		workItems = append(workItems, portScanChunkWorkItem(parentID, input, chunk, "", "pending", "", chunkPriority(chunk, input.PriorityTargets, input.ChunkPrefix)))
+	}
+	if err := upsertBatchWorkItems(stateCtx, workItems); err != nil {
+		return result, err
 	}
 
 	schedulerID := fmt.Sprintf("%s-scheduler", parentID)
@@ -206,6 +210,33 @@ func upsertPortScanBatchChunk(ctx workflow.Context, batchID string, chunk batchP
 
 func upsertBatchWorkItem(ctx workflow.Context, item data.WorkItem) error {
 	return workflow.ExecuteActivity(ctx, planner.UpsertWorkItemActivityName, item).Get(ctx, nil)
+}
+
+func upsertBatchWorkItems(ctx workflow.Context, items []data.WorkItem) error {
+	for _, chunk := range chunkWorkItems(items, workItemUpsertBatchSize) {
+		if err := workflow.ExecuteActivity(ctx, planner.UpsertWorkItemsActivityName, chunk).Get(ctx, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func chunkWorkItems(items []data.WorkItem, size int) [][]data.WorkItem {
+	if len(items) == 0 {
+		return nil
+	}
+	if size <= 0 || size >= len(items) {
+		return [][]data.WorkItem{items}
+	}
+	chunks := make([][]data.WorkItem, 0, (len(items)+size-1)/size)
+	for start := 0; start < len(items); start += size {
+		end := start + size
+		if end > len(items) {
+			end = len(items)
+		}
+		chunks = append(chunks, items[start:end])
+	}
+	return chunks
 }
 
 func setBatchWorkItemStatus(ctx workflow.Context, id, status, workflowID, errorMessage string, incrementAttempt bool) error {

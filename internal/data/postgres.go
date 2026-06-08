@@ -10,8 +10,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type sqlExecutor interface {
+	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
+}
 
 type PostgresConfig struct {
 	Host     string
@@ -961,16 +966,49 @@ func (p *PostgresStore) QueryBatchChunks(ctx context.Context, batchID, status st
 }
 
 func (p *PostgresStore) UpsertWorkItem(ctx context.Context, item WorkItem) error {
+	item, err := normalizeWorkItemForUpsert(item)
+	if err != nil {
+		return err
+	}
+	return upsertWorkItemWith(ctx, p.pool, item)
+}
+
+func (p *PostgresStore) UpsertWorkItems(ctx context.Context, items []WorkItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, item := range items {
+		item, err = normalizeWorkItemForUpsert(item)
+		if err != nil {
+			return err
+		}
+		if err := upsertWorkItemWith(ctx, tx, item); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func normalizeWorkItemForUpsert(item WorkItem) (WorkItem, error) {
 	if item.Status == "" {
 		item.Status = WorkItemStatusPending
 	}
 	if !ValidWorkItemStatus(item.Status) {
-		return fmt.Errorf("invalid work item status: %s", item.Status)
+		return item, fmt.Errorf("invalid work item status: %s", item.Status)
 	}
 	if item.MaxAttempts <= 0 {
 		item.MaxAttempts = 1
 	}
-	_, err := p.pool.Exec(ctx,
+	return item, nil
+}
+
+func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) error {
+	_, err := exec.Exec(ctx,
 		`INSERT INTO work_items (id, campaign_id, batch_id, parent_id, type, target, artifact, queue, input, priority, status, attempts, max_attempts, workflow_id, error, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
 		 ON CONFLICT (id) DO UPDATE SET

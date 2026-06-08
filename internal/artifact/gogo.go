@@ -3,17 +3,21 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	sdkgogo "github.com/chainreactors/sdk/gogo"
 	"github.com/chainreactors/sdk/pkg/types"
+	gogoutils "github.com/chainreactors/utils"
 	"github.com/chainreactors/utils/iutils"
 )
 
 type GogoArtifact struct {
 	engine        *sdkgogo.GogoEngine
 	threads       int
-	resultHandler func(ctx context.Context, target string, result *types.GOGOResult) // streaming persist
+	resultHandler func(ctx context.Context, target, campaignID string, result *types.GOGOResult) // streaming persist
 }
 
 type GogoInput struct {
@@ -50,7 +54,7 @@ func (g *GogoArtifact) SetThreads(threads int) {
 }
 
 // SetResultHandler injects a per-result callback for streaming persist.
-func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target string, result *types.GOGOResult)) {
+func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, result *types.GOGOResult)) {
 	g.resultHandler = h
 }
 
@@ -89,6 +93,10 @@ func (g *GogoArtifact) OutputSchema() OutputSchema {
 func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error) {
 	var gogoIn GogoInput
 	if err := json.Unmarshal(input.Data, &gogoIn); err != nil {
+		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
+	}
+	gogoIn.Ports = normalizeGogoPorts(gogoIn.Ports)
+	if err := validateGogoPorts(gogoIn.Ports); err != nil {
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 
@@ -132,7 +140,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 					webURLs = append(webURLs, result.GetBaseURL())
 				}
 				if g.resultHandler != nil {
-					g.resultHandler(ctx, input.Target, result)
+					g.resultHandler(ctx, input.Target, input.CampaignID, result)
 				}
 			}
 		case <-ticker.C:
@@ -167,6 +175,49 @@ func gogoThreads() int {
 		n = fdlimit - 100
 	}
 	return n
+}
+
+func normalizeGogoPorts(ports string) string {
+	ports = strings.TrimSpace(ports)
+	switch strings.ToLower(ports) {
+	case "", "default", "top100", "top1000":
+		return "top3"
+	default:
+		return ports
+	}
+}
+
+func validateGogoPorts(ports string) error {
+	ports = strings.TrimSpace(ports)
+	if ports == "" {
+		return fmt.Errorf("gogo ports cannot be empty")
+	}
+	if gogoutils.PrePort == nil {
+		return nil
+	}
+	expanded := gogoutils.ParsePortsString(ports)
+	if len(expanded) == 0 {
+		return fmt.Errorf("gogo ports %q expanded to empty port set", ports)
+	}
+	for _, port := range expanded {
+		if isGogoPseudoPort(port) {
+			continue
+		}
+		n, err := strconv.Atoi(port)
+		if err != nil || n <= 0 || n > 65535 {
+			return fmt.Errorf("gogo ports %q contains unsupported port token %q", ports, port)
+		}
+	}
+	return nil
+}
+
+func isGogoPseudoPort(port string) bool {
+	switch strings.ToLower(strings.TrimSpace(port)) {
+	case "icmp", "ping", "oxid":
+		return true
+	default:
+		return false
+	}
 }
 
 func (g *GogoArtifact) Close() error { return g.engine.Close() }

@@ -139,7 +139,7 @@ func (s *Server) RetryFailedBatchChunks(c *gin.Context) {
 	}
 	ports := run.Ports
 	if ports == "" {
-		ports = "top1000"
+		ports = "top3"
 	}
 	workflowID := fmt.Sprintf("batch_retry-%s-%d", batchID, time.Now().UnixNano())
 	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
@@ -206,7 +206,7 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 	}
 	ports := run.Ports
 	if ports == "" {
-		ports = "top1000"
+		ports = "top3"
 	}
 	workflowID := fmt.Sprintf("batch_scheduler_resume-%s-%d", batchID, time.Now().UnixNano())
 	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{

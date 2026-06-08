@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -64,7 +65,8 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 			}, nil
 		}
 
-		output, err := a.Execute(ctx, input)
+		execCtx := WithCampaignID(ctx, input.CampaignID)
+		output, err := a.Execute(execCtx, input)
 		duration := time.Since(start).Milliseconds()
 
 		result := &ActivityResult{
@@ -81,6 +83,9 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 		}
 		if err != nil {
 			result.Error = err.Error()
+		}
+		if len(result.Stats) == 0 {
+			result.Stats = []ExecutionStat{fallbackExecutionStat(a.Name(), input.Target, result)}
 		}
 
 		if statsHook != nil && len(result.Stats) > 0 {
@@ -128,6 +133,45 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 			"duration_ms", duration)
 
 		return result, nil
+	}
+}
+
+func fallbackExecutionStat(artifactName, target string, result *ActivityResult) ExecutionStat {
+	stat := ExecutionStat{
+		Engine:     artifactName,
+		Task:       target,
+		Targets:    1,
+		Tasks:      1,
+		Results:    outputResultCount(result.Data),
+		DurationMs: result.Duration,
+	}
+	if !result.Success {
+		stat.Errors = 1
+	}
+	return stat
+}
+
+func outputResultCount(raw []byte) int64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var out struct {
+		Total   int64             `json:"total"`
+		Count   int64             `json:"count"`
+		Results []json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return 0
+	}
+	switch {
+	case out.Total > 0:
+		return out.Total
+	case out.Count > 0:
+		return out.Count
+	case len(out.Results) > 0:
+		return int64(len(out.Results))
+	default:
+		return 0
 	}
 }
 

@@ -79,7 +79,7 @@ func DomainWorkflow(ctx workflow.Context, input DomainWorkflowInput) (*DomainWor
 		err := workflow.ExecuteActivity(gogoCtx, "gogo", artifact.Input{
 			Target:     input.Domain,
 			CampaignID: input.CampaignID,
-			Data:       mustMarshal(map[string]interface{}{"ip": input.Domain, "ports": "top1000"}),
+			Data:       mustMarshal(map[string]interface{}{"ip": input.Domain, "ports": "top3"}),
 		}).Get(gogoCtx, &gogoResult)
 		if err != nil {
 			return result, err

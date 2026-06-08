@@ -137,7 +137,7 @@ func (a *App) WireResolvers() {
 		return
 	}
 	urlResolver := artifact.URLResolver(func(ctx context.Context, target string) ([]string, error) {
-		return a.Repo.GetWebURLs(ctx, target)
+		return a.Repo.GetWebURLsInCampaign(ctx, target, artifact.CampaignIDFromContext(ctx))
 	})
 	if artifactInstance, err := a.Registry.Get("fingers"); err == nil {
 		artifactInstance.(*artifact.FingersArtifact).SetURLResolver(urlResolver)
@@ -149,14 +149,15 @@ func (a *App) WireResolvers() {
 		nucleiArtifact := artifactInstance.(*artifact.NucleiArtifact)
 		nucleiArtifact.SetURLResolver(urlResolver)
 		nucleiArtifact.SetIDResolver(func(ctx context.Context, target string) ([]string, error) {
-			return a.Repo.GetTemplateIDs(ctx, target)
+			return a.Repo.GetTemplateIDsInCampaign(ctx, target, artifact.CampaignIDFromContext(ctx))
 		})
 		nucleiArtifact.SetTagResolver(func(ctx context.Context, target string) ([]string, error) {
-			tags, err := a.Repo.GetTags(ctx, target)
+			campaignID := artifact.CampaignIDFromContext(ctx)
+			tags, err := a.Repo.GetTagsInCampaign(ctx, target, campaignID)
 			if err != nil || len(tags) > 0 {
 				return tags, err
 			}
-			return a.Repo.GetFingerprints(ctx, target)
+			return a.Repo.GetFingerprintsInCampaign(ctx, target, campaignID)
 		})
 	}
 }

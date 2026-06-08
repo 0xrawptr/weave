@@ -27,7 +27,7 @@ type IPWorkflowResult struct {
 // IPWorkflow orchestrates IP-based asset discovery.
 func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult, error) {
 	if input.Ports == "" {
-		input.Ports = "top1000"
+		input.Ports = "top3"
 	}
 
 	result := &IPWorkflowResult{IP: input.IP}

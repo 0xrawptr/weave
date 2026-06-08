@@ -34,7 +34,7 @@ func PortScanWorkflow(ctx workflow.Context, input PortScanInput) (*PortScanResul
 	ctx = artifactActivityContext(ctx, "gogo", input.ActivityTimeoutSeconds)
 
 	if input.Ports == "" {
-		input.Ports = "top1000"
+		input.Ports = "top3"
 	}
 
 	chunks := splitCIDR(input.IP)
