@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/workflow"
 	"github.com/gin-gonic/gin"
 	"go.temporal.io/sdk/client"
@@ -66,12 +67,46 @@ func (s *Server) ListBatches(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	s.enrichBatchRunsWithLiveProgress(c.Request.Context(), runs)
 	c.JSON(http.StatusOK, gin.H{
 		"batches": runs,
 		"total":   len(runs),
 		"limit":   limit,
 		"offset":  offset,
 	})
+}
+
+func (s *Server) enrichBatchRunsWithLiveProgress(ctx context.Context, runs []data.BatchRun) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	for i := range runs {
+		counts, err := s.repo.CountWorkItemsByStatus(ctx, runs[i].CampaignID, runs[i].ID, "portscan_chunk", "gogo")
+		if err != nil || len(counts) == 0 {
+			continue
+		}
+		completed := counts[data.WorkItemStatusCompleted]
+		failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
+		running := counts[data.WorkItemStatusRunning]
+		pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
+		cancelled := counts[data.WorkItemStatusCancelled]
+		skipped := counts[data.WorkItemStatusSkipped]
+
+		runs[i].Completed = completed
+		runs[i].Failed = failed
+		done := completed + failed + cancelled + skipped
+		active := running + pending
+		switch {
+		case active > 0:
+			runs[i].Status = "running"
+		case failed > 0 && completed > 0:
+			runs[i].Status = "partial"
+		case failed > 0 && completed == 0:
+			runs[i].Status = "failed"
+		case runs[i].TotalChunks > 0 && done >= runs[i].TotalChunks:
+			runs[i].Status = "completed"
+		}
+	}
 }
 
 func (s *Server) ListBatchChunks(c *gin.Context) {

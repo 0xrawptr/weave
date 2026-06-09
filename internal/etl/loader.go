@@ -20,6 +20,7 @@ type dbLoader struct {
 func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 	campaignID := CampaignIDFromContext(ctx)
 	for _, e := range r.Entities {
+		status := defaultStatus(e.Status, "observed")
 		asset := &data.Asset{
 			ID:          e.ID,
 			CampaignID:  campaignID,
@@ -31,11 +32,14 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 			Confidence:  e.Confidence,
 			Severity:    e.Severity,
 			Priority:    e.Priority,
-			Status:      defaultStatus(e.Status, "observed"),
+			Status:      status,
 			SourceRunID: e.SourceRunID,
 		}
 		if err := l.repo.SaveAsset(ctx, asset); err != nil {
 			return fmt.Errorf("save asset %s: %w", e.ID, err)
+		}
+		if status == data.AssetStatusNoise {
+			continue
 		}
 
 		productID, err := l.saveProductContext(ctx, e)

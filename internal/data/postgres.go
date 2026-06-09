@@ -1078,6 +1078,11 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		args = append(args, request.Target)
 		argIdx++
 	}
+	if request.MinPriority > 0 {
+		query += fmt.Sprintf(" AND wi.priority >= $%d", argIdx)
+		args = append(args, request.MinPriority)
+		argIdx++
+	}
 	if request.MaxRunning > 0 {
 		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.queue = wi.queue) < $%d", argIdx)
 		args = append(args, request.MaxRunning)

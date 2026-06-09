@@ -67,6 +67,8 @@ type schedulerWorkItemInput struct {
 	ShardIndex    int                       `json:"shard_index,omitempty"`
 }
 
+const schedulerHighValuePriority = 60
+
 func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*SchedulerWorkflowResult, error) {
 	input.BatchInput = normalizeBatchPortScanInput(input.BatchInput)
 	if input.BatchID == "" {
@@ -109,12 +111,18 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 		}
 		return result, nil
 	}
-	if shouldContinueScheduler(input, result.ProcessedThisRun) {
-		return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
-	}
 
 	if input.BatchInput.RunPlannedDAG {
-		processed, paused, err = schedulePlannedDAGFollowUps(ctx, stateCtx, input)
+		minPriority := 0
+		portScanOpen, err := schedulerHasOpenWorkItems(stateCtx, input, "portscan_chunk")
+		if err != nil {
+			return result, err
+		}
+		if portScanOpen {
+			minPriority = schedulerHighValuePriority
+		}
+
+		processed, paused, err = schedulePlannedDAGFollowUps(ctx, stateCtx, input, minPriority)
 		result.ProcessedThisRun += processed
 		if err != nil || paused {
 			result.Status = "paused"
@@ -129,12 +137,9 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 			}
 			return result, nil
 		}
-		if shouldContinueScheduler(input, result.ProcessedThisRun) {
-			return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
-		}
 
 		for _, phase := range scheduledActionPhases() {
-			processed, paused, err = scheduleArtifactActions(ctx, stateCtx, input, phase.itemType, phase.maxConcurrency(input))
+			processed, paused, err = scheduleArtifactActions(ctx, stateCtx, input, phase.itemType, phase.maxConcurrency(input), minPriority)
 			result.ProcessedThisRun += processed
 			if err != nil || paused {
 				result.Status = "paused"
@@ -149,10 +154,10 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 				}
 				return result, nil
 			}
-			if shouldContinueScheduler(input, result.ProcessedThisRun) {
-				return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
-			}
 		}
+	}
+	if shouldContinueScheduler(input, result.ProcessedThisRun) {
+		return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
 	}
 
 	if err := loadSchedulerSummary(stateCtx, input, result); err != nil {
@@ -172,7 +177,7 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 }
 
 func schedulePortScanChunks(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput) (int, bool, error) {
-	return scheduleWorkItemPhase(ctx, stateCtx, input, "portscan_chunk", input.BatchInput.MaxConcurrency, func(item data.WorkItem) (schedulerChild, error) {
+	return scheduleWorkItemPhase(ctx, stateCtx, input, "portscan_chunk", input.BatchInput.MaxConcurrency, 0, func(item data.WorkItem) (schedulerChild, error) {
 		itemInput := parseSchedulerWorkItemInput(item)
 		sourceTarget := itemInput.SourceTarget
 		if sourceTarget == "" {
@@ -216,14 +221,21 @@ func schedulePortScanChunks(ctx, stateCtx workflow.Context, input SchedulerWorkf
 			return err
 		}
 		if input.BatchInput.RunPlannedDAG {
-			return upsertBatchWorkItem(stateCtx, plannedDAGFollowUpWorkItemFromScheduler(input, child.Item))
+			signal, err := portScanChunkPlannerSignal(stateCtx, input, child.Item.Target)
+			if err != nil {
+				return err
+			}
+			if !signal.HasAssets {
+				return nil
+			}
+			return upsertBatchWorkItem(stateCtx, plannedDAGFollowUpWorkItemFromScheduler(input, child.Item, signal.Priority))
 		}
 		return nil
 	})
 }
 
-func schedulePlannedDAGFollowUps(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput) (int, bool, error) {
-	return scheduleWorkItemPhase(ctx, stateCtx, input, "planned_dag_followup", input.BatchInput.PlannedDAGConcurrency, func(item data.WorkItem) (schedulerChild, error) {
+func schedulePlannedDAGFollowUps(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, minPriority int) (int, bool, error) {
+	return scheduleWorkItemPhase(ctx, stateCtx, input, "planned_dag_followup", input.BatchInput.PlannedDAGConcurrency, minPriority, func(item data.WorkItem) (schedulerChild, error) {
 		itemInput := parseSchedulerWorkItemInput(item)
 		iteration := itemInput.Iteration
 		if iteration <= 0 {
@@ -282,8 +294,8 @@ func scheduledActionPhases() []schedulerActionPhase {
 	}
 }
 
-func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, maxConcurrency int) (int, bool, error) {
-	return scheduleWorkItemPhase(ctx, stateCtx, input, itemType, maxConcurrency, func(item data.WorkItem) (schedulerChild, error) {
+func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, maxConcurrency, minPriority int) (int, bool, error) {
+	return scheduleWorkItemPhase(ctx, stateCtx, input, itemType, maxConcurrency, minPriority, func(item data.WorkItem) (schedulerChild, error) {
 		itemInput := parseSchedulerWorkItemInput(item)
 		actionTarget := itemInput.Target
 		if actionTarget == "" {
@@ -441,7 +453,71 @@ func evaluateActionWorkItemCondition(ctx workflow.Context, item data.WorkItem, i
 	return false, "run_if condition was not satisfied", nil
 }
 
-func scheduleWorkItemPhase(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, maxConcurrency int, start func(data.WorkItem) (schedulerChild, error), finish func(schedulerChild) error) (int, bool, error) {
+type portScanPlannerSignal struct {
+	HasAssets bool
+	Priority  int
+}
+
+func portScanChunkPlannerSignal(ctx workflow.Context, input SchedulerWorkflowInput, target string) (portScanPlannerSignal, error) {
+	request := planner.ConditionRequest{
+		Target:     target,
+		CampaignID: input.BatchInput.CampaignID,
+		Any: []planner.AssetCondition{
+			{Type: "service", Source: "gogo", Status: "observed", MinCount: 1},
+			{Type: "service", Source: "gogo", Status: "candidate", MinCount: 1},
+			{Type: "service", Source: "gogo", Status: "interesting", MinCount: 1},
+			{Type: "service", Source: "gogo", Status: "confirmed", MinCount: 1},
+			{Type: "fingerprint", Source: "gogo", Status: "observed", MinCount: 1},
+			{Type: "fingerprint", Source: "gogo", Status: "candidate", MinCount: 1},
+			{Type: "fingerprint", Source: "gogo", Status: "interesting", MinCount: 1},
+			{Type: "fingerprint", Source: "gogo", Status: "confirmed", MinCount: 1},
+		},
+	}
+	var result planner.ConditionResult
+	if err := workflow.ExecuteActivity(ctx, planner.EvaluateConditionActivityName, request).Get(ctx, &result); err != nil {
+		return portScanPlannerSignal{}, err
+	}
+	if !result.OK {
+		return portScanPlannerSignal{}, nil
+	}
+	signal := portScanPlannerSignal{HasAssets: true}
+	for _, count := range result.Counts {
+		if !count.OK {
+			continue
+		}
+		if priority := plannerSignalPriority(count.Condition); priority > signal.Priority {
+			signal.Priority = priority
+		}
+	}
+	if signal.Priority <= 0 {
+		signal.Priority = 40
+	}
+	return signal, nil
+}
+
+func plannerSignalPriority(condition planner.AssetCondition) int {
+	switch condition.Type {
+	case "fingerprint":
+		switch condition.Status {
+		case "interesting", "confirmed":
+			return 90
+		case "observed", "candidate":
+			return 70
+		}
+	case "service":
+		switch condition.Status {
+		case "interesting", "confirmed":
+			return 90
+		case "candidate":
+			return 75
+		case "observed":
+			return 40
+		}
+	}
+	return 0
+}
+
+func scheduleWorkItemPhase(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, maxConcurrency, minPriority int, start func(data.WorkItem) (schedulerChild, error), finish func(schedulerChild) error) (int, bool, error) {
 	if maxConcurrency <= 0 {
 		maxConcurrency = 1
 	}
@@ -455,7 +531,7 @@ func scheduleWorkItemPhase(ctx, stateCtx workflow.Context, input SchedulerWorkfl
 
 		running := make([]schedulerChild, 0, maxConcurrency)
 		for len(running) < maxConcurrency && processed < input.ContinueAfter {
-			item, err := claimScheduledWorkItem(stateCtx, input, itemType)
+			item, err := claimScheduledWorkItem(stateCtx, input, itemType, minPriority)
 			if err != nil {
 				return processed, false, err
 			}
@@ -533,7 +609,7 @@ func waitScheduledChildren(ctx, stateCtx workflow.Context, input SchedulerWorkfl
 	return processed, firstErr
 }
 
-func claimScheduledWorkItem(ctx workflow.Context, input SchedulerWorkflowInput, itemType string) (data.WorkItem, error) {
+func claimScheduledWorkItem(ctx workflow.Context, input SchedulerWorkflowInput, itemType string, minPriority int) (data.WorkItem, error) {
 	var item data.WorkItem
 	queue := schedulerQueueForType(itemType)
 	artifactName := schedulerArtifactForType(itemType)
@@ -545,6 +621,7 @@ func claimScheduledWorkItem(ctx workflow.Context, input SchedulerWorkflowInput, 
 		Queue:                 queue,
 		WorkflowID:            workflow.GetInfo(ctx).WorkflowExecution.ID,
 		LeaseSeconds:          schedulerLeaseSeconds(input),
+		MinPriority:           minPriority,
 		MaxRunning:            schedulerQueueLimit(input, queue),
 		MaxRunningPerArtifact: schedulerArtifactLimit(input, artifactName),
 		MaxRunningPerCampaign: input.BatchInput.ResourceLimits.MaxRunningCampaign,
@@ -705,6 +782,17 @@ func workItemSummary(ctx workflow.Context, input SchedulerWorkflowInput, itemTyp
 	return summary, err
 }
 
+func schedulerHasOpenWorkItems(ctx workflow.Context, input SchedulerWorkflowInput, itemType string) (bool, error) {
+	summary, err := workItemSummary(ctx, input, itemType)
+	if err != nil {
+		return false, err
+	}
+	return summary.ByStatus["pending"] > 0 ||
+		summary.ByStatus["running"] > 0 ||
+		summary.ByStatus["retry_waiting"] > 0 ||
+		summary.ByStatus["paused"] > 0, nil
+}
+
 func recoverStaleScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
 	var result data.WorkItemBulkResult
 	return workflow.ExecuteActivity(ctx, planner.RecoverStaleWorkItemsActivityName, planner.RecoverStaleWorkItemsRequest{
@@ -790,8 +878,11 @@ func parseSchedulerWorkItemInput(item data.WorkItem) schedulerWorkItemInput {
 	return out
 }
 
-func plannedDAGFollowUpWorkItemFromScheduler(input SchedulerWorkflowInput, parent data.WorkItem) data.WorkItem {
-	return plannedDAGFollowUpWorkItem(input, parent.Target, parent.ID, 1, input.BatchInput.PlannedDAGMaxIterations, parent.Priority)
+func plannedDAGFollowUpWorkItemFromScheduler(input SchedulerWorkflowInput, parent data.WorkItem, priority int) data.WorkItem {
+	if priority <= 0 {
+		priority = parent.Priority
+	}
+	return plannedDAGFollowUpWorkItem(input, parent.Target, parent.ID, 1, input.BatchInput.PlannedDAGMaxIterations, priority)
 }
 
 func actionWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
@@ -840,7 +931,7 @@ func actionWorkItemFromDAGNodeInput(input SchedulerWorkflowInput, parent data.Wo
 		Artifact:    node.Artifact,
 		Queue:       schedulerQueueForType(itemType),
 		Input:       mustMarshal(actionWorkItemInputFromDAGNode(node, target, actionInput, iteration, maxIterations, shardIndex)),
-		Priority:    node.Priority,
+		Priority:    maxInt(node.Priority, parent.Priority),
 		Status:      "pending",
 		MaxAttempts: input.BatchInput.MaxAttempts,
 	}
@@ -1041,6 +1132,13 @@ func maxPositive(value, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func sprayShardBaseURLSize(input SchedulerWorkflowInput) int {

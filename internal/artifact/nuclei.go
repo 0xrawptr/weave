@@ -117,12 +117,12 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 
 	tags := nin.Tags
 	ids := nin.IDs
-	if n.idResolver != nil {
+	if len(ids) == 0 && n.idResolver != nil {
 		if resolved, err := n.idResolver(ctx, input.Target); err == nil {
 			ids = resolved
 		}
 	}
-	if n.tagResolver != nil {
+	if len(tags) == 0 && n.tagResolver != nil {
 		if resolved, err := n.tagResolver(ctx, input.Target); err == nil {
 			tags = resolved
 		}

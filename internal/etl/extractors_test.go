@@ -57,8 +57,8 @@ func TestSprayExtractorNormalURLsAreQueued(t *testing.T) {
 	}
 }
 
-func TestSprayExtractorSimilarResponsesBecomeNoise(t *testing.T) {
-	results := make([]map[string]interface{}, 0, 6)
+func TestSprayExtractorDoesNotApplyLocalSimilarityFallback(t *testing.T) {
+	results := make([]map[string]interface{}, 0, 5)
 	for _, p := range []string{"a", "b", "c", "d", "e"} {
 		results = append(results, map[string]interface{}{
 			"url":            "https://example.com/" + p,
@@ -72,8 +72,13 @@ func TestSprayExtractorSimilarResponsesBecomeNoise(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract failed: %v", err)
 	}
-	if len(result.Entities) != 0 {
-		t.Fatalf("expected similar response noise to be dropped, got %#v", result.Entities)
+	if len(result.Entities) != 5 {
+		t.Fatalf("expected similar 2xx responses to survive unless SDK marks them fuzzy/invalid, got %#v", result.Entities)
+	}
+	for _, entity := range result.Entities {
+		if entity.Status == "noise" {
+			t.Fatalf("local similarity fallback should not downgrade responses: %#v", entity)
+		}
 	}
 }
 
@@ -109,6 +114,42 @@ func TestSprayExtractorUsesSDKFuzzySignal(t *testing.T) {
 	entity := findEntity(result.Entities, "url", "https://example.com/fuzzy")
 	if entity != nil {
 		t.Fatalf("expected SDK fuzzy noise to be dropped, got %#v", entity)
+	}
+}
+
+func TestGogoExtractorMarksHTTPNoise(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"ip":       "10.0.0.1",
+				"port":     "80",
+				"protocol": "http",
+				"uri":      "http://10.0.0.1/",
+				"status":   "404",
+				"title":    "Not Found",
+				"frameworks": map[string]interface{}{
+					"microsoft-httpapi": map[string]interface{}{"name": "microsoft-httpapi"},
+				},
+			},
+		},
+	})
+	result, err := (&GogoExtractor{}).Extract(context.Background(), "10.0.0.1/32", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	service := findEntity(result.Entities, "service", "http://10.0.0.1/")
+	if service == nil {
+		t.Fatalf("expected service entity, got %#v", result.Entities)
+	}
+	if service.Status != "noise" || service.Confidence >= 0.5 {
+		t.Fatalf("expected noisy service with low confidence, got %#v", service)
+	}
+	fingerprint := findEntity(result.Entities, "fingerprint", "microsoft-httpapi")
+	if fingerprint == nil {
+		t.Fatalf("expected fingerprint entity, got %#v", result.Entities)
+	}
+	if fingerprint.Status != "noise" {
+		t.Fatalf("expected fingerprint from noisy service to be noise, got %#v", fingerprint)
 	}
 }
 
@@ -183,7 +224,23 @@ func TestDNSXExtractor(t *testing.T) {
 func TestNeutronExtractor(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"results": []map[string]interface{}{
-			{"template_id": "poc-test", "info": "Test Finding", "severity": "medium", "target": "https://example.com"},
+			{
+				"template_id":   "CVE-2026-0001",
+				"template_name": "Test Finding",
+				"severity":      "high",
+				"target":        "https://example.com",
+				"matched":       true,
+				"tags":          "cve,weblogic,rce",
+				"classification": map[string]interface{}{
+					"cve-id":          "CVE-2026-0001",
+					"cwe-id":          "CWE-78",
+					"cpe":             "cpe:2.3:a:example:product:1.0:*:*:*:*:*:*:*",
+					"cvss-score":      9.8,
+					"cvss-metrics":    "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+					"epss-score":      0.8,
+					"epss-percentile": 0.9,
+				},
+			},
 		},
 		"total": 1,
 	})
@@ -194,8 +251,20 @@ func TestNeutronExtractor(t *testing.T) {
 	if !hasEntityType(result.Entities, "vulnerability") || !hasEntityType(result.Entities, "template") || !hasEntityType(result.Entities, "url") {
 		t.Fatalf("expected vulnerability, template and url entities, got %#v", result.Entities)
 	}
+	if !hasEntityType(result.Entities, "cve") || !hasEntityType(result.Entities, "cpe") || !hasEntityType(result.Entities, "cwe") {
+		t.Fatalf("expected CVE/CPE/CWE entities, got %#v", result.Entities)
+	}
+	cve := findEntity(result.Entities, "cve", "CVE-2026-0001")
+	if cve == nil || len(cve.CVEIntel) != 1 || cve.CVEIntel[0].CVSSScore != 9.8 || cve.CVEIntel[0].EPSS != 0.8 {
+		t.Fatalf("expected neutron classification intel on CVE, got %#v", cve)
+	}
 	if !hasRelationType(result.Relations, RelDetects) {
 		t.Fatalf("expected %s relation, got %#v", RelDetects, result.Relations)
+	}
+	for _, relType := range []string{RelHasTemplate, RelHasCPE, RelHasCWE} {
+		if !hasRelationType(result.Relations, relType) {
+			t.Fatalf("expected %s relation, got %#v", relType, result.Relations)
+		}
 	}
 }
 

@@ -53,6 +53,13 @@ func IPWorkflow(ctx workflow.Context, input IPWorkflowInput) (*IPWorkflowResult,
 			if err != nil {
 				return result, fmt.Errorf("gogo chunk %s: %w", chunk, err)
 			}
+			if !gr.Success {
+				errMsg := gr.Error
+				if errMsg == "" {
+					errMsg = "gogo scan failed"
+				}
+				return result, fmt.Errorf("gogo chunk %s: %s", chunk, errMsg)
+			}
 			result.Gogo = &gr
 		}
 	}

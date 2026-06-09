@@ -130,6 +130,59 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 	}
 }
 
+func TestActionWorkItemInheritsParentPriority(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:  "camp-1",
+			MaxAttempts: 1,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	node := planner.DAGPlanNode{
+		ID:       "node-fingers",
+		Artifact: "fingers",
+		Target:   "10.0.0.0/24",
+		Priority: 50,
+	}
+
+	item := actionWorkItemFromDAGNode(input, parent, node, 1, 2)
+	if item.Priority != 80 {
+		t.Fatalf("priority = %d, want inherited parent priority 80", item.Priority)
+	}
+}
+
+func TestPlannedDAGFollowUpWorkItemUsesSignalPriority(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:              "camp-1",
+			PlannedDAGMaxIterations: 2,
+		},
+	}
+	parent := data.WorkItem{ID: "chunk-1", Target: "10.0.0.0/24", Priority: 0}
+
+	item := plannedDAGFollowUpWorkItemFromScheduler(input, parent, 70)
+	if item.Priority != 70 {
+		t.Fatalf("priority = %d, want 70", item.Priority)
+	}
+	if item.ParentID != parent.ID || item.Target != parent.Target {
+		t.Fatalf("unexpected follow-up item: %#v", item)
+	}
+}
+
+func TestPlannerSignalPriority(t *testing.T) {
+	if got := plannerSignalPriority(planner.AssetCondition{Type: "service", Status: "observed"}); got >= schedulerHighValuePriority {
+		t.Fatalf("observed service priority = %d, should stay below high-value threshold %d", got, schedulerHighValuePriority)
+	}
+	if got := plannerSignalPriority(planner.AssetCondition{Type: "fingerprint", Status: "observed"}); got < schedulerHighValuePriority {
+		t.Fatalf("observed fingerprint priority = %d, want high-value threshold %d or above", got, schedulerHighValuePriority)
+	}
+	if got := plannerSignalPriority(planner.AssetCondition{Type: "service", Status: "confirmed"}); got < schedulerHighValuePriority {
+		t.Fatalf("confirmed service priority = %d, want high-value threshold %d or above", got, schedulerHighValuePriority)
+	}
+}
+
 func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 	input := SchedulerWorkflowInput{
 		BatchID: "batch-1",

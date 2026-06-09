@@ -206,6 +206,7 @@ type WorkItemClaimRequest struct {
 	Target                string `json:"target,omitempty"`
 	WorkflowID            string `json:"workflow_id,omitempty"`
 	LeaseSeconds          int    `json:"lease_seconds,omitempty"`
+	MinPriority           int    `json:"min_priority,omitempty"`
 	MaxRunning            int    `json:"max_running,omitempty"`
 	MaxRunningPerArtifact int    `json:"max_running_per_artifact,omitempty"`
 	MaxRunningPerCampaign int    `json:"max_running_per_campaign,omitempty"`

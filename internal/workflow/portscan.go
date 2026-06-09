@@ -1,6 +1,8 @@
 package workflow
 
 import (
+	"fmt"
+
 	"github.com/0xrawptr/weave/internal/artifact"
 	"go.temporal.io/sdk/workflow"
 )
@@ -62,6 +64,12 @@ func PortScanWorkflow(ctx workflow.Context, input PortScanInput) (*PortScanResul
 		}
 		if !gogoResult.Success {
 			chunkResult.Error = gogoResult.Error
+			if chunkResult.Error == "" {
+				chunkResult.Error = "gogo scan failed"
+			}
+			result.Results = append(result.Results, chunkResult)
+			result.Gogo = &gogoResult
+			return result, fmt.Errorf("gogo chunk %s: %s", chunk, chunkResult.Error)
 		}
 		result.Results = append(result.Results, chunkResult)
 		result.Gogo = &gogoResult

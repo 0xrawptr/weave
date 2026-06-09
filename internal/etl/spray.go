@@ -50,7 +50,6 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 		quality   Quality
 	}
 	candidates := make([]candidate, 0, len(out.Results))
-	signatures := make(map[string]int)
 	for _, item := range out.Results {
 		if item.URL == "" {
 			continue
@@ -72,18 +71,10 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 		}
 		applySpraySDKQuality(&quality, item.Valid, item.Fuzzy, item.Reason)
 		candidates = append(candidates, candidate{item: item, raw: itemRaw, canonical: canonical, quality: quality})
-		if similarityCandidate(quality) {
-			signatures[quality.HTTP.Signature]++
-		}
 	}
 
 	for _, candidate := range candidates {
 		quality := candidate.quality
-		if similarityCandidate(quality) && signatures[quality.HTTP.Signature] >= 5 {
-			quality.Layer = "noise"
-			quality.Noise = true
-			quality.Reasons = append(quality.Reasons, "similar_response_cluster")
-		}
 		if !persistSprayURL(quality) {
 			continue
 		}
@@ -120,14 +111,6 @@ func applySpraySDKQuality(quality *Quality, valid *bool, fuzzy bool, reason stri
 	if reason != "" {
 		quality.Reasons = append(quality.Reasons, "sdk_reason:"+reason)
 	}
-}
-
-func similarityCandidate(quality Quality) bool {
-	return quality.HTTP.Signature != "" &&
-		!quality.Noise &&
-		quality.Layer == "normal" &&
-		quality.HTTP.StatusCode >= 200 &&
-		quality.HTTP.StatusCode < 300
 }
 
 func sprayURLPriority(rawURL string) int {

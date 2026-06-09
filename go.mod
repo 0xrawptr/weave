@@ -4,18 +4,21 @@ go 1.26.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
-	github.com/chainreactors/fingers v1.2.1-0.20260523084643-75e5a3f2065e
-	github.com/chainreactors/sdk v0.2.3
-	github.com/chainreactors/spray v1.2.6-0.20260523083907-546e8ab7756a
-	github.com/chainreactors/utils v0.0.0-20260529070435-f03100630384
+	github.com/chainreactors/fingers v1.2.1
+	github.com/chainreactors/gogo/v2 v2.14.2-0.20260529142124-907a45a1456c
+	github.com/chainreactors/sdk v0.2.4
+	github.com/chainreactors/spray v1.3.1-0.20260608085629-66dafe7eab4f
+	github.com/chainreactors/utils v0.0.0-20260529172343-6465cb8568b2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/miekg/dns v1.1.68
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/projectdiscovery/cdncheck v1.2.37
 	github.com/projectdiscovery/dnsx v1.2.2
 	github.com/projectdiscovery/mapcidr v1.1.97
 	github.com/projectdiscovery/nuclei/v3 v3.8.0
+	github.com/projectdiscovery/retryabledns v1.0.114
 	go.temporal.io/sdk v1.44.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -104,14 +107,13 @@ require (
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chainreactors/files v0.0.0-20240716182835-7884ee1e77f0 // indirect
-	github.com/chainreactors/gogo/v2 v2.14.2-0.20260529071026-65d22e5a6ba3 // indirect
 	github.com/chainreactors/logs v0.0.0-20260508055944-c678762ed15c // indirect
-	github.com/chainreactors/neutron v0.0.0-20260529070459-2e4444b1ceb0 // indirect
-	github.com/chainreactors/parsers v0.0.0-20260517174207-da1ebd0e7f68 // indirect
-	github.com/chainreactors/proton v0.0.0-20260521032855-e7e7b12b4506 // indirect
-	github.com/chainreactors/proxyclient v1.0.4-0.20260218115902-74a84a4535b0 // indirect
+	github.com/chainreactors/neutron v0.0.0-20260608084636-c81691731908 // indirect
+	github.com/chainreactors/parsers v0.0.0-20260608085142-3d2c51baa8fe // indirect
+	github.com/chainreactors/proton v0.2.1-0.20260608085216-03df34ba928d // indirect
+	github.com/chainreactors/proxyclient v1.1.1-0.20260529172347-2a80e08d5593 // indirect
 	github.com/chainreactors/words v0.0.0-20260520145736-270600e60fb4 // indirect
-	github.com/chainreactors/zombie v1.2.3-0.20260529070819-21a4ec2cbbc8 // indirect
+	github.com/chainreactors/zombie v1.2.3-0.20260608085910-705f548f7da1 // indirect
 	github.com/charlievieth/fastwalk v1.0.14 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/glamour v0.10.0 // indirect
@@ -288,7 +290,6 @@ require (
 	github.com/mholt/archives v0.1.5 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/microsoft/go-mssqldb v1.9.2 // indirect
-	github.com/miekg/dns v1.1.68 // indirect
 	github.com/mikelolasagasti/xz v1.0.1 // indirect
 	github.com/minio/minlz v1.1.1 // indirect
 	github.com/minio/selfupdate v0.6.1-0.20230907112617-f11e74f84ca7 // indirect
@@ -314,7 +315,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/openrdap/rdap v0.9.1 // indirect
-	github.com/panjf2000/ants/v2 v2.12.0 // indirect
+	github.com/panjf2000/ants/v2 v2.12.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
@@ -348,7 +349,6 @@ require (
 	github.com/projectdiscovery/ratelimit v0.0.85 // indirect
 	github.com/projectdiscovery/rawhttp v0.1.90 // indirect
 	github.com/projectdiscovery/rdap v0.9.0 // indirect
-	github.com/projectdiscovery/retryabledns v1.0.114 // indirect
 	github.com/projectdiscovery/retryablehttp-go v1.3.11 // indirect
 	github.com/projectdiscovery/sarif v0.0.1 // indirect
 	github.com/projectdiscovery/tlsx v1.2.2 // indirect
@@ -362,7 +362,6 @@ require (
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remeh/sizedwaitgroup v1.0.0 // indirect
-	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
@@ -371,7 +370,6 @@ require (
 	github.com/sashabaranov/go-openai v1.37.0 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
-	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
 	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
 	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466 // indirect

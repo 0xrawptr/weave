@@ -71,6 +71,9 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		// Service entity. Port → runs → service.
 		serviceValue := fmt.Sprintf("%s://%s:%s", item.Protocol, item.IP, item.Port)
 		var serviceQuality *Quality
+		serviceStatus := "observed"
+		serviceConfidence := 1.0
+		servicePriority := 0
 		statusCode, _ := strconv.Atoi(item.Status)
 		if item.Protocol == "http" || item.Protocol == "https" || item.URI != "" {
 			if item.URI != "" {
@@ -88,13 +91,16 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 			if canonical != "" {
 				serviceValue = canonical
 				serviceQuality = &quality
+				serviceStatus = gogoServiceStatus(quality)
+				serviceConfidence = httpConfidence(statusCode, quality)
+				servicePriority = qualityPriority(0, quality)
 			}
 		}
 		svcID := data.GenerateID("service", scanTarget, item.IP, item.Port, item.Protocol)
 		result.Entities = append(result.Entities, Entity{
 			ID: svcID, Type: "service",
 			Value:  serviceValue,
-			Source: "gogo", TargetID: targetID, RawData: raw, Confidence: 1.0, Status: "observed",
+			Source: "gogo", TargetID: targetID, RawData: raw, Confidence: serviceConfidence, Status: serviceStatus, Priority: servicePriority,
 			Quality: serviceQuality,
 		})
 		result.Relations = append(result.Relations, Relation{
@@ -104,9 +110,15 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		// Fingerprint entities. Service → has_fingerprint → fingerprint.
 		for fpName := range item.Frameworks {
 			fpID := data.GenerateID("fingerprint", scanTarget, fpName)
+			fpStatus := "observed"
+			fpConfidence := 0.7
+			if serviceQuality != nil && serviceQuality.Noise {
+				fpStatus = "noise"
+				fpConfidence = 0.2
+			}
 			result.Entities = append(result.Entities, Entity{
 				ID: fpID, Type: "fingerprint", Value: fpName,
-				Source: "gogo", TargetID: targetID, Confidence: 0.7, Status: "observed",
+				Source: "gogo", TargetID: targetID, Confidence: fpConfidence, Status: fpStatus,
 			})
 			result.Relations = append(result.Relations, Relation{
 				FromID: svcID, ToID: fpID, Type: "has_fingerprint",
@@ -114,4 +126,16 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		}
 	}
 	return result, nil
+}
+
+func gogoServiceStatus(quality Quality) string {
+	if quality.Noise {
+		return "noise"
+	}
+	switch quality.Layer {
+	case "critical", "interesting":
+		return "candidate"
+	default:
+		return "observed"
+	}
 }

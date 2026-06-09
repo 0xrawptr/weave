@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	sdkneutron "github.com/chainreactors/sdk/neutron"
-	"github.com/chainreactors/sdk/pkg/types"
+	sdktypes "github.com/chainreactors/sdk/pkg/types"
 )
 
 // NeutronArtifact wraps the SDK neutron engine for POC/template-based vulnerability detection.
@@ -22,17 +22,8 @@ type NeutronInput struct {
 
 // NeutronOutput contains the vulnerability scan results.
 type NeutronOutput struct {
-	Results []NeutronResultItem `json:"results"`
-	Total   int                 `json:"total"`
-}
-
-// NeutronResultItem represents a single vulnerability finding.
-type NeutronResultItem struct {
-	TemplateID string `json:"template_id"`
-	Info       string `json:"info"`
-	Severity   string `json:"severity"`
-	Target     string `json:"target"`
-	Matched    string `json:"matched"`
+	Results []*sdktypes.VulnResult `json:"results"`
+	Total   int                    `json:"total"`
 }
 
 func NewNeutronArtifact(cfg *sdkneutron.Config) (*NeutronArtifact, error) {
@@ -104,7 +95,7 @@ func (n *NeutronArtifact) Execute(ctx context.Context, input Input) (Output, err
 	}
 
 	neutronCtx := sdkneutron.NewContext().WithContext(ctx)
-	var items []NeutronResultItem
+	var items []*sdktypes.VulnResult
 
 	for _, t := range targets {
 		task := sdkneutron.NewExecuteTask(t)
@@ -113,16 +104,10 @@ func (n *NeutronArtifact) Execute(ctx context.Context, input Input) (Output, err
 			continue
 		}
 		for result := range resultCh {
-			if execResult, ok := types.ResultData[*sdkneutron.ExecuteResult](result); ok {
-				nr := execResult.Result()
-				if nr != nil {
-					for _, event := range nr.Events {
-						item := NeutronResultItem{Target: t}
-						if event != nil {
-							item.Matched = event.Matched
-						}
-						items = append(items, item)
-					}
+			if execResult, ok := sdktypes.ResultData[*sdkneutron.ExecuteResult](result); ok {
+				item := execResult.VulnResult(t)
+				if item != nil && item.Matched {
+					items = append(items, item)
 				}
 			}
 		}

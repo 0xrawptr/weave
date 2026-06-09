@@ -213,7 +213,7 @@ func validateGogoPorts(ports string) error {
 
 func isGogoPseudoPort(port string) bool {
 	switch strings.ToLower(strings.TrimSpace(port)) {
-	case "icmp", "ping", "oxid":
+	case "icmp", "ping", "oxid", "mssqlntlm", "winrm", "smb", "snmp":
 		return true
 	default:
 		return false
