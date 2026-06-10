@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/0xrawptr/weave/internal/app"
@@ -87,8 +89,74 @@ func wireGogoStreaming(runtimeApp *app.App) {
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}})
 		if err := runtimeApp.Pipelines.Gogo.Process(etl.WithCampaignID(ctx, campaignID), target, wrapped); err != nil {
 			log.Printf("WARNING: gogo streaming ETL failed: %v", err)
+			return
+		}
+		if err := upsertStreamingGogoFollowUp(ctx, repo, workflowID, campaignID, result); err != nil {
+			log.Printf("WARNING: gogo streaming follow-up scheduling failed: %v", err)
 		}
 	})
+}
+
+func upsertStreamingGogoFollowUp(ctx context.Context, repo *data.Repository, workflowID, campaignID string, result *sdktypes.GOGOResult) error {
+	if repo == nil || result == nil || workflowID == "" || !shouldPlanFromStreamingGogo(result) {
+		return nil
+	}
+	parent, err := repo.GetWorkItemByWorkflowID(ctx, workflowID)
+	if err != nil || parent == nil {
+		return err
+	}
+	if parent.Type != "portscan_chunk" || parent.BatchID == "" || parent.Target == "" {
+		return nil
+	}
+	if campaignID == "" {
+		campaignID = parent.CampaignID
+	}
+	iteration := 1
+	return repo.UpsertWorkItem(ctx, data.WorkItem{
+		ID:          data.GenerateID("work_item", parent.BatchID, "planned_dag_followup", parent.Target, fmt.Sprintf("%d", iteration)),
+		CampaignID:  campaignID,
+		BatchID:     parent.BatchID,
+		ParentID:    parent.ID,
+		Type:        "planned_dag_followup",
+		Target:      parent.Target,
+		Artifact:    "planned_dag",
+		Queue:       "planner",
+		Input:       mustMarshalRuntime(map[string]interface{}{"target": parent.Target, "iteration": iteration}),
+		Priority:    streamingGogoFollowUpPriority(result),
+		Status:      data.WorkItemStatusPending,
+		MaxAttempts: 1,
+	})
+}
+
+func shouldPlanFromStreamingGogo(result *sdktypes.GOGOResult) bool {
+	if result == nil {
+		return false
+	}
+	if result.IsHttp() {
+		return true
+	}
+	return strings.HasPrefix(result.Uri, "http://") || strings.HasPrefix(result.Uri, "https://")
+}
+
+func streamingGogoFollowUpPriority(result *sdktypes.GOGOResult) int {
+	if result == nil {
+		return 40
+	}
+	if len(result.Frameworks) > 0 {
+		return 70
+	}
+	statusCode, _ := strconv.Atoi(result.Status)
+	switch {
+	case statusCode >= 200 && statusCode < 400:
+		return 50
+	default:
+		return 40
+	}
+}
+
+func mustMarshalRuntime(v interface{}) []byte {
+	raw, _ := json.Marshal(v)
+	return raw
 }
 
 func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, persistHook artifact.PersistHook, dedupHook artifact.DedupHook, markDoneHook artifact.MarkDoneHook, onlyArtifact string) {
@@ -221,11 +289,14 @@ func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.PortScanWorkflow)
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.DAGWorkflow)
 	w.RegisterWorkflow(workflow.PlannedDAGWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)
 	w.RegisterWorkflow(workflow.PlannedWorkflow)
-	log.Println("registered workflows: domain, ip, company, portscan, batch_portscan, scheduler, dag, planned_dag, action, planned")
+	log.Println("registered workflows: domain, ip, company, portscan, batch_portscan, scheduler, scheduled_work_items, dag, planned_dag, action, planned")
 }
 
 func targetType(raw string) string {

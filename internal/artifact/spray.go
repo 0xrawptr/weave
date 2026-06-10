@@ -21,10 +21,12 @@ type SprayArtifact struct {
 
 // SprayInput defines the input for spray operations.
 type SprayInput struct {
-	URLs         []string `json:"urls,omitempty"`          // for check mode
-	BaseURLs     []string `json:"base_urls,omitempty"`     // for brute mode
-	Wordlist     []string `json:"wordlist,omitempty"`      // for brute mode
-	WordlistMode string   `json:"wordlist_mode,omitempty"` // "full" expands embedded spray dictionaries
+	URLs           []string `json:"urls,omitempty"`          // for check mode
+	BaseURLs       []string `json:"base_urls,omitempty"`     // for brute mode
+	Wordlist       []string `json:"wordlist,omitempty"`      // for brute mode
+	WordlistMode   string   `json:"wordlist_mode,omitempty"` // "full" expands embedded spray dictionaries
+	WordlistOffset int      `json:"wordlist_offset,omitempty"`
+	WordlistLimit  int      `json:"wordlist_limit,omitempty"`
 
 	Threads        int      `json:"threads,omitempty"`
 	Timeout        int      `json:"timeout,omitempty"`
@@ -123,6 +125,8 @@ func (s *SprayArtifact) InputSchema() InputSchema {
 			{Name: "base_urls", Type: "[]string", Required: false, Description: "Base URLs for brute force"},
 			{Name: "wordlist", Type: "[]string", Required: false, Description: "Wordlist for path brute force"},
 			{Name: "wordlist_mode", Type: "string", Required: false, Description: "Wordlist mode, e.g. full"},
+			{Name: "wordlist_offset", Type: "int", Required: false, Description: "Offset into the selected wordlist"},
+			{Name: "wordlist_limit", Type: "int", Required: false, Description: "Maximum words to use from the selected wordlist"},
 			{Name: "threads", Type: "int", Required: false, Description: "Worker threads"},
 			{Name: "timeout", Type: "int", Required: false, Description: "HTTP timeout in seconds"},
 			{Name: "method", Type: "string", Required: false, Description: "HTTP method"},
@@ -178,6 +182,7 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 
 	if len(sprayIn.BaseURLs) > 0 && len(sprayIn.Wordlist) == 0 && sprayIn.WordlistMode == "full" {
 		sprayIn.Wordlist = fullSprayWordlist()
+		sprayIn.Wordlist = sliceWordlist(sprayIn.Wordlist, sprayIn.WordlistOffset, sprayIn.WordlistLimit)
 		if len(sprayIn.Wordlist) == 0 {
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: "full spray wordlist is empty"}, nil
 		}
@@ -249,6 +254,20 @@ func FullSprayWordlist() []string {
 	}
 	sort.Strings(words)
 	return words
+}
+
+func sliceWordlist(words []string, offset, limit int) []string {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(words) {
+		return nil
+	}
+	end := len(words)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return append([]string{}, words[offset:end]...)
 }
 
 func configureSprayContext(sprayCtx *sdkspray.Context, input SprayInput) *sdkspray.Context {

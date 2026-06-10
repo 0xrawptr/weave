@@ -139,6 +139,13 @@ func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignI
 	if err != nil {
 		return nil, err
 	}
+	if campaignID != "" {
+		workItems, err := p.repo.GetWorkItems(ctx, campaignID, "", "", "", "", target, 100000, 0)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, actionRecordsFromWorkItems(workItems)...)
+	}
 	evidence, err := p.repo.GetKnowledgeEvidenceInCampaign(ctx, target, campaignID)
 	if err != nil {
 		return nil, err
@@ -603,8 +610,7 @@ func filterBlockedActions(actions []Action, records []data.ActionRecord) []Actio
 	blocked := make(map[string]bool, len(records))
 	blockedDedup := make(map[string]bool, len(records))
 	for _, record := range records {
-		switch record.Status {
-		case "completed", "running":
+		if blocksActionStatus(record.Status) {
 			blocked[record.ID] = true
 			if dedup := recordDedupKey(record); dedup != "" {
 				blockedDedup[dedup] = true
@@ -700,7 +706,74 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 }
 
 func blocksActionStatus(status string) bool {
-	return status == "completed" || status == "running"
+	switch status {
+	case data.WorkItemStatusPending, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+func actionRecordsFromWorkItems(items []data.WorkItem) []data.ActionRecord {
+	records := make([]data.ActionRecord, 0, len(items))
+	for _, item := range items {
+		record, ok := actionRecordFromWorkItem(item)
+		if ok {
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+func actionRecordFromWorkItem(item data.WorkItem) (data.ActionRecord, bool) {
+	if !blocksActionStatus(item.Status) || item.Artifact == "" || len(item.Input) == 0 {
+		return data.ActionRecord{}, false
+	}
+	var envelope struct {
+		Input    map[string]interface{} `json:"input"`
+		DedupKey string                 `json:"dedup_key"`
+		Reason   string                 `json:"reason"`
+	}
+	if json.Unmarshal(item.Input, &envelope) != nil || len(envelope.Input) == 0 {
+		return data.ActionRecord{}, false
+	}
+	input := copyMap(envelope.Input)
+	if envelope.DedupKey != "" {
+		plannerMeta, _ := input["_planner"].(map[string]interface{})
+		if plannerMeta == nil {
+			plannerMeta = map[string]interface{}{}
+			input["_planner"] = plannerMeta
+		}
+		plannerMeta["dedup_key"] = envelope.DedupKey
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return data.ActionRecord{}, false
+	}
+	return data.ActionRecord{
+		ID:         item.ID,
+		CampaignID: item.CampaignID,
+		Target:     item.Target,
+		Artifact:   item.Artifact,
+		Input:      raw,
+		Priority:   item.Priority,
+		Reason:     envelope.Reason,
+		Status:     item.Status,
+		Attempts:   item.Attempts,
+		WorkflowID: item.WorkflowID,
+		Error:      item.Error,
+		CreatedAt:  item.CreatedAt,
+		UpdatedAt:  item.UpdatedAt,
+		StartedAt:  item.StartedAt,
+	}, true
+}
+
+func copyMap(input map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }
 
 func stringEvidence(kind string, values []string, priority int) []Evidence {

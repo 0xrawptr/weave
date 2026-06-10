@@ -62,6 +62,21 @@ func TestGenerateIDFormat(t *testing.T) {
 	}
 }
 
+func TestPlannerConsumableURLStatusExcludesQueued(t *testing.T) {
+	if plannerConsumableURLStatus(AssetStatusQueued) {
+		t.Fatalf("queued URLs should stay in assets without entering planner replan")
+	}
+	if !plannerConsumableURLStatus(AssetStatusCandidate) {
+		t.Fatalf("candidate URLs should enter planner replan")
+	}
+	if !plannerConsumableURLStatus(AssetStatusObserved) {
+		t.Fatalf("observed URLs should enter planner replan")
+	}
+	if plannerConsumableURLStatus(AssetStatusNoise) {
+		t.Fatalf("noise URLs should not enter planner replan")
+	}
+}
+
 func TestDedupeEvidenceKeepsHighestPriority(t *testing.T) {
 	values := dedupeEvidence([]EvidenceRecord{
 		{Type: "cve", Value: "CVE-2020-14882", Priority: 10},

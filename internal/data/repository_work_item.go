@@ -44,6 +44,13 @@ func (r *Repository) GetWorkItems(ctx context.Context, campaignID, batchID, stat
 	return r.Postgres.QueryWorkItems(ctx, campaignID, batchID, status, itemType, artifactName, target, limit, offset)
 }
 
+func (r *Repository) GetWorkItemByWorkflowID(ctx context.Context, workflowID string) (*WorkItem, error) {
+	if r == nil || r.Postgres == nil {
+		return nil, nil
+	}
+	return r.Postgres.GetWorkItemByWorkflowID(ctx, workflowID)
+}
+
 func (r *Repository) CountWorkItemsByStatus(ctx context.Context, campaignID, batchID, itemType, artifactName string) (map[string]int, error) {
 	if r == nil || r.Postgres == nil {
 		return nil, nil

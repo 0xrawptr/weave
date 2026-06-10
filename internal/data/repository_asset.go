@@ -122,10 +122,7 @@ func plannerVisibleAssetStatus(status string) bool {
 }
 
 func plannerConsumableURLStatus(status string) bool {
-	if plannerVisibleAssetStatus(status) {
-		return true
-	}
-	return status == AssetStatusQueued
+	return plannerVisibleAssetStatus(status)
 }
 
 func ValidAssetStatus(status string) bool {

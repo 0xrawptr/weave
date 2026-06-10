@@ -52,6 +52,30 @@ type ResumeBatchSchedulerRequest struct {
 	MaxContinueRuns         int                     `json:"max_continue_runs,omitempty"`
 }
 
+type BatchRunResponse struct {
+	data.BatchRun
+	PortscanStatus   string            `json:"portscan_status,omitempty"`
+	DAGStatus        string            `json:"dag_status,omitempty"`
+	OverallStatus    string            `json:"overall_status,omitempty"`
+	WorkItemCounts   map[string]int    `json:"work_item_counts,omitempty"`
+	PortscanCounts   map[string]int    `json:"portscan_counts,omitempty"`
+	WorkItemProgress *batchProgressDTO `json:"work_item_progress,omitempty"`
+}
+
+type batchProgressDTO struct {
+	Total           int `json:"total"`
+	Pending         int `json:"pending"`
+	Running         int `json:"running"`
+	Completed       int `json:"completed"`
+	Failed          int `json:"failed"`
+	RetryWaiting    int `json:"retry_waiting"`
+	Paused          int `json:"paused"`
+	Cancelled       int `json:"cancelled"`
+	Skipped         int `json:"skipped"`
+	Dead            int `json:"dead"`
+	ProgressPercent int `json:"progress_percent"`
+}
+
 func (s *Server) ListBatches(c *gin.Context) {
 	if s.repo == nil || s.repo.Postgres == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
@@ -67,46 +91,111 @@ func (s *Server) ListBatches(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	s.enrichBatchRunsWithLiveProgress(c.Request.Context(), runs)
+	out := make([]BatchRunResponse, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, s.batchRunResponse(c.Request.Context(), run))
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"batches": runs,
+		"batches": out,
 		"total":   len(runs),
 		"limit":   limit,
 		"offset":  offset,
 	})
 }
 
-func (s *Server) enrichBatchRunsWithLiveProgress(ctx context.Context, runs []data.BatchRun) {
+func (s *Server) batchRunResponse(ctx context.Context, run data.BatchRun) BatchRunResponse {
+	resp := BatchRunResponse{BatchRun: run}
 	if s == nil || s.repo == nil {
-		return
+		return resp
 	}
-	for i := range runs {
-		counts, err := s.repo.CountWorkItemsByStatus(ctx, runs[i].CampaignID, runs[i].ID, "portscan_chunk", "gogo")
-		if err != nil || len(counts) == 0 {
+	portscanCounts, err := s.repo.CountWorkItemsByStatus(ctx, run.CampaignID, run.ID, "portscan_chunk", "gogo")
+	if err == nil && len(portscanCounts) > 0 {
+		resp.PortscanCounts = portscanCounts
+		resp.Completed = portscanCounts[data.WorkItemStatusCompleted]
+		resp.Failed = portscanCounts[data.WorkItemStatusFailed] + portscanCounts[data.WorkItemStatusDead]
+		resp.PortscanStatus = statusFromWorkItemCounts(run.TotalChunks, portscanCounts)
+	}
+
+	summary, err := s.repo.GetWorkItemProgressSummary(ctx, data.WorkItemFilter{
+		CampaignID: run.CampaignID,
+		BatchID:    run.ID,
+	})
+	if err != nil || summary.Total == 0 {
+		if resp.PortscanStatus != "" {
+			resp.Status = resp.PortscanStatus
+			resp.OverallStatus = resp.Status
+		}
+		return resp
+	}
+	resp.WorkItemCounts = summary.ByStatus
+	resp.WorkItemProgress = &batchProgressDTO{
+		Total:           summary.Overall.Total,
+		Pending:         summary.Overall.Pending,
+		Running:         summary.Overall.Running,
+		Completed:       summary.Overall.Completed,
+		Failed:          summary.Overall.Failed,
+		RetryWaiting:    summary.Overall.RetryWaiting,
+		Paused:          summary.Overall.Paused,
+		Cancelled:       summary.Overall.Cancelled,
+		Skipped:         summary.Overall.Skipped,
+		Dead:            summary.Overall.Dead,
+		ProgressPercent: summary.Overall.ProgressPercent,
+	}
+	resp.OverallStatus = statusFromWorkItemCounts(summary.Total, summary.ByStatus)
+	resp.DAGStatus = dagStatusFromSummary(summary)
+	if resp.OverallStatus != "" {
+		resp.Status = resp.OverallStatus
+	}
+	return resp
+}
+
+func statusFromWorkItemCounts(total int, counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
+	running := counts[data.WorkItemStatusRunning]
+	completed := counts[data.WorkItemStatusCompleted]
+	failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
+	cancelled := counts[data.WorkItemStatusCancelled]
+	skipped := counts[data.WorkItemStatusSkipped]
+	if pending > 0 || running > 0 {
+		return "running"
+	}
+	if failed > 0 && completed > 0 {
+		return "partial"
+	}
+	if failed > 0 && completed == 0 {
+		return "failed"
+	}
+	if total > 0 && completed+failed+cancelled+skipped >= total {
+		return "completed"
+	}
+	return "running"
+}
+
+func dagStatusFromSummary(summary data.WorkItemProgressSummary) string {
+	counts := make(map[string]int)
+	total := 0
+	for _, group := range summary.ByType {
+		if group.Key == "portscan_chunk" {
 			continue
 		}
-		completed := counts[data.WorkItemStatusCompleted]
-		failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
-		running := counts[data.WorkItemStatusRunning]
-		pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
-		cancelled := counts[data.WorkItemStatusCancelled]
-		skipped := counts[data.WorkItemStatusSkipped]
-
-		runs[i].Completed = completed
-		runs[i].Failed = failed
-		done := completed + failed + cancelled + skipped
-		active := running + pending
-		switch {
-		case active > 0:
-			runs[i].Status = "running"
-		case failed > 0 && completed > 0:
-			runs[i].Status = "partial"
-		case failed > 0 && completed == 0:
-			runs[i].Status = "failed"
-		case runs[i].TotalChunks > 0 && done >= runs[i].TotalChunks:
-			runs[i].Status = "completed"
-		}
+		total += group.Total
+		counts[data.WorkItemStatusPending] += group.Pending
+		counts[data.WorkItemStatusRunning] += group.Running
+		counts[data.WorkItemStatusCompleted] += group.Completed
+		counts[data.WorkItemStatusFailed] += group.Failed
+		counts[data.WorkItemStatusRetryWaiting] += group.RetryWaiting
+		counts[data.WorkItemStatusPaused] += group.Paused
+		counts[data.WorkItemStatusCancelled] += group.Cancelled
+		counts[data.WorkItemStatusSkipped] += group.Skipped
+		counts[data.WorkItemStatusDead] += group.Dead
 	}
+	if total == 0 {
+		return ""
+	}
+	return statusFromWorkItemCounts(total, counts)
 }
 
 func (s *Server) ListBatchChunks(c *gin.Context) {

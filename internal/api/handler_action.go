@@ -41,6 +41,7 @@ func (s *Server) ListActions(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
 		return
 	}
+	rawInput := c.Query("raw_input") == "true"
 	records, err := s.repo.GetActionRecordsFiltered(c.Request.Context(), c.Query("target"), c.Query("campaign_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -53,7 +54,7 @@ func (s *Server) ListActions(c *gin.Context) {
 			CampaignID:  record.CampaignID,
 			Target:      record.Target,
 			Artifact:    record.Artifact,
-			Input:       json.RawMessage(record.Input),
+			Input:       inputJSONResponse(record.Input, rawInput),
 			Priority:    record.Priority,
 			Reason:      record.Reason,
 			Status:      record.Status,

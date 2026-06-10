@@ -53,6 +53,9 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 	for _, item := range out.Results {
+		if !acceptNucleiETLItem(item.TemplateID, item.Info) {
+			continue
+		}
 		itemRaw, _ := json.Marshal(item)
 		urlValue := firstNonEmpty(item.URL, item.Target, item.Matched)
 		if urlValue != "" {
@@ -75,27 +78,30 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				ID: templateID, Type: "template", Value: item.TemplateID,
 				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-				Priority: severityPriority(item.Severity), Status: "confirmed", Tags: item.Tags,
+				Priority: severityPriority(item.Severity), Status: nucleiFindingStatus(item.Severity), Tags: item.Tags,
 			})
 		}
 
-		vulnID := data.GenerateID("vuln", scanTarget, urlValue, item.TemplateID)
-		addEntity(result, entitySet, Entity{
-			ID: vulnID, Type: "vulnerability",
-			Value:  fmt.Sprintf("%s: %s", item.Severity, item.Info),
-			Source: "nuclei", TargetID: targetID, RawData: itemRaw,
-			Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-			Priority: severityPriority(item.Severity), Status: "confirmed",
-		})
-		if urlValue != "" {
-			addRelation(result, relationSet, Relation{
-				FromID: data.GenerateID("url", scanTarget, urlValue), ToID: vulnID, Type: RelHasVulnerability,
+		vulnID := ""
+		if nucleiIsVulnerability(item.Severity, item.TemplateID, item.CVEs) {
+			vulnID = data.GenerateID("vuln", scanTarget, urlValue, item.TemplateID)
+			addEntity(result, entitySet, Entity{
+				ID: vulnID, Type: "vulnerability",
+				Value:  fmt.Sprintf("%s: %s", strings.ToLower(item.Severity), item.Info),
+				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
+				Priority: severityPriority(item.Severity), Status: "confirmed",
 			})
-		}
-		if item.TemplateID != "" {
-			addRelation(result, relationSet, Relation{
-				FromID: templateID, ToID: vulnID, Type: RelDetects,
-			})
+			if urlValue != "" {
+				addRelation(result, relationSet, Relation{
+					FromID: data.GenerateID("url", scanTarget, urlValue), ToID: vulnID, Type: RelHasVulnerability,
+				})
+			}
+			if item.TemplateID != "" {
+				addRelation(result, relationSet, Relation{
+					FromID: templateID, ToID: vulnID, Type: RelDetects,
+				})
+			}
 		}
 		for _, cve := range nucleiCVEs(item.TemplateID, item.CVEs) {
 			cveID := data.GenerateID("cve", scanTarget, cve)
@@ -105,7 +111,9 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
 				Priority: severityPriority(item.Severity), Status: "confirmed",
 			})
-			addRelation(result, relationSet, Relation{FromID: vulnID, ToID: cveID, Type: RelRelatesTo})
+			if vulnID != "" {
+				addRelation(result, relationSet, Relation{FromID: vulnID, ToID: cveID, Type: RelRelatesTo})
+			}
 			if item.TemplateID != "" {
 				addRelation(result, relationSet, Relation{FromID: cveID, ToID: templateID, Type: RelHasTemplate})
 			}
@@ -134,6 +142,34 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		}
 	}
 	return result, nil
+}
+
+func acceptNucleiETLItem(templateID, info string) bool {
+	templateID = strings.TrimSpace(templateID)
+	if templateID == "" || strings.HasPrefix(templateID, "cluster-") {
+		return false
+	}
+	return strings.TrimSpace(info) != ""
+}
+
+func nucleiFindingStatus(severity string) string {
+	if nucleiIsActionableSeverity(severity) {
+		return "confirmed"
+	}
+	return "observed"
+}
+
+func nucleiIsVulnerability(severity, templateID string, cves []string) bool {
+	return nucleiIsActionableSeverity(severity) || len(nucleiCVEs(templateID, cves)) > 0
+}
+
+func nucleiIsActionableSeverity(severity string) bool {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "low", "medium", "high", "critical":
+		return true
+	default:
+		return false
+	}
 }
 
 func addEntity(result *ExtractResult, seen map[string]bool, entity Entity) {

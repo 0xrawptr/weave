@@ -33,3 +33,18 @@ func TestSprayResultItemPreservesHTTPMetadata(t *testing.T) {
 		t.Fatalf("favicon hash = %q", item.FaviconHash)
 	}
 }
+
+func TestSliceWordlist(t *testing.T) {
+	words := []string{"a", "b", "c", "d"}
+	got := sliceWordlist(words, 1, 2)
+	if len(got) != 2 || got[0] != "b" || got[1] != "c" {
+		t.Fatalf("sliceWordlist = %#v", got)
+	}
+	got[0] = "changed"
+	if words[1] == "changed" {
+		t.Fatalf("sliceWordlist should return a copy")
+	}
+	if got := sliceWordlist(words, 10, 2); len(got) != 0 {
+		t.Fatalf("out of range slice = %#v", got)
+	}
+}

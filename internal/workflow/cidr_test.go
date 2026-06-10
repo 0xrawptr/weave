@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/0xrawptr/weave/internal/artifact"
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/planner"
 )
@@ -183,6 +184,38 @@ func TestPlannerSignalPriority(t *testing.T) {
 	}
 }
 
+func TestScheduledActionPhasesUseWeightedRoundRobinOrder(t *testing.T) {
+	phases := scheduledActionPhases()
+	if len(phases) != 3 {
+		t.Fatalf("len(phases) = %d, want 3", len(phases))
+	}
+	if phases[0].itemType != "nuclei_group" || phases[0].weight != 3 ||
+		phases[1].itemType != "fingers_action" || phases[1].weight != 2 ||
+		phases[2].itemType != "spray_shard" || phases[2].weight != 1 {
+		t.Fatalf("unexpected phase order: %#v", phases)
+	}
+}
+
+func TestRoundRobinPhaseQuotaRespectsQueueLimit(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		ContinueAfter: 50,
+		BatchInput: BatchPortScanInput{
+			PlannedDAGConcurrency: 10,
+			QueueLimits: map[string]int{
+				"nuclei": 1,
+			},
+		},
+	}
+	phase := schedulerActionPhase{
+		itemType:       "nuclei_group",
+		weight:         3,
+		maxConcurrency: func(input SchedulerWorkflowInput) int { return schedulerQueueLimit(input, "nuclei") },
+	}
+	if got := roundRobinPhaseQuota(input, phase); got != 1 {
+		t.Fatalf("quota = %d, want queue limit 1", got)
+	}
+}
+
 func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 	input := SchedulerWorkflowInput{
 		BatchID: "batch-1",
@@ -225,6 +258,45 @@ func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 		if len(words) == 0 || len(words) > 2 {
 			t.Fatalf("word shard size = %d, want 1..2: %#v", len(words), parsed.ActionInput)
 		}
+	}
+}
+
+func TestFullSprayShardWorkItemsUseWordlistRanges(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:         "camp-1",
+			MaxAttempts:        2,
+			SprayShardBaseURLs: 1,
+			SprayShardWords:    500,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	node := planner.DAGPlanNode{
+		ID:       "node-spray",
+		Artifact: "spray",
+		Target:   "10.0.0.0/24",
+		Input: map[string]any{
+			"base_urls":     []string{"http://10.0.0.1:8080"},
+			"wordlist_mode": "full",
+		},
+		Priority: 90,
+	}
+
+	items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3)
+	want := len(chunkWordlistRanges(len(artifact.FullSprayWordlist()), 500))
+	if want == 0 {
+		want = 1
+	}
+	if len(items) != want {
+		t.Fatalf("len(items) = %d, want %d", len(items), want)
+	}
+	parsed := parseSchedulerWorkItemInput(items[0])
+	if _, ok := parsed.ActionInput["wordlist"]; ok {
+		t.Fatalf("full spray shard should not persist literal wordlist: %#v", parsed.ActionInput)
+	}
+	if parsed.ActionInput["wordlist_mode"] != "full" || parsed.ActionInput["wordlist_offset"] == nil || parsed.ActionInput["wordlist_limit"] == nil {
+		t.Fatalf("missing full wordlist range metadata: %#v", parsed.ActionInput)
 	}
 }
 

@@ -1020,7 +1020,7 @@ func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) er
 			artifact = EXCLUDED.artifact,
 			queue = EXCLUDED.queue,
 			input = CASE WHEN EXCLUDED.input IS NOT NULL THEN EXCLUDED.input ELSE work_items.input END,
-			priority = EXCLUDED.priority,
+			priority = GREATEST(work_items.priority, EXCLUDED.priority),
 			status = CASE
 				WHEN work_items.status IN ('running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
 				ELSE EXCLUDED.status
@@ -1248,6 +1248,46 @@ func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID,
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (p *PostgresStore) GetWorkItemByWorkflowID(ctx context.Context, workflowID string) (*WorkItem, error) {
+	if workflowID == "" {
+		return nil, nil
+	}
+	var item WorkItem
+	err := p.pool.QueryRow(ctx, `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), priority, status, attempts, max_attempts, workflow_id, error,
+		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
+		FROM work_items WHERE workflow_id = $1 ORDER BY updated_at DESC LIMIT 1`, workflowID).Scan(
+		&item.ID,
+		&item.CampaignID,
+		&item.BatchID,
+		&item.ParentID,
+		&item.Type,
+		&item.Target,
+		&item.Artifact,
+		&item.Queue,
+		&item.Input,
+		&item.Priority,
+		&item.Status,
+		&item.Attempts,
+		&item.MaxAttempts,
+		&item.WorkflowID,
+		&item.Error,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&item.HeartbeatAt,
+		&item.LeaseExpiresAt,
+		&item.StartedAt,
+		&item.CompletedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &item, nil
 }
 
 func (p *PostgresStore) CountWorkItemsByStatus(ctx context.Context, campaignID, batchID, itemType, artifactName string) (map[string]int, error) {

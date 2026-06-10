@@ -158,6 +158,25 @@ func TestPlanFromStateFiltersCompletedAndRunningActions(t *testing.T) {
 	}
 }
 
+func TestPlanFromStateFiltersPendingActions(t *testing.T) {
+	base := State{
+		Target:      "example.com",
+		URLs:        []string{"https://example.com"},
+		TemplateIDs: []string{"CVE-2020-14882"},
+	}
+	actions := PlanFromState(base)
+	nuclei := findAction(actions, "nuclei")
+	if nuclei == nil {
+		t.Fatalf("missing nuclei action: %#v", actions)
+	}
+
+	base.Actions = []data.ActionRecord{{ID: nuclei.ID, Status: "pending"}}
+	actions = PlanFromState(base)
+	if findAction(actions, "nuclei") != nil {
+		t.Fatalf("pending action should be filtered: %#v", actions)
+	}
+}
+
 func TestPlanFromStateFiltersCoveredActionInputs(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"base_urls":     []string{"https://example.com"},
@@ -171,6 +190,43 @@ func TestPlanFromStateFiltersCoveredActionInputs(t *testing.T) {
 		BaseURLs: []string{"https://example.com", "https://admin.example.com"},
 		URLs:     []string{"https://example.com", "https://admin.example.com"},
 		Actions:  []data.ActionRecord{{Artifact: "spray", Input: raw, Status: "completed"}},
+	})
+	spray := findAction(actions, "spray")
+	if spray == nil {
+		t.Fatalf("expected spray action for uncovered base URL: %#v", actions)
+	}
+	baseURLs, ok := spray.Input["base_urls"].([]string)
+	if !ok || len(baseURLs) != 1 || baseURLs[0] != "https://admin.example.com" {
+		t.Fatalf("expected only uncovered base URL, got %#v", spray.Input)
+	}
+}
+
+func TestWorkItemsCoverPendingSprayBaseURLs(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"input": map[string]interface{}{
+			"base_urls":       []string{"https://example.com"},
+			"wordlist_mode":   "full",
+			"wordlist_limit":  500,
+			"wordlist_offset": 0,
+		},
+		"dedup_key": actionDedupKey("example.com", "spray", "full", joinKey([]string{"https://example.com"})),
+		"reason":    "expand attack surface with full path discovery",
+	})
+	coverage := actionRecordsFromWorkItems([]data.WorkItem{{
+		ID:         "pending-spray-shard",
+		CampaignID: "camp-1",
+		Target:     "example.com",
+		Artifact:   "spray",
+		Input:      raw,
+		Priority:   80,
+		Status:     data.WorkItemStatusPending,
+	}})
+
+	actions := PlanFromState(State{
+		Target:   "example.com",
+		BaseURLs: []string{"https://example.com", "https://admin.example.com"},
+		URLs:     []string{"https://example.com", "https://admin.example.com"},
+		Actions:  coverage,
 	})
 	spray := findAction(actions, "spray")
 	if spray == nil {

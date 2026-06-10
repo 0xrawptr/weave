@@ -8,6 +8,7 @@ import (
 	"github.com/0xrawptr/weave/internal/artifact"
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/planner"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -67,6 +68,17 @@ type schedulerWorkItemInput struct {
 	ShardIndex    int                       `json:"shard_index,omitempty"`
 }
 
+type wordlistRange struct {
+	Offset int
+	Limit  int
+}
+
+type ScheduledWorkItemWorkflowInput struct {
+	SchedulerInput SchedulerWorkflowInput `json:"scheduler_input"`
+	Item           data.WorkItem          `json:"item"`
+	WorkflowID     string                 `json:"workflow_id"`
+}
+
 const schedulerHighValuePriority = 60
 
 func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*SchedulerWorkflowResult, error) {
@@ -96,7 +108,7 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 		return result, err
 	}
 
-	processed, paused, err := schedulePortScanChunks(ctx, stateCtx, input)
+	processed, paused, err := schedulePipelineWorkItems(ctx, stateCtx, input)
 	result.ProcessedThisRun += processed
 	if err != nil || paused {
 		result.Status = "paused"
@@ -110,51 +122,6 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 			return result, updateErr
 		}
 		return result, nil
-	}
-
-	if input.BatchInput.RunPlannedDAG {
-		minPriority := 0
-		portScanOpen, err := schedulerHasOpenWorkItems(stateCtx, input, "portscan_chunk")
-		if err != nil {
-			return result, err
-		}
-		if portScanOpen {
-			minPriority = schedulerHighValuePriority
-		}
-
-		processed, paused, err = schedulePlannedDAGFollowUps(ctx, stateCtx, input, minPriority)
-		result.ProcessedThisRun += processed
-		if err != nil || paused {
-			result.Status = "paused"
-			if err != nil {
-				return result, err
-			}
-			if summaryErr := loadSchedulerSummary(stateCtx, input, result); summaryErr != nil {
-				return result, summaryErr
-			}
-			if updateErr := finalizeScheduledBatch(stateCtx, input, result); updateErr != nil {
-				return result, updateErr
-			}
-			return result, nil
-		}
-
-		for _, phase := range scheduledActionPhases() {
-			processed, paused, err = scheduleArtifactActions(ctx, stateCtx, input, phase.itemType, phase.maxConcurrency(input), minPriority)
-			result.ProcessedThisRun += processed
-			if err != nil || paused {
-				result.Status = "paused"
-				if err != nil {
-					return result, err
-				}
-				if summaryErr := loadSchedulerSummary(stateCtx, input, result); summaryErr != nil {
-					return result, summaryErr
-				}
-				if updateErr := finalizeScheduledBatch(stateCtx, input, result); updateErr != nil {
-					return result, updateErr
-				}
-				return result, nil
-			}
-		}
 	}
 	if shouldContinueScheduler(input, result.ProcessedThisRun) {
 		return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
@@ -284,90 +251,516 @@ func schedulePlannedDAGFollowUps(ctx, stateCtx workflow.Context, input Scheduler
 type schedulerActionPhase struct {
 	itemType       string
 	maxConcurrency func(SchedulerWorkflowInput) int
+	weight         int
 }
 
 func scheduledActionPhases() []schedulerActionPhase {
 	return []schedulerActionPhase{
-		{itemType: "fingers_action", maxConcurrency: func(input SchedulerWorkflowInput) int { return input.BatchInput.PlannedDAGConcurrency }},
-		{itemType: "spray_shard", maxConcurrency: func(input SchedulerWorkflowInput) int { return schedulerQueueLimit(input, "spray") }},
-		{itemType: "nuclei_group", maxConcurrency: func(input SchedulerWorkflowInput) int { return schedulerQueueLimit(input, "nuclei") }},
+		{itemType: "nuclei_group", maxConcurrency: func(input SchedulerWorkflowInput) int { return schedulerQueueLimit(input, "nuclei") }, weight: 3},
+		{itemType: "fingers_action", maxConcurrency: func(input SchedulerWorkflowInput) int { return input.BatchInput.PlannedDAGConcurrency }, weight: 2},
+		{itemType: "spray_shard", maxConcurrency: func(input SchedulerWorkflowInput) int { return schedulerQueueLimit(input, "spray") }, weight: 1},
 	}
 }
 
 func scheduleArtifactActions(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, maxConcurrency, minPriority int) (int, bool, error) {
-	return scheduleWorkItemPhase(ctx, stateCtx, input, itemType, maxConcurrency, minPriority, func(item data.WorkItem) (schedulerChild, error) {
-		itemInput := parseSchedulerWorkItemInput(item)
-		actionTarget := itemInput.Target
-		if actionTarget == "" {
-			actionTarget = item.Target
+	return scheduleWorkItemPhase(ctx, stateCtx, input, itemType, maxConcurrency, minPriority,
+		func(item data.WorkItem) (schedulerChild, error) {
+			return startScheduledArtifactAction(ctx, stateCtx, input, item)
+		},
+		func(child schedulerChild) error {
+			return finishScheduledArtifactAction(ctx, stateCtx, input, child)
+		})
+}
+
+func scheduleArtifactActionsRoundRobin(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, minPriority int) (int, bool, error) {
+	phases := scheduledActionPhases()
+	processed := 0
+	for processed < input.ContinueAfter {
+		if paused, err := campaignPaused(stateCtx, input.BatchInput.CampaignID); err != nil {
+			return processed, false, err
+		} else if paused {
+			return processed, true, nil
 		}
-		if itemInput.RunIf != nil {
-			conditionOK, conditionMessage, err := evaluateActionWorkItemCondition(stateCtx, item, itemInput)
+
+		running := make([]schedulerChild, 0, roundRobinActionWindow(input, phases))
+		for processed+len(running) < input.ContinueAfter {
+			claimedThisRound := 0
+			for _, phase := range phases {
+				quota := roundRobinPhaseQuota(input, phase)
+				for i := 0; i < quota && processed+len(running) < input.ContinueAfter; i++ {
+					item, err := claimScheduledWorkItem(stateCtx, input, phase.itemType, minPriority)
+					if err != nil {
+						return processed, false, err
+					}
+					if item.ID == "" {
+						break
+					}
+					child, err := startScheduledArtifactAction(ctx, stateCtx, input, item)
+					if err != nil {
+						return processed, false, err
+					}
+					claimedThisRound++
+					if child.Future == nil {
+						processed++
+						continue
+					}
+					running = append(running, child)
+				}
+			}
+			if claimedThisRound == 0 {
+				break
+			}
+		}
+		if len(running) == 0 {
+			return processed, false, nil
+		}
+
+		batchProcessed, err := waitScheduledChildren(ctx, stateCtx, input, running, func(child schedulerChild) error {
+			return finishScheduledArtifactAction(ctx, stateCtx, input, child)
+		})
+		processed += batchProcessed
+		if err != nil {
+			return processed, false, err
+		}
+	}
+	return processed, false, nil
+}
+
+func schedulePipelineWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput) (int, bool, error) {
+	processed := 0
+	for processed < input.ContinueAfter {
+		if paused, err := campaignPaused(stateCtx, input.BatchInput.CampaignID); err != nil {
+			return processed, false, err
+		} else if paused {
+			return processed, true, nil
+		}
+
+		madeProgress := 0
+		started, err := dispatchPortScanWorkItems(ctx, stateCtx, input, input.ContinueAfter-processed)
+		if err != nil {
+			return processed, false, err
+		}
+		madeProgress += started
+		processed += started
+		if processed >= input.ContinueAfter {
+			break
+		}
+
+		if input.BatchInput.RunPlannedDAG {
+			started, err = dispatchPlannedDAGFollowUps(ctx, stateCtx, input, input.ContinueAfter-processed)
 			if err != nil {
-				return schedulerChild{}, err
+				return processed, false, err
 			}
-			if !conditionOK {
-				if err := skipScheduledActionRecord(stateCtx, item, itemInput, conditionMessage); err != nil {
-					return schedulerChild{}, err
+			madeProgress += started
+			processed += started
+			if processed >= input.ContinueAfter {
+				break
+			}
+
+			started, err = dispatchArtifactActionsRoundRobin(ctx, stateCtx, input, input.ContinueAfter-processed)
+			if err != nil {
+				return processed, false, err
+			}
+			madeProgress += started
+			processed += started
+		}
+
+		if madeProgress == 0 {
+			return processed, false, nil
+		}
+	}
+	return processed, false, nil
+}
+
+func dispatchPortScanWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, remaining int) (int, error) {
+	return dispatchScheduledWorkItems(ctx, stateCtx, input, "portscan_chunk", 0, schedulerPipelineBurst(input, "portscan", remaining), startScheduledPortScanWorkItem)
+}
+
+func dispatchPlannedDAGFollowUps(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, remaining int) (int, error) {
+	return dispatchScheduledWorkItems(ctx, stateCtx, input, "planned_dag_followup", 0, schedulerPipelineBurst(input, "planner", remaining), startScheduledPlannedDAGWorkItem)
+}
+
+func dispatchArtifactActionsRoundRobin(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, remaining int) (int, error) {
+	if remaining <= 0 {
+		return 0, nil
+	}
+	processed := 0
+	for processed < remaining {
+		claimedThisRound := 0
+		for _, phase := range scheduledActionPhases() {
+			quota := roundRobinPhaseQuota(input, phase)
+			for i := 0; i < quota && processed < remaining; i++ {
+				started, err := dispatchScheduledWorkItems(ctx, stateCtx, input, phase.itemType, 0, 1, startScheduledArtifactActionWorkItem)
+				if err != nil {
+					return processed, err
 				}
-				if err := setBatchWorkItemStatus(stateCtx, item.ID, "skipped", "", conditionMessage, false); err != nil {
-					return schedulerChild{}, err
+				if started == 0 {
+					break
 				}
-				return schedulerChild{Item: item, WorkflowID: "", Future: nil}, nil
+				claimedThisRound += started
+				processed += started
 			}
 		}
-		childID := actionChildWorkflowID(input.BatchID, itemType, actionTarget, item.ID, item.Attempts)
-		claimed, err := claimScheduledActionRecord(stateCtx, item, itemInput, childID)
+		if claimedThisRound == 0 {
+			break
+		}
+	}
+	return processed, nil
+}
+
+func dispatchScheduledWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, minPriority, maxStarts int, start func(workflow.Context, workflow.Context, SchedulerWorkflowInput, data.WorkItem) error) (int, error) {
+	if maxStarts <= 0 {
+		return 0, nil
+	}
+	started := 0
+	for started < maxStarts {
+		item, err := claimScheduledWorkItem(stateCtx, input, itemType, minPriority)
+		if err != nil {
+			return started, err
+		}
+		if item.ID == "" {
+			break
+		}
+		if err := start(ctx, stateCtx, input, item); err != nil {
+			return started, err
+		}
+		started++
+	}
+	return started, nil
+}
+
+func schedulerPipelineBurst(input SchedulerWorkflowInput, queue string, remaining int) int {
+	if remaining <= 0 {
+		return 0
+	}
+	limit := schedulerQueueLimit(input, queue)
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > remaining {
+		return remaining
+	}
+	return limit
+}
+
+func startScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
+	itemInput := parseSchedulerWorkItemInput(item)
+	sourceTarget := itemInput.SourceTarget
+	if sourceTarget == "" {
+		sourceTarget = item.Target
+	}
+	childID := fmt.Sprintf("%s-portscan-%s-%d", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts)
+	if err := upsertPortScanBatchChunk(stateCtx, input.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, childID, "running", ""); err != nil {
+		return err
+	}
+	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledPortScanWorkItemWorkflow)
+}
+
+func startScheduledPlannedDAGWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
+	childID := fmt.Sprintf("%s-planned-dag-%s-%d", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts)
+	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledPlannedDAGWorkItemWorkflow)
+}
+
+func startScheduledArtifactActionWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
+	itemInput := parseSchedulerWorkItemInput(item)
+	actionTarget := itemInput.Target
+	if actionTarget == "" {
+		actionTarget = item.Target
+	}
+	childID := actionChildWorkflowID(input.BatchID, item.Type, actionTarget, item.ID, item.Attempts)
+	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledArtifactActionWorkItemWorkflow)
+}
+
+func startScheduledWorkItemChild(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem, childID string, workflowFunc interface{}) error {
+	if err := setBatchWorkItemStatus(stateCtx, item.ID, "running", childID, "", false); err != nil {
+		return err
+	}
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID:        childID,
+		ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_ABANDON,
+	})
+	future := workflow.ExecuteChildWorkflow(childCtx, workflowFunc, ScheduledWorkItemWorkflowInput{
+		SchedulerInput: input,
+		Item:           item,
+		WorkflowID:     childID,
+	})
+	if err := future.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), childID, err.Error(), false)
+	}
+	return nil
+}
+
+func roundRobinActionWindow(input SchedulerWorkflowInput, phases []schedulerActionPhase) int {
+	total := 0
+	for _, phase := range phases {
+		total += roundRobinPhaseQuota(input, phase)
+	}
+	if total <= 0 {
+		return 1
+	}
+	if total > input.ContinueAfter && input.ContinueAfter > 0 {
+		return input.ContinueAfter
+	}
+	return total
+}
+
+func roundRobinPhaseQuota(input SchedulerWorkflowInput, phase schedulerActionPhase) int {
+	quota := phase.weight
+	if quota <= 0 {
+		quota = 1
+	}
+	if limit := phase.maxConcurrency(input); limit > 0 && quota > limit {
+		quota = limit
+	}
+	return quota
+}
+
+func startScheduledArtifactAction(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) (schedulerChild, error) {
+	itemInput := parseSchedulerWorkItemInput(item)
+	actionTarget := itemInput.Target
+	if actionTarget == "" {
+		actionTarget = item.Target
+	}
+	if itemInput.RunIf != nil {
+		conditionOK, conditionMessage, err := evaluateActionWorkItemCondition(stateCtx, item, itemInput)
 		if err != nil {
 			return schedulerChild{}, err
 		}
-		if !claimed {
-			reason := "action already running or completed"
-			if err := setBatchWorkItemStatus(stateCtx, item.ID, "skipped", childID, reason, false); err != nil {
+		if !conditionOK {
+			if err := skipScheduledActionRecord(stateCtx, item, itemInput, conditionMessage); err != nil {
+				return schedulerChild{}, err
+			}
+			if err := setBatchWorkItemStatus(stateCtx, item.ID, "skipped", "", conditionMessage, false); err != nil {
 				return schedulerChild{}, err
 			}
 			return schedulerChild{Item: item, WorkflowID: "", Future: nil}, nil
 		}
-		if err := setBatchWorkItemStatus(stateCtx, item.ID, "running", childID, "", false); err != nil {
+	}
+	childID := actionChildWorkflowID(input.BatchID, item.Type, actionTarget, item.ID, item.Attempts)
+	claimed, err := claimScheduledActionRecord(stateCtx, item, itemInput, childID)
+	if err != nil {
+		return schedulerChild{}, err
+	}
+	if !claimed {
+		reason := "action already running or completed"
+		if err := setBatchWorkItemStatus(stateCtx, item.ID, "skipped", childID, reason, false); err != nil {
 			return schedulerChild{}, err
 		}
-		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: childID})
-		future := workflow.ExecuteChildWorkflow(childCtx, ActionWorkflow, ActionWorkflowInput{
-			Artifact:               item.Artifact,
-			Target:                 actionTarget,
-			CampaignID:             input.BatchInput.CampaignID,
-			Input:                  itemInput.ActionInput,
-			ActivityTimeoutSeconds: input.BatchInput.ActivityTimeoutSeconds,
-		})
-		return schedulerChild{Item: item, WorkflowID: childID, Future: future}, nil
-	}, func(child schedulerChild) error {
-		if child.Future == nil {
-			return nil
-		}
-		var actionResult artifact.ActivityResult
-		childErr := child.Future.Get(ctx, &actionResult)
-		if childErr != nil {
-			if err := completeScheduledActionRecord(stateCtx, child.Item.ID, false, "", childErr.Error()); err != nil {
-				return err
-			}
-			return setBatchWorkItemStatus(stateCtx, child.Item.ID, schedulerFailureStatus(child.Item), child.WorkflowID, childErr.Error(), false)
-		}
-		if !actionResult.Success {
-			if err := completeScheduledActionRecord(stateCtx, child.Item.ID, false, "", actionResult.Error); err != nil {
-				return err
-			}
-			return setBatchWorkItemStatus(stateCtx, child.Item.ID, schedulerFailureStatus(child.Item), child.WorkflowID, actionResult.Error, false)
-		}
-		if shouldReplanAfterAction(child.Item.Type) {
-			if err := upsertNextPlannedDAGFollowUp(stateCtx, input, child.Item); err != nil {
-				return err
-			}
-		}
-		if err := completeScheduledActionRecord(stateCtx, child.Item.ID, true, "", ""); err != nil {
+		return schedulerChild{Item: item, WorkflowID: "", Future: nil}, nil
+	}
+	if err := setBatchWorkItemStatus(stateCtx, item.ID, "running", childID, "", false); err != nil {
+		return schedulerChild{}, err
+	}
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: childID})
+	future := workflow.ExecuteChildWorkflow(childCtx, ActionWorkflow, ActionWorkflowInput{
+		Artifact:               item.Artifact,
+		Target:                 actionTarget,
+		CampaignID:             input.BatchInput.CampaignID,
+		Input:                  itemInput.ActionInput,
+		ActivityTimeoutSeconds: input.BatchInput.ActivityTimeoutSeconds,
+	})
+	return schedulerChild{Item: item, WorkflowID: childID, Future: future}, nil
+}
+
+func finishScheduledArtifactAction(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, child schedulerChild) error {
+	if child.Future == nil {
+		return nil
+	}
+	var actionResult artifact.ActivityResult
+	childErr := child.Future.Get(ctx, &actionResult)
+	if childErr != nil {
+		if err := completeScheduledActionRecord(stateCtx, child.Item.ID, false, "", childErr.Error()); err != nil {
 			return err
 		}
-		return setBatchWorkItemStatus(stateCtx, child.Item.ID, "completed", child.WorkflowID, "", false)
+		return setBatchWorkItemStatus(stateCtx, child.Item.ID, schedulerFailureStatus(child.Item), child.WorkflowID, childErr.Error(), false)
+	}
+	if !actionResult.Success {
+		if err := completeScheduledActionRecord(stateCtx, child.Item.ID, false, "", actionResult.Error); err != nil {
+			return err
+		}
+		return setBatchWorkItemStatus(stateCtx, child.Item.ID, schedulerFailureStatus(child.Item), child.WorkflowID, actionResult.Error, false)
+	}
+	if shouldReplanAfterAction(child.Item.Type) {
+		if err := upsertNextPlannedDAGFollowUp(stateCtx, input, child.Item); err != nil {
+			return err
+		}
+	}
+	if err := completeScheduledActionRecord(stateCtx, child.Item.ID, true, "", ""); err != nil {
+		return err
+	}
+	return setBatchWorkItemStatus(stateCtx, child.Item.ID, "completed", child.WorkflowID, "", false)
+}
+
+func ScheduledPortScanWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
+	schedulerInput := input.SchedulerInput
+	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
+	item := input.Item
+	workflowID := input.WorkflowID
+	if workflowID == "" {
+		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
+	}
+	stateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: defaultStateActivityTimeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
+	itemInput := parseSchedulerWorkItemInput(item)
+	sourceTarget := itemInput.SourceTarget
+	if sourceTarget == "" {
+		sourceTarget = item.Target
+	}
+	if err := upsertPortScanBatchChunk(stateCtx, schedulerInput.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, workflowID, "running", ""); err != nil {
+		return err
+	}
+
+	_, err := PortScanWorkflow(ctx, PortScanInput{
+		IP:                     item.Target,
+		CampaignID:             schedulerInput.BatchInput.CampaignID,
+		Ports:                  schedulerInput.BatchInput.Ports,
+		ActivityTimeoutSeconds: schedulerInput.BatchInput.ActivityTimeoutSeconds,
+	})
+	if err != nil {
+		if updateErr := upsertPortScanBatchChunk(stateCtx, schedulerInput.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, workflowID, "failed", err.Error()); updateErr != nil {
+			return updateErr
+		}
+		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+	}
+	if err := upsertPortScanBatchChunk(stateCtx, schedulerInput.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, workflowID, "completed", ""); err != nil {
+		return err
+	}
+	if err := setBatchWorkItemStatus(stateCtx, item.ID, "completed", workflowID, "", false); err != nil {
+		return err
+	}
+	if !schedulerInput.BatchInput.RunPlannedDAG {
+		return nil
+	}
+	signal, err := portScanChunkPlannerSignal(stateCtx, schedulerInput, item.Target)
+	if err != nil {
+		return err
+	}
+	if !signal.HasAssets {
+		return nil
+	}
+	return upsertBatchWorkItem(stateCtx, plannedDAGFollowUpWorkItemFromScheduler(schedulerInput, item, signal.Priority))
+}
+
+func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
+	schedulerInput := input.SchedulerInput
+	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
+	item := input.Item
+	workflowID := input.WorkflowID
+	if workflowID == "" {
+		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
+	}
+	stateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: defaultStateActivityTimeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+
+	itemInput := parseSchedulerWorkItemInput(item)
+	iteration := itemInput.Iteration
+	if iteration <= 0 {
+		iteration = 1
+	}
+	maxIterations := maxPositive(itemInput.MaxIterations, schedulerInput.BatchInput.PlannedDAGMaxIterations)
+	item.Input = mustMarshal(schedulerWorkItemInput{
+		Target:        item.Target,
+		Iteration:     iteration,
+		MaxIterations: maxIterations,
+	})
+
+	var plan planner.DAGPlan
+	if err := workflow.ExecuteActivity(stateCtx, planner.PlanDAGTargetActivityName, planner.PlanDAGRequest{
+		Target:     item.Target,
+		CampaignID: schedulerInput.BatchInput.CampaignID,
+	}).Get(ctx, &plan); err != nil {
+		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+	}
+	items := make([]data.WorkItem, 0, len(plan.Nodes))
+	for _, node := range plan.Nodes {
+		for _, actionItem := range actionWorkItemsFromDAGNode(schedulerInput, item, node, iteration, maxIterations) {
+			if actionItem.ID == "" {
+				continue
+			}
+			items = append(items, actionItem)
+		}
+	}
+	if err := upsertBatchWorkItems(stateCtx, items); err != nil {
+		return err
+	}
+	return setBatchWorkItemStatus(stateCtx, item.ID, "completed", workflowID, "", false)
+}
+
+func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
+	schedulerInput := input.SchedulerInput
+	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
+	item := input.Item
+	workflowID := input.WorkflowID
+	if workflowID == "" {
+		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
+	}
+	stateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: defaultStateActivityTimeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+
+	itemInput := parseSchedulerWorkItemInput(item)
+	actionTarget := itemInput.Target
+	if actionTarget == "" {
+		actionTarget = item.Target
+	}
+	if itemInput.RunIf != nil {
+		conditionOK, conditionMessage, err := evaluateActionWorkItemCondition(stateCtx, item, itemInput)
+		if err != nil {
+			return err
+		}
+		if !conditionOK {
+			if err := skipScheduledActionRecord(stateCtx, item, itemInput, conditionMessage); err != nil {
+				return err
+			}
+			return setBatchWorkItemStatus(stateCtx, item.ID, "skipped", workflowID, conditionMessage, false)
+		}
+	}
+	claimed, err := claimScheduledActionRecord(stateCtx, item, itemInput, workflowID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		reason := "action already running or completed"
+		return setBatchWorkItemStatus(stateCtx, item.ID, "skipped", workflowID, reason, false)
+	}
+
+	actionResult, err := ActionWorkflow(ctx, ActionWorkflowInput{
+		Artifact:               item.Artifact,
+		Target:                 actionTarget,
+		CampaignID:             schedulerInput.BatchInput.CampaignID,
+		Input:                  itemInput.ActionInput,
+		ActivityTimeoutSeconds: schedulerInput.BatchInput.ActivityTimeoutSeconds,
+	})
+	if err != nil {
+		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "", err.Error()); updateErr != nil {
+			return updateErr
+		}
+		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+	}
+	if actionResult == nil || !actionResult.Success {
+		errorMessage := "action failed"
+		if actionResult != nil && actionResult.Error != "" {
+			errorMessage = actionResult.Error
+		}
+		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "", errorMessage); updateErr != nil {
+			return updateErr
+		}
+		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, errorMessage, false)
+	}
+	if shouldReplanAfterAction(item.Type) {
+		if err := upsertNextPlannedDAGFollowUp(stateCtx, schedulerInput, item); err != nil {
+			return err
+		}
+	}
+	if err := completeScheduledActionRecord(stateCtx, item.ID, true, "", ""); err != nil {
+		return err
+	}
+	return setBatchWorkItemStatus(stateCtx, item.ID, "completed", workflowID, "", false)
 }
 
 func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) (bool, error) {
@@ -942,9 +1335,13 @@ func sprayShardWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.Wo
 	baseURLs := stringSliceFromActionInput(baseInput, "base_urls")
 	checkURLs := stringSliceFromActionInput(baseInput, "urls")
 	wordlist := stringSliceFromActionInput(baseInput, "wordlist")
-	if len(wordlist) == 0 && stringFromActionInput(baseInput, "wordlist_mode") == "full" {
-		wordlist = artifact.FullSprayWordlist()
-		delete(baseInput, "wordlist_mode")
+	fullWordlistMode := len(wordlist) == 0 && stringFromActionInput(baseInput, "wordlist_mode") == "full"
+	var wordRanges []wordlistRange
+	if fullWordlistMode {
+		wordRanges = chunkWordlistRanges(len(artifact.FullSprayWordlist()), sprayShardWordSize(input))
+		if len(wordRanges) == 0 {
+			wordRanges = []wordlistRange{{Offset: 0, Limit: 0}}
+		}
 	}
 
 	baseURLChunks := chunkStrings(baseURLs, sprayShardBaseURLSize(input))
@@ -956,13 +1353,36 @@ func sprayShardWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.Wo
 		checkURLChunks = [][]string{nil}
 	}
 	wordChunks := chunkStrings(wordlist, sprayShardWordSize(input))
-	if len(wordChunks) == 0 {
+	if len(wordChunks) == 0 && !fullWordlistMode {
 		wordChunks = [][]string{nil}
 	}
 
 	var items []data.WorkItem
 	shardIndex := 1
 	if len(baseURLs) > 0 {
+		if fullWordlistMode {
+			for _, urlChunk := range baseURLChunks {
+				for _, wordRange := range wordRanges {
+					shardInput := copyActionInput(baseInput)
+					shardInput["base_urls"] = urlChunk
+					shardInput["wordlist_mode"] = "full"
+					shardInput["wordlist_offset"] = wordRange.Offset
+					shardInput["wordlist_limit"] = wordRange.Limit
+					delete(shardInput, "wordlist")
+					shardInput["_shard"] = map[string]interface{}{
+						"type":            "spray",
+						"index":           shardIndex,
+						"base_urls":       len(urlChunk),
+						"word_count":      wordRange.Limit,
+						"wordlist_mode":   "full",
+						"wordlist_offset": wordRange.Offset,
+					}
+					items = append(items, actionWorkItemFromDAGNodeInput(input, parent, node, shardInput, iteration, maxIterations, shardIndex))
+					shardIndex++
+				}
+			}
+			return items
+		}
 		for _, urlChunk := range baseURLChunks {
 			for _, wordChunk := range wordChunks {
 				shardInput := copyActionInput(baseInput)
@@ -997,6 +1417,24 @@ func sprayShardWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.Wo
 		return nil
 	}
 	return []data.WorkItem{item}
+}
+
+func chunkWordlistRanges(total, size int) []wordlistRange {
+	if total <= 0 {
+		return nil
+	}
+	if size <= 0 {
+		size = total
+	}
+	ranges := make([]wordlistRange, 0, (total+size-1)/size)
+	for offset := 0; offset < total; offset += size {
+		limit := size
+		if offset+limit > total {
+			limit = total - offset
+		}
+		ranges = append(ranges, wordlistRange{Offset: offset, Limit: limit})
+	}
+	return ranges
 }
 
 func nucleiGroupWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {

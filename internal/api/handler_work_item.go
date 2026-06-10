@@ -1,8 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/gin-gonic/gin"
@@ -33,6 +35,30 @@ type WorkItemFilterAPIRequest struct {
 	Filter     data.WorkItemFilter `json:"filter,omitempty"`
 }
 
+type WorkItemResponse struct {
+	ID             string          `json:"id"`
+	CampaignID     string          `json:"campaign_id,omitempty"`
+	BatchID        string          `json:"batch_id,omitempty"`
+	ParentID       string          `json:"parent_id,omitempty"`
+	Type           string          `json:"type"`
+	Target         string          `json:"target"`
+	Artifact       string          `json:"artifact"`
+	Queue          string          `json:"queue,omitempty"`
+	Input          json.RawMessage `json:"input,omitempty"`
+	Priority       int             `json:"priority"`
+	Status         string          `json:"status"`
+	Attempts       int             `json:"attempts"`
+	MaxAttempts    int             `json:"max_attempts"`
+	WorkflowID     string          `json:"workflow_id,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	HeartbeatAt    time.Time       `json:"heartbeat_at,omitempty"`
+	LeaseExpiresAt time.Time       `json:"lease_expires_at,omitempty"`
+	StartedAt      time.Time       `json:"started_at,omitempty"`
+	CompletedAt    time.Time       `json:"completed_at,omitempty"`
+}
+
 func (s *Server) ListWorkItems(c *gin.Context) {
 	if s.repo == nil || s.repo.Postgres == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
@@ -50,6 +76,7 @@ func (s *Server) ListWorkItems(c *gin.Context) {
 	if offset < 0 {
 		offset = 0
 	}
+	rawInput := c.Query("raw_input") == "true"
 
 	items, err := s.repo.GetWorkItems(
 		c.Request.Context(),
@@ -67,12 +94,42 @@ func (s *Server) ListWorkItems(c *gin.Context) {
 		return
 	}
 
+	out := make([]WorkItemResponse, 0, len(items))
+	for _, item := range items {
+		out = append(out, workItemResponse(item, rawInput))
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"work_items": items,
+		"work_items": out,
 		"total":      len(items),
 		"limit":      limit,
 		"offset":     offset,
 	})
+}
+
+func workItemResponse(item data.WorkItem, rawInput bool) WorkItemResponse {
+	return WorkItemResponse{
+		ID:             item.ID,
+		CampaignID:     item.CampaignID,
+		BatchID:        item.BatchID,
+		ParentID:       item.ParentID,
+		Type:           item.Type,
+		Target:         item.Target,
+		Artifact:       item.Artifact,
+		Queue:          item.Queue,
+		Input:          inputJSONResponse(item.Input, rawInput),
+		Priority:       item.Priority,
+		Status:         item.Status,
+		Attempts:       item.Attempts,
+		MaxAttempts:    item.MaxAttempts,
+		WorkflowID:     item.WorkflowID,
+		Error:          item.Error,
+		CreatedAt:      item.CreatedAt,
+		UpdatedAt:      item.UpdatedAt,
+		HeartbeatAt:    item.HeartbeatAt,
+		LeaseExpiresAt: item.LeaseExpiresAt,
+		StartedAt:      item.StartedAt,
+		CompletedAt:    item.CompletedAt,
+	}
 }
 
 func (s *Server) WorkItemSummary(c *gin.Context) {

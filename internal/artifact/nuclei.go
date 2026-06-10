@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,6 +144,16 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		nuclei.DisableUpdateCheck(),
 	)
 	if err != nil {
+		if isNucleiNoTemplatesError(err) {
+			data, _ := json.Marshal(NucleiOutput{Results: nil, Total: 0})
+			recordArtifactHeartbeat(ctx, n.Name(), input.Target, "skipped", started, map[string]interface{}{
+				"reason":  "no_templates_available",
+				"targets": len(targets),
+				"tags":    len(tags),
+				"ids":     len(ids),
+			})
+			return Output{Artifact: n.Name(), Target: input.Target, Success: true, Data: data}, nil
+		}
 		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 	defer ne.Close()
@@ -159,6 +170,9 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		items []NucleiResultItem
 	)
 	err = ne.ExecuteWithCallback(func(result *output.ResultEvent) {
+		if !acceptNucleiResult(result) {
+			return
+		}
 		var count int
 		mu.Lock()
 		items = append(items, NucleiResultItem{
@@ -218,6 +232,30 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 }
 
 func (n *NucleiArtifact) Close() error { return nil }
+
+func isNucleiNoTemplatesError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(err.Error())
+	return strings.Contains(value, "no templates available") ||
+		strings.Contains(value, "no templates provided") ||
+		strings.Contains(value, "no templates found")
+}
+
+func acceptNucleiResult(result *output.ResultEvent) bool {
+	if result == nil {
+		return false
+	}
+	templateID := strings.TrimSpace(result.TemplateID)
+	if templateID == "" || strings.HasPrefix(templateID, "cluster-") {
+		return false
+	}
+	if strings.TrimSpace(result.Info.Name) == "" {
+		return false
+	}
+	return true
+}
 
 func nucleiFirstNonEmpty(values ...string) string {
 	for _, value := range values {

@@ -130,7 +130,10 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 
 func gogoServiceStatus(quality Quality) string {
 	if quality.Noise {
-		return "noise"
+		// A noisy HTTP response on the probed path, such as a root 404, does
+		// not make the underlying service noise. Keep the service visible so
+		// planner can still run path discovery against the live host:port.
+		return "observed"
 	}
 	switch quality.Layer {
 	case "critical", "interesting":

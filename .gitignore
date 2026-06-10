@@ -29,3 +29,4 @@ vendor/
 
 # Logs
 *.log
+bin/

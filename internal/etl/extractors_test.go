@@ -117,7 +117,7 @@ func TestSprayExtractorUsesSDKFuzzySignal(t *testing.T) {
 	}
 }
 
-func TestGogoExtractorMarksHTTPNoise(t *testing.T) {
+func TestGogoExtractorKeepsRoot404HTTPServiceVisible(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"results": []map[string]interface{}{
 			{
@@ -141,8 +141,11 @@ func TestGogoExtractorMarksHTTPNoise(t *testing.T) {
 	if service == nil {
 		t.Fatalf("expected service entity, got %#v", result.Entities)
 	}
-	if service.Status != "noise" || service.Confidence >= 0.5 {
-		t.Fatalf("expected noisy service with low confidence, got %#v", service)
+	if service.Status != "observed" || service.Confidence >= 0.5 {
+		t.Fatalf("expected visible low-confidence service, got %#v", service)
+	}
+	if service.Quality == nil || !service.Quality.Noise {
+		t.Fatalf("expected service quality to preserve root 404 noise evidence, got %#v", service)
 	}
 	fingerprint := findEntity(result.Entities, "fingerprint", "microsoft-httpapi")
 	if fingerprint == nil {
@@ -265,6 +268,73 @@ func TestNeutronExtractor(t *testing.T) {
 		if !hasRelationType(result.Relations, relType) {
 			t.Fatalf("expected %s relation, got %#v", relType, result.Relations)
 		}
+	}
+}
+
+func TestNucleiExtractorDropsClusterAndEmptyFindings(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{"template_id": "cluster-abc", "info": "", "severity": "", "target": "https://example.com/login"},
+			{"template_id": "valid-empty", "info": "", "severity": "high", "target": "https://example.com/login"},
+		},
+		"total": 2,
+	})
+	result, err := (&NucleiExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	if len(result.Entities) != 0 {
+		t.Fatalf("expected low-quality nuclei findings to be dropped, got %#v", result.Entities)
+	}
+}
+
+func TestNucleiExtractorDoesNotTurnInfoDiscoveryIntoVulnerability(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"template_id": "tomcat-panel",
+				"info":        "Apache Tomcat Panel - Detect",
+				"severity":    "info",
+				"target":      "https://example.com/manager",
+				"tags":        []string{"panel", "discovery"},
+			},
+		},
+		"total": 1,
+	})
+	result, err := (&NucleiExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	if findEntity(result.Entities, "template", "tomcat-panel") == nil {
+		t.Fatalf("expected template evidence, got %#v", result.Entities)
+	}
+	if hasEntityType(result.Entities, "vulnerability") {
+		t.Fatalf("info discovery should not become a vulnerability, got %#v", result.Entities)
+	}
+}
+
+func TestNucleiExtractorKeepsActionableVulnerability(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"template_id": "CVE-2026-0001",
+				"info":        "Example RCE",
+				"severity":    "critical",
+				"target":      "https://example.com",
+				"cves":        []string{"CVE-2026-0001"},
+			},
+		},
+		"total": 1,
+	})
+	result, err := (&NucleiExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	if !hasEntityType(result.Entities, "vulnerability") || !hasEntityType(result.Entities, "cve") {
+		t.Fatalf("expected vulnerability and CVE entities, got %#v", result.Entities)
+	}
+	if !hasRelationType(result.Relations, RelHasVulnerability) || !hasRelationType(result.Relations, RelHasTemplate) {
+		t.Fatalf("expected vulnerability relations, got %#v", result.Relations)
 	}
 }
 
