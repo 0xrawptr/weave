@@ -92,6 +92,32 @@ func TestPlanFromStatePlansFullSprayForHTTPBaseURLs(t *testing.T) {
 	}
 }
 
+func TestPlanFromStatePlansFullSprayPerBaseURL(t *testing.T) {
+	actions := PlanFromState(State{
+		Target:   "example.com",
+		BaseURLs: []string{"https://example.com", "https://admin.example.com"},
+		URLs:     []string{"https://example.com", "https://admin.example.com"},
+	})
+	sprays := findActions(actions, "spray")
+	if len(sprays) != 2 {
+		t.Fatalf("expected one spray action per base URL, got %#v", actions)
+	}
+	seen := map[string]bool{}
+	for _, spray := range sprays {
+		baseURLs, ok := spray.Input["base_urls"].([]string)
+		if !ok || len(baseURLs) != 1 {
+			t.Fatalf("expected single base URL action, got %#v", spray.Input)
+		}
+		if spray.DedupKey == "" {
+			t.Fatalf("expected dedup key for %#v", spray)
+		}
+		seen[baseURLs[0]] = true
+	}
+	if !seen["https://example.com"] || !seen["https://admin.example.com"] {
+		t.Fatalf("missing base URL spray actions: %#v", seen)
+	}
+}
+
 func TestPlanFromStateKeepsNonHTTPServicesForNucleiOnly(t *testing.T) {
 	actions := PlanFromState(State{
 		Target:       "127.0.0.1",
@@ -235,6 +261,18 @@ func TestWorkItemsCoverPendingSprayBaseURLs(t *testing.T) {
 	baseURLs, ok := spray.Input["base_urls"].([]string)
 	if !ok || len(baseURLs) != 1 || baseURLs[0] != "https://admin.example.com" {
 		t.Fatalf("expected only uncovered base URL, got %#v", spray.Input)
+	}
+}
+
+func TestRecordInputStringsReadsNestedEnvelopeInput(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"input": map[string]interface{}{
+			"base_urls": []string{"https://example.com"},
+		},
+	})
+	values := recordInputStrings(data.ActionRecord{Input: raw}, "base_urls")
+	if len(values) != 1 || values[0] != "https://example.com" {
+		t.Fatalf("expected nested base URL coverage, got %#v", values)
 	}
 }
 
@@ -445,6 +483,16 @@ func findAction(actions []Action, artifact string) *Action {
 		}
 	}
 	return nil
+}
+
+func findActions(actions []Action, artifact string) []Action {
+	var out []Action
+	for _, action := range actions {
+		if action.Artifact == artifact {
+			out = append(out, action)
+		}
+	}
+	return out
 }
 
 func contains(values []string, expected string) bool {

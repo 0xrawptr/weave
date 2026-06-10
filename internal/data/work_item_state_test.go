@@ -8,13 +8,17 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 		to   string
 		want bool
 	}{
-		{WorkItemStatusPending, WorkItemStatusRunning, true},
+		{WorkItemStatusPending, WorkItemStatusStarting, true},
+		{WorkItemStatusStarting, WorkItemStatusRunning, true},
+		{WorkItemStatusStarting, WorkItemStatusCompleted, true},
+		{WorkItemStatusStarting, WorkItemStatusRetryWaiting, true},
 		{WorkItemStatusRunning, WorkItemStatusCompleted, true},
 		{WorkItemStatusRunning, WorkItemStatusFailed, true},
 		{WorkItemStatusRunning, WorkItemStatusSkipped, true},
 		{WorkItemStatusFailed, WorkItemStatusRetryWaiting, true},
 		{WorkItemStatusRetryWaiting, WorkItemStatusPending, true},
 		{WorkItemStatusPaused, WorkItemStatusPending, true},
+		{WorkItemStatusStarting, WorkItemStatusPending, false},
 		{WorkItemStatusCompleted, WorkItemStatusRunning, false},
 		{WorkItemStatusDead, WorkItemStatusPending, false},
 		{WorkItemStatusCancelled, WorkItemStatusRunning, false},
@@ -28,8 +32,8 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 }
 
 func TestValidWorkItemStatus(t *testing.T) {
-	if !ValidWorkItemStatus(WorkItemStatusRetryWaiting) {
-		t.Fatalf("retry_waiting should be valid")
+	if !ValidWorkItemStatus(WorkItemStatusStarting) {
+		t.Fatalf("starting should be valid")
 	}
 	if ValidWorkItemStatus("unknown") {
 		t.Fatalf("unknown status should be invalid")

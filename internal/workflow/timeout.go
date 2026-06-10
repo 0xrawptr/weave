@@ -11,6 +11,7 @@ const (
 	defaultLongActivityTimeout  = 24 * time.Hour
 	maxLongActivityTimeout      = 7 * 24 * time.Hour
 	defaultStateActivityTimeout = 30 * time.Second
+	ControlWorkflowTaskTimeout  = time.Minute
 )
 
 func longActivityTimeout(seconds int) time.Duration {

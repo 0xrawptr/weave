@@ -129,7 +129,10 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 	}
 
 	schedulerID := fmt.Sprintf("%s-scheduler", parentID)
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: schedulerID})
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID:          schedulerID,
+		WorkflowTaskTimeout: ControlWorkflowTaskTimeout,
+	})
 	var schedulerResult SchedulerWorkflowResult
 	if err := workflow.ExecuteChildWorkflow(childCtx, SchedulerWorkflow, SchedulerWorkflowInput{
 		BatchID:     parentID,
@@ -240,12 +243,17 @@ func chunkWorkItems(items []data.WorkItem, size int) [][]data.WorkItem {
 }
 
 func setBatchWorkItemStatus(ctx workflow.Context, id, status, workflowID, errorMessage string, incrementAttempt bool) error {
+	return setBatchWorkItemStatusWithLease(ctx, id, status, workflowID, errorMessage, incrementAttempt, 0)
+}
+
+func setBatchWorkItemStatusWithLease(ctx workflow.Context, id, status, workflowID, errorMessage string, incrementAttempt bool, leaseSeconds int) error {
 	return workflow.ExecuteActivity(ctx, planner.SetWorkItemStatusActivityName, planner.WorkItemStatusUpdate{
 		ID:               id,
 		Status:           status,
 		WorkflowID:       workflowID,
 		Error:            errorMessage,
 		IncrementAttempt: incrementAttempt,
+		LeaseSeconds:     leaseSeconds,
 	}).Get(ctx, nil)
 }
 

@@ -300,6 +300,45 @@ func TestFullSprayShardWorkItemsUseWordlistRanges(t *testing.T) {
 	}
 }
 
+func TestFullSprayShardWorkItemsUseSingleBaseURLChunks(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:         "camp-1",
+			MaxAttempts:        2,
+			SprayShardBaseURLs: 10,
+			SprayShardWords:    500,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	node := planner.DAGPlanNode{
+		ID:       "node-spray",
+		Artifact: "spray",
+		Target:   "10.0.0.0/24",
+		Input: map[string]any{
+			"base_urls":     []string{"http://10.0.0.1:8080", "http://10.0.0.2:8080"},
+			"wordlist_mode": "full",
+		},
+		Priority: 90,
+	}
+
+	items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3)
+	wantPerURL := len(chunkWordlistRanges(len(artifact.FullSprayWordlist()), 500))
+	if wantPerURL == 0 {
+		wantPerURL = 1
+	}
+	if len(items) != wantPerURL*2 {
+		t.Fatalf("len(items) = %d, want %d", len(items), wantPerURL*2)
+	}
+	for _, item := range items {
+		parsed := parseSchedulerWorkItemInput(item)
+		baseURLs := stringSliceFromActionInput(parsed.ActionInput, "base_urls")
+		if len(baseURLs) != 1 {
+			t.Fatalf("full spray shard must contain one base URL, got %#v", parsed.ActionInput)
+		}
+	}
+}
+
 func TestActionChildWorkflowIDIncludesWorkItemID(t *testing.T) {
 	target := "202.205.161.0/24"
 	first := actionChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1)

@@ -3,6 +3,7 @@ package data
 func ValidWorkItemStatus(status string) bool {
 	switch status {
 	case WorkItemStatusPending,
+		WorkItemStatusStarting,
 		WorkItemStatusRunning,
 		WorkItemStatusCompleted,
 		WorkItemStatusFailed,
@@ -25,8 +26,17 @@ func CanTransitionWorkItemStatus(from, to string) bool {
 	case "":
 		return to == WorkItemStatusPending
 	case WorkItemStatusPending:
-		return to == WorkItemStatusRunning ||
+		return to == WorkItemStatusStarting ||
+			to == WorkItemStatusRunning ||
 			to == WorkItemStatusPaused ||
+			to == WorkItemStatusCancelled ||
+			to == WorkItemStatusSkipped ||
+			to == WorkItemStatusDead
+	case WorkItemStatusStarting:
+		return to == WorkItemStatusRunning ||
+			to == WorkItemStatusCompleted ||
+			to == WorkItemStatusFailed ||
+			to == WorkItemStatusRetryWaiting ||
 			to == WorkItemStatusCancelled ||
 			to == WorkItemStatusSkipped ||
 			to == WorkItemStatusDead

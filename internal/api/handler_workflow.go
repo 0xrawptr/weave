@@ -103,8 +103,9 @@ func (s *Server) StartWorkflow(c *gin.Context) {
 
 	var run client.WorkflowRun
 	opts := client.StartWorkflowOptions{
-		ID:        workflowID,
-		TaskQueue: s.cfg.Temporal.TaskQueue,
+		ID:                  workflowID,
+		TaskQueue:           s.cfg.Temporal.TaskQueue,
+		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
 	}
 
 	switch detectedType {

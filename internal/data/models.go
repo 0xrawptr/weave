@@ -6,6 +6,7 @@ import (
 
 const (
 	WorkItemStatusPending      = "pending"
+	WorkItemStatusStarting     = "starting"
 	WorkItemStatusRunning      = "running"
 	WorkItemStatusCompleted    = "completed"
 	WorkItemStatusFailed       = "failed"
@@ -241,26 +242,32 @@ type WorkItemBulkResult struct {
 }
 
 type WorkItemGroupSummary struct {
-	Key                string `json:"key"`
-	Total              int    `json:"total"`
-	Pending            int    `json:"pending"`
-	Running            int    `json:"running"`
-	Completed          int    `json:"completed"`
-	Failed             int    `json:"failed"`
-	RetryWaiting       int    `json:"retry_waiting"`
-	Paused             int    `json:"paused"`
-	Cancelled          int    `json:"cancelled"`
-	Skipped            int    `json:"skipped"`
-	Dead               int    `json:"dead"`
-	Queued             int    `json:"queued"`
-	Done               int    `json:"done"`
-	Error              int    `json:"error"`
-	ProgressPercent    int    `json:"progress_percent"`
-	AvgDurationMs      int64  `json:"avg_duration_ms,omitempty"`
-	ThroughputPerMin   int    `json:"throughput_per_min,omitempty"`
-	ETASeconds         int64  `json:"eta_seconds,omitempty"`
-	LastError          string `json:"last_error,omitempty"`
-	LastErrorUpdatedAt string `json:"last_error_updated_at,omitempty"`
+	Key                    string `json:"key"`
+	Total                  int    `json:"total"`
+	Pending                int    `json:"pending"`
+	Starting               int    `json:"starting,omitempty"`
+	Running                int    `json:"running"`
+	StaleRunning           int    `json:"stale_running,omitempty"`
+	HeartbeatStaleRunning  int    `json:"heartbeat_stale_running,omitempty"`
+	Completed              int    `json:"completed"`
+	Failed                 int    `json:"failed"`
+	RetryWaiting           int    `json:"retry_waiting"`
+	Paused                 int    `json:"paused"`
+	Cancelled              int    `json:"cancelled"`
+	Skipped                int    `json:"skipped"`
+	Dead                   int    `json:"dead"`
+	Queued                 int    `json:"queued"`
+	Done                   int    `json:"done"`
+	Error                  int    `json:"error"`
+	ProgressPercent        int    `json:"progress_percent"`
+	AvgDurationMs          int64  `json:"avg_duration_ms,omitempty"`
+	ThroughputPerMin       int    `json:"throughput_per_min,omitempty"`
+	ETASeconds             int64  `json:"eta_seconds,omitempty"`
+	OldestRunningStartedAt string `json:"oldest_running_started_at,omitempty"`
+	OldestRunningHeartbeat string `json:"oldest_running_heartbeat_at,omitempty"`
+	NextLeaseExpiresAt     string `json:"next_lease_expires_at,omitempty"`
+	LastError              string `json:"last_error,omitempty"`
+	LastErrorUpdatedAt     string `json:"last_error_updated_at,omitempty"`
 }
 
 type WorkItemProgressSummary struct {
@@ -276,17 +283,19 @@ type WorkItemProgressSummary struct {
 }
 
 type ArtifactStatSummary struct {
-	Artifact         string `json:"artifact"`
-	TotalRuns        int    `json:"total_runs"`
-	Targets          int64  `json:"targets,omitempty"`
-	Tasks            int64  `json:"tasks,omitempty"`
-	Requests         int64  `json:"requests,omitempty"`
-	Results          int64  `json:"results,omitempty"`
-	Errors           int64  `json:"errors,omitempty"`
-	DurationMs       int64  `json:"duration_ms,omitempty"`
-	AvgDurationMs    int64  `json:"avg_duration_ms,omitempty"`
-	ErrorRatePercent int    `json:"error_rate_percent,omitempty"`
-	ThroughputPerMin int64  `json:"throughput_per_min,omitempty"`
+	Artifact                string `json:"artifact"`
+	TotalRuns               int    `json:"total_runs"`
+	Targets                 int64  `json:"targets,omitempty"`
+	Tasks                   int64  `json:"tasks,omitempty"`
+	Requests                int64  `json:"requests,omitempty"`
+	Results                 int64  `json:"results,omitempty"`
+	Errors                  int64  `json:"errors,omitempty"`
+	ErrorScope              string `json:"error_scope,omitempty"`
+	DurationMs              int64  `json:"duration_ms,omitempty"`
+	AvgDurationMs           int64  `json:"avg_duration_ms,omitempty"`
+	ErrorRatePercent        int    `json:"error_rate_percent,omitempty"`
+	RequestErrorRatePercent int    `json:"request_error_rate_percent,omitempty"`
+	ThroughputPerMin        int64  `json:"throughput_per_min,omitempty"`
 }
 
 // RawEvent stores artifact output exactly as produced, before any transformation.

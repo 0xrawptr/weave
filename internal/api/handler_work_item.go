@@ -57,6 +57,11 @@ type WorkItemResponse struct {
 	LeaseExpiresAt time.Time       `json:"lease_expires_at,omitempty"`
 	StartedAt      time.Time       `json:"started_at,omitempty"`
 	CompletedAt    time.Time       `json:"completed_at,omitempty"`
+	IsStale        bool            `json:"is_stale,omitempty"`
+	HeartbeatStale bool            `json:"heartbeat_stale,omitempty"`
+	RunningSeconds int64           `json:"running_seconds,omitempty"`
+	HeartbeatAge   int64           `json:"heartbeat_age_seconds,omitempty"`
+	LeaseRemaining int64           `json:"lease_remaining_seconds,omitempty"`
 }
 
 func (s *Server) ListWorkItems(c *gin.Context) {
@@ -107,7 +112,8 @@ func (s *Server) ListWorkItems(c *gin.Context) {
 }
 
 func workItemResponse(item data.WorkItem, rawInput bool) WorkItemResponse {
-	return WorkItemResponse{
+	now := time.Now()
+	resp := WorkItemResponse{
 		ID:             item.ID,
 		CampaignID:     item.CampaignID,
 		BatchID:        item.BatchID,
@@ -130,6 +136,20 @@ func workItemResponse(item data.WorkItem, rawInput bool) WorkItemResponse {
 		StartedAt:      item.StartedAt,
 		CompletedAt:    item.CompletedAt,
 	}
+	if item.Status == data.WorkItemStatusStarting || item.Status == data.WorkItemStatusRunning {
+		if !item.StartedAt.IsZero() {
+			resp.RunningSeconds = int64(now.Sub(item.StartedAt).Seconds())
+		}
+		if !item.HeartbeatAt.IsZero() {
+			resp.HeartbeatAge = int64(now.Sub(item.HeartbeatAt).Seconds())
+			resp.HeartbeatStale = resp.HeartbeatAge > int64((10 * time.Minute).Seconds())
+		}
+		if !item.LeaseExpiresAt.IsZero() {
+			resp.LeaseRemaining = int64(item.LeaseExpiresAt.Sub(now).Seconds())
+			resp.IsStale = item.LeaseExpiresAt.Before(now)
+		}
+	}
+	return resp
 }
 
 func (s *Server) WorkItemSummary(c *gin.Context) {

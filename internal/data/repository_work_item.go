@@ -24,10 +24,14 @@ func (r *Repository) ClaimWorkItem(ctx context.Context, request WorkItemClaimReq
 }
 
 func (r *Repository) SetWorkItemStatus(ctx context.Context, id, status, workflowID, errorMessage string, incrementAttempt bool) error {
+	return r.SetWorkItemStatusWithLease(ctx, id, status, workflowID, errorMessage, incrementAttempt, 0)
+}
+
+func (r *Repository) SetWorkItemStatusWithLease(ctx context.Context, id, status, workflowID, errorMessage string, incrementAttempt bool, leaseSeconds int) error {
 	if r == nil || r.Postgres == nil {
 		return nil
 	}
-	return r.Postgres.SetWorkItemStatus(ctx, id, status, workflowID, errorMessage, incrementAttempt)
+	return r.Postgres.SetWorkItemStatus(ctx, id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds)
 }
 
 func (r *Repository) HeartbeatWorkItem(ctx context.Context, request WorkItemHeartbeatRequest) error {

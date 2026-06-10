@@ -237,20 +237,20 @@ func PlanFromState(state State) []Action {
 	}
 
 	sprayBaseURLs := withoutCoveredValues(baseURLs, state.Actions, "spray", "base_urls")
-	if len(sprayBaseURLs) > 0 {
+	for _, baseURL := range sprayBaseURLs {
 		actions = append(actions, Action{
-			ID:         data.GenerateID("action", state.Target, "spray", "full", joinKey(sprayBaseURLs)),
+			ID:         data.GenerateID("action", state.Target, "spray", "full", baseURL),
 			CampaignID: state.CampaignID,
 			Target:     state.Target,
 			Artifact:   "spray",
-			Input:      map[string]interface{}{"base_urls": sprayBaseURLs, "wordlist_mode": "full"},
+			Input:      map[string]interface{}{"base_urls": []string{baseURL}, "wordlist_mode": "full"},
 			Priority:   80,
 			Reason:     "expand attack surface with full path discovery",
 			Status:     "candidate",
-			Evidence:   stringEvidence("url", sprayBaseURLs, 0),
+			Evidence:   stringEvidence("url", []string{baseURL}, 0),
 			Risk:       "medium",
 			Cost:       45,
-			DedupKey:   actionDedupKey(state.Target, "spray", "full", joinKey(sprayBaseURLs)),
+			DedupKey:   actionDedupKey(state.Target, "spray", "full", baseURL),
 		})
 	}
 
@@ -694,6 +694,11 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 	}
 	values, ok := input[field].([]interface{})
 	if !ok {
+		if nested, nestedOK := input["input"].(map[string]interface{}); nestedOK {
+			values, ok = nested[field].([]interface{})
+		}
+	}
+	if !ok {
 		return nil
 	}
 	out := make([]string, 0, len(values))
@@ -707,7 +712,7 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 
 func blocksActionStatus(status string) bool {
 	switch status {
-	case data.WorkItemStatusPending, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused:
+	case data.WorkItemStatusPending, data.WorkItemStatusStarting, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused:
 		return true
 	default:
 		return false

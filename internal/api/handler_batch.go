@@ -154,7 +154,7 @@ func statusFromWorkItemCounts(total int, counts map[string]int) string {
 		return ""
 	}
 	pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
-	running := counts[data.WorkItemStatusRunning]
+	running := counts[data.WorkItemStatusStarting] + counts[data.WorkItemStatusRunning]
 	completed := counts[data.WorkItemStatusCompleted]
 	failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
 	cancelled := counts[data.WorkItemStatusCancelled]
@@ -183,6 +183,7 @@ func dagStatusFromSummary(summary data.WorkItemProgressSummary) string {
 		}
 		total += group.Total
 		counts[data.WorkItemStatusPending] += group.Pending
+		counts[data.WorkItemStatusStarting] += group.Starting
 		counts[data.WorkItemStatusRunning] += group.Running
 		counts[data.WorkItemStatusCompleted] += group.Completed
 		counts[data.WorkItemStatusFailed] += group.Failed
@@ -267,8 +268,9 @@ func (s *Server) RetryFailedBatchChunks(c *gin.Context) {
 	}
 	workflowID := fmt.Sprintf("batch_retry-%s-%d", batchID, time.Now().UnixNano())
 	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
-		ID:        workflowID,
-		TaskQueue: s.cfg.Temporal.TaskQueue,
+		ID:                  workflowID,
+		TaskQueue:           s.cfg.Temporal.TaskQueue,
+		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
 	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
 		Targets:                 targets,
 		PriorityTargets:         req.PriorityTargets,
@@ -334,8 +336,9 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 	}
 	workflowID := fmt.Sprintf("batch_scheduler_resume-%s-%d", batchID, time.Now().UnixNano())
 	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
-		ID:        workflowID,
-		TaskQueue: s.cfg.Temporal.TaskQueue,
+		ID:                  workflowID,
+		TaskQueue:           s.cfg.Temporal.TaskQueue,
+		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
 	}, workflow.SchedulerWorkflow, workflow.SchedulerWorkflowInput{
 		BatchID: batchID,
 		BatchInput: workflow.BatchPortScanInput{

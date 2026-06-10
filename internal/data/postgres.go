@@ -733,6 +733,14 @@ func completeArtifactStatSummary(summary *ArtifactStatSummary, firstSeen, lastSe
 	if denominator > 0 && summary.Errors > 0 {
 		summary.ErrorRatePercent = int(summary.Errors * 100 / denominator)
 	}
+	if summary.Requests > 0 {
+		summary.ErrorScope = "request"
+		if summary.Errors > 0 {
+			summary.RequestErrorRatePercent = int(summary.Errors * 100 / summary.Requests)
+		}
+	} else if summary.Errors > 0 {
+		summary.ErrorScope = "task"
+	}
 	elapsedMinutes := int64(lastSeen.Sub(firstSeen).Minutes())
 	if elapsedMinutes <= 0 {
 		elapsedMinutes = 1
@@ -1022,11 +1030,11 @@ func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) er
 			input = CASE WHEN EXCLUDED.input IS NOT NULL THEN EXCLUDED.input ELSE work_items.input END,
 			priority = GREATEST(work_items.priority, EXCLUDED.priority),
 			status = CASE
-				WHEN work_items.status IN ('running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
+				WHEN work_items.status IN ('starting', 'running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
 				ELSE EXCLUDED.status
 			END,
 			attempts = CASE
-				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('running', 'completed') THEN EXCLUDED.attempts
+				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('starting', 'running', 'completed') THEN EXCLUDED.attempts
 				WHEN EXCLUDED.attempts > work_items.attempts THEN EXCLUDED.attempts
 				ELSE work_items.attempts
 			END,
@@ -1084,22 +1092,22 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		argIdx++
 	}
 	if request.MaxRunning > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.queue = wi.queue) < $%d", argIdx)
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.queue = wi.queue) < $%d", argIdx)
 		args = append(args, request.MaxRunning)
 		argIdx++
 	}
 	if request.MaxRunningPerArtifact > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.artifact = wi.artifact) < $%d", argIdx)
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.artifact = wi.artifact) < $%d", argIdx)
 		args = append(args, request.MaxRunningPerArtifact)
 		argIdx++
 	}
 	if request.MaxRunningPerCampaign > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.campaign_id = wi.campaign_id) < $%d", argIdx)
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.campaign_id = wi.campaign_id) < $%d", argIdx)
 		args = append(args, request.MaxRunningPerCampaign)
 		argIdx++
 	}
 	if request.MaxRunningPerTarget > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.target = wi.target) < $%d", argIdx)
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.target = wi.target) < $%d", argIdx)
 		args = append(args, request.MaxRunningPerTarget)
 		argIdx++
 	}
@@ -1108,13 +1116,13 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		LIMIT 1
 	)
 	UPDATE work_items SET
-		status = 'running',
+		status = 'starting',
 		attempts = attempts + 1,
 		workflow_id = $%d,
 		error = '',
 		heartbeat_at = NOW(),
 		lease_expires_at = NOW() + ($%d * INTERVAL '1 second'),
-		started_at = NOW(),
+		started_at = NULL,
 		updated_at = NOW()
 	FROM candidate
 	WHERE work_items.id = candidate.id
@@ -1134,9 +1142,12 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 	return &item, nil
 }
 
-func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workflowID, errorMessage string, incrementAttempt bool) error {
+func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workflowID, errorMessage string, incrementAttempt bool, leaseSeconds int) error {
 	if !ValidWorkItemStatus(status) {
 		return fmt.Errorf("invalid work item status: %s", status)
+	}
+	if leaseSeconds < 0 {
+		leaseSeconds = 0
 	}
 
 	var current string
@@ -1163,12 +1174,16 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 			error = $4,
 			attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END,
 			started_at = CASE WHEN $2 = 'running' THEN NOW() ELSE started_at END,
-			heartbeat_at = CASE WHEN $2 = 'running' THEN NOW() ELSE heartbeat_at END,
-			lease_expires_at = CASE WHEN $2 IN ('completed', 'failed', 'retry_waiting', 'paused', 'cancelled', 'skipped', 'dead') THEN NULL ELSE lease_expires_at END,
+			heartbeat_at = CASE WHEN $2 IN ('starting', 'running') THEN NOW() ELSE heartbeat_at END,
+			lease_expires_at = CASE
+				WHEN $2 IN ('completed', 'failed', 'retry_waiting', 'paused', 'cancelled', 'skipped', 'dead') THEN NULL
+				WHEN $2 IN ('starting', 'running') AND $6 > 0 THEN NOW() + ($6 * INTERVAL '1 second')
+				ELSE lease_expires_at
+			END,
 			completed_at = CASE WHEN $2 IN ('completed', 'cancelled', 'skipped', 'dead') THEN NOW() ELSE completed_at END,
 			updated_at = NOW()
 		 WHERE id = $1`,
-		id, status, workflowID, errorMessage, incrementAttempt)
+		id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds)
 	return err
 }
 
@@ -1183,7 +1198,7 @@ func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemH
 		heartbeat_at = NOW(),
 		lease_expires_at = NOW() + ($2 * INTERVAL '1 second'),
 		updated_at = NOW()
-		WHERE id = $1 AND status = 'running'`
+		WHERE id = $1 AND status IN ('starting', 'running')`
 	args := []interface{}{request.ID, request.LeaseSeconds}
 	if request.WorkflowID != "" {
 		query += ` AND workflow_id = $3`
@@ -1365,7 +1380,10 @@ func (p *PostgresStore) GetWorkItemProgressSummary(ctx context.Context, filter W
 		summary.ThroughputPerMin = summary.Overall.ThroughputPerMin
 		summary.ByStatus = map[string]int{
 			WorkItemStatusPending:      summary.Overall.Pending,
+			WorkItemStatusStarting:     summary.Overall.Starting,
 			WorkItemStatusRunning:      summary.Overall.Running,
+			"stale_running":            summary.Overall.StaleRunning,
+			"heartbeat_stale_running":  summary.Overall.HeartbeatStaleRunning,
 			WorkItemStatusCompleted:    summary.Overall.Completed,
 			WorkItemStatusFailed:       summary.Overall.Failed,
 			WorkItemStatusRetryWaiting: summary.Overall.RetryWaiting,
@@ -1385,7 +1403,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 	case "":
 	case "type", "queue", "artifact":
 		groupExpr = groupBy
-		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
+		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'starting', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
 	default:
 		return nil, fmt.Errorf("unsupported work item summary group: %s", groupBy)
 	}
@@ -1394,7 +1412,18 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 		COALESCE(%[1]s, '') AS group_key,
 		COUNT(*)::INT AS total,
 		COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending,
+		COUNT(*) FILTER (WHERE status = 'starting')::INT AS starting,
 		COUNT(*) FILTER (WHERE status = 'running')::INT AS running,
+		COUNT(*) FILTER (
+			WHERE status IN ('starting', 'running')
+			  AND lease_expires_at IS NOT NULL
+			  AND lease_expires_at < NOW()
+		)::INT AS stale_running,
+		COUNT(*) FILTER (
+			WHERE status IN ('starting', 'running')
+			  AND heartbeat_at IS NOT NULL
+			  AND heartbeat_at < NOW() - INTERVAL '10 minutes'
+		)::INT AS heartbeat_stale_running,
 		COUNT(*) FILTER (WHERE status = 'completed')::INT AS completed,
 		COUNT(*) FILTER (WHERE status = 'failed')::INT AS failed,
 		COUNT(*) FILTER (WHERE status = 'retry_waiting')::INT AS retry_waiting,
@@ -1409,6 +1438,9 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			WHERE completed_at >= NOW() - INTERVAL '15 minutes'
 			  AND status IN ('completed', 'failed', 'dead', 'cancelled', 'skipped')
 		)::INT AS done_last_15m,
+		COALESCE(TO_CHAR(MIN(started_at) FILTER (WHERE status IN ('starting', 'running') AND started_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_started_at,
+		COALESCE(TO_CHAR(MIN(heartbeat_at) FILTER (WHERE status IN ('starting', 'running') AND heartbeat_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_heartbeat_at,
+		COALESCE(TO_CHAR(MIN(lease_expires_at) FILTER (WHERE status IN ('starting', 'running') AND lease_expires_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS next_lease_expires_at,
 		COALESCE((ARRAY_AGG(error ORDER BY updated_at DESC) FILTER (WHERE error <> ''))[1], '') AS last_error,
 		COALESCE(TO_CHAR(MAX(updated_at) FILTER (WHERE error <> ''), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS last_error_updated_at
 	FROM work_items
@@ -1432,7 +1464,10 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			&group.Key,
 			&group.Total,
 			&group.Pending,
+			&group.Starting,
 			&group.Running,
+			&group.StaleRunning,
+			&group.HeartbeatStaleRunning,
 			&group.Completed,
 			&group.Failed,
 			&group.RetryWaiting,
@@ -1442,6 +1477,9 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			&group.Dead,
 			&group.AvgDurationMs,
 			&doneLast15m,
+			&group.OldestRunningStartedAt,
+			&group.OldestRunningHeartbeat,
+			&group.NextLeaseExpiresAt,
 			&group.LastError,
 			&group.LastErrorUpdatedAt,
 		); err != nil {
@@ -1454,7 +1492,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 }
 
 func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) {
-	group.Queued = group.Pending + group.RetryWaiting + group.Paused
+	group.Queued = group.Pending + group.Starting + group.RetryWaiting + group.Paused
 	group.Done = group.Completed + group.Cancelled + group.Skipped
 	group.Error = group.Failed + group.Dead
 	if group.Total > 0 {
@@ -1463,6 +1501,7 @@ func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) 
 	if doneLast15m > 0 {
 		group.ThroughputPerMin = maxInt(1, doneLast15m/15)
 	}
+	active := group.Starting + group.Running
 	remaining := group.Queued + group.Running
 	if remaining <= 0 {
 		return
@@ -1471,8 +1510,8 @@ func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) 
 		group.ETASeconds = int64((remaining*60 + group.ThroughputPerMin - 1) / group.ThroughputPerMin)
 		return
 	}
-	if group.AvgDurationMs > 0 && group.Running > 0 {
-		group.ETASeconds = int64((remaining*int(group.AvgDurationMs) + group.Running - 1) / group.Running / 1000)
+	if group.AvgDurationMs > 0 && active > 0 {
+		group.ETASeconds = int64((remaining*int(group.AvgDurationMs) + active - 1) / active / 1000)
 	}
 }
 
@@ -1600,7 +1639,7 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 	}
 	query := `WITH stale AS (
 		SELECT id FROM work_items
-		WHERE status = 'running'
+		WHERE status IN ('starting', 'running')
 		  AND lease_expires_at IS NOT NULL
 		  AND lease_expires_at < NOW()`
 	args := []interface{}{}
@@ -1614,6 +1653,7 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 		workflow_id = '',
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
+		started_at = NULL,
 		completed_at = CASE WHEN attempts >= max_attempts THEN NOW() ELSE completed_at END,
 		updated_at = NOW()
 	FROM stale

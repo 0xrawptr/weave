@@ -213,13 +213,14 @@ type WorkItemStatusUpdate struct {
 	WorkflowID       string `json:"workflow_id,omitempty"`
 	Error            string `json:"error,omitempty"`
 	IncrementAttempt bool   `json:"increment_attempt,omitempty"`
+	LeaseSeconds     int    `json:"lease_seconds,omitempty"`
 }
 
 func (a *Activity) SetWorkItemStatus(ctx context.Context, update WorkItemStatusUpdate) error {
 	if a == nil || a.planner == nil || a.planner.repo == nil {
 		return nil
 	}
-	return a.planner.repo.SetWorkItemStatus(ctx, update.ID, update.Status, update.WorkflowID, update.Error, update.IncrementAttempt)
+	return a.planner.repo.SetWorkItemStatusWithLease(ctx, update.ID, update.Status, update.WorkflowID, update.Error, update.IncrementAttempt, update.LeaseSeconds)
 }
 
 func (a *Activity) HeartbeatWorkItem(ctx context.Context, request data.WorkItemHeartbeatRequest) error {

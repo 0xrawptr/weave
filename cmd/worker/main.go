@@ -7,6 +7,7 @@ import (
 
 	"github.com/0xrawptr/weave/internal/app"
 	"github.com/0xrawptr/weave/internal/config"
+	"github.com/0xrawptr/weave/internal/data"
 	appruntime "github.com/0xrawptr/weave/internal/runtime"
 	"github.com/0xrawptr/weave/internal/workflow"
 
@@ -26,6 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("artifact init: %v", err)
 	}
+	recoverExpiredRunningItems(ctx, runtimeApp)
 
 	c, err := client.Dial(client.Options{
 		HostPort:  fmt.Sprintf("%s:%d", cfg.Temporal.Host, cfg.Temporal.Port),
@@ -63,6 +65,20 @@ func main() {
 		w.Stop()
 	}
 	runtimeApp.Close()
+}
+
+func recoverExpiredRunningItems(ctx context.Context, runtimeApp *app.App) {
+	if runtimeApp == nil || runtimeApp.Repo == nil {
+		return
+	}
+	result, err := runtimeApp.Repo.RecoverStaleWorkItems(ctx, data.WorkItemFilter{}, 10000)
+	if err != nil {
+		log.Printf("WARNING: startup stale work item recovery failed: %v", err)
+		return
+	}
+	if result.Updated > 0 {
+		log.Printf("startup stale work item recovery updated %d item(s)", result.Updated)
+	}
 }
 
 func workerOptions(cfg config.WorkerConfig, activityOnly bool) sdkworker.Options {
