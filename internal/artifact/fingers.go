@@ -47,17 +47,6 @@ type FingersMatchDetail struct {
 	SendData     string `json:"send_data,omitempty"`
 }
 
-func NewFingersArtifact(cfg *sdkfingers.Config) (*FingersArtifact, error) {
-	if cfg == nil {
-		cfg = sdkfingers.NewConfig()
-	}
-	engine, err := sdkfingers.NewEngine(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &FingersArtifact{engine: engine}, nil
-}
-
 func NewFingersArtifactFromEngine(engine *sdkfingers.Engine) *FingersArtifact {
 	return &FingersArtifact{engine: engine}
 }

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-
-	"github.com/0xrawptr/weave/internal/data"
 )
 
 // CdncheckExtractor extracts resolved IPs and protection/provider findings.
@@ -29,7 +27,6 @@ func (c *CdncheckExtractor) Extract(ctx context.Context, scanTarget string, rawD
 	}
 
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 
@@ -37,23 +34,29 @@ func (c *CdncheckExtractor) Extract(ctx context.Context, scanTarget string, rawD
 	if net.ParseIP(scanTarget) != nil {
 		anchorType = "ip"
 	}
-	anchorID := data.GenerateID(anchorType, scanTarget, scanTarget)
-	addEntity(result, entitySet, Entity{
+	anchorTarget := targetForValue(scanTarget)
+	anchorID := assetID(anchorType, scanTarget)
+	anchorEntity := Entity{
 		ID: anchorID, Type: anchorType, Value: scanTarget,
-		Source: "cdncheck", TargetID: targetID, RawData: rawData,
+		Source: "cdncheck", RawData: rawData,
 		Confidence: 1.0, Status: "observed",
-	})
+	}
+	applyTarget(&anchorEntity, anchorTarget)
+	addEntity(result, entitySet, anchorEntity)
 
 	for _, ip := range out.IPs {
 		if ip == "" {
 			continue
 		}
-		ipID := data.GenerateID("ip", scanTarget, ip)
-		addEntity(result, entitySet, Entity{
+		ipTarget := targetForHost(ip)
+		ipID := assetID("ip", ip)
+		ipEntity := Entity{
 			ID: ipID, Type: "ip", Value: ip,
-			Source: "cdncheck", TargetID: targetID,
+			Source:     "cdncheck",
 			Confidence: 0.8, Status: "observed",
-		})
+		}
+		applyTarget(&ipEntity, ipTarget)
+		addEntity(result, entitySet, ipEntity)
 		if anchorType == "domain" {
 			addRelation(result, relationSet, Relation{FromID: anchorID, ToID: ipID, Type: RelResolvesTo})
 		}
@@ -64,13 +67,15 @@ func (c *CdncheckExtractor) Extract(ctx context.Context, scanTarget string, rawD
 		if value == "" {
 			value = protectionType
 		}
-		protectionID := data.GenerateID("protection", scanTarget, protectionType, value)
+		protectionID := evidenceID("protection", anchorTarget, protectionType, value)
 		raw, _ := json.Marshal(map[string]string{"type": protectionType, "name": value})
-		addEntity(result, entitySet, Entity{
+		protectionEntity := Entity{
 			ID: protectionID, Type: "protection", Value: value,
-			Source: "cdncheck", TargetID: targetID, RawData: raw,
+			Source: "cdncheck", RawData: raw,
 			Confidence: 0.9, Status: "observed",
-		})
+		}
+		applyTarget(&protectionEntity, anchorTarget)
+		addEntity(result, entitySet, protectionEntity)
 		addRelation(result, relationSet, Relation{FromID: anchorID, ToID: protectionID, Type: RelProtectedBy})
 	}
 	return result, nil

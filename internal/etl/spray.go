@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/0xrawptr/weave/internal/data"
 )
 
 // SprayExtractor extracts discovered/checkable URLs from spray output.
@@ -56,7 +54,6 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 	}
 
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 
@@ -95,28 +92,33 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 		if !persistSprayURL(quality) {
 			continue
 		}
-		urlID := data.GenerateID("url", scanTarget, candidate.canonical)
-		addEntity(result, entitySet, Entity{
+		urlTarget := targetForURL(candidate.canonical)
+		urlID := assetID("url", urlTarget.Value)
+		urlEntity := Entity{
 			ID: urlID, Type: "url", Value: candidate.canonical,
-			Source: "spray", TargetID: targetID, RawData: candidate.raw,
+			Source: "spray", RawData: candidate.raw,
 			Confidence: httpConfidence(candidate.item.StatusCode, quality),
 			Status:     qualityStatus(quality, "observed"),
 			Priority:   qualityPriority(sprayURLPriority(candidate.canonical), quality),
 			Quality:    &quality,
 			Reason:     qualityReason(quality),
-		})
+		}
+		applyTarget(&urlEntity, urlTarget)
+		addEntity(result, entitySet, urlEntity)
 		for _, framework := range candidate.item.Frameworks {
 			name := strings.TrimSpace(framework.Name)
 			if name == "" {
 				continue
 			}
-			fpID := data.GenerateID("fingerprint", scanTarget, name)
-			addEntity(result, entitySet, Entity{
+			fpID := evidenceID("fingerprint", urlTarget, name)
+			fpEntity := Entity{
 				ID: fpID, Type: "fingerprint", Value: name,
-				Source: "spray", TargetID: targetID, RawData: candidate.raw,
+				Source: "spray", RawData: candidate.raw,
 				Product: name, Version: framework.Version, Tags: framework.Tags,
 				Confidence: sprayFingerprintConfidence(len(framework.MatchDetail) > 0), Status: "observed",
-			})
+			}
+			applyTarget(&fpEntity, urlTarget)
+			addEntity(result, entitySet, fpEntity)
 			addRelation(result, relationSet, Relation{FromID: urlID, ToID: fpID, Type: RelHasFingerprint})
 		}
 		for _, extracted := range candidate.item.Extracts {
@@ -126,13 +128,15 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 				if name == "" || value == "" {
 					continue
 				}
-				extractedID := data.GenerateID("extracted", scanTarget, name, value)
-				addEntity(result, entitySet, Entity{
+				extractedID := evidenceID("extracted", urlTarget, name, value)
+				extractedEntity := Entity{
 					ID: extractedID, Type: "extracted", Value: value,
-					Source: "spray", TargetID: targetID, RawData: candidate.raw,
+					Source: "spray", RawData: candidate.raw,
 					Severity:   strings.ToLower(extracted.Severity),
 					Confidence: 0.75, Status: "observed", Tags: []string{name},
-				})
+				}
+				applyTarget(&extractedEntity, urlTarget)
+				addEntity(result, entitySet, extractedEntity)
 				addRelation(result, relationSet, Relation{FromID: urlID, ToID: extractedID, Type: RelRelatesTo})
 			}
 		}

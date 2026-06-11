@@ -32,17 +32,6 @@ type GogoSummary struct {
 	WebURLs []string `json:"web_urls"`
 }
 
-func NewGogoArtifact(cfg *sdkgogo.Config) (*GogoArtifact, error) {
-	if cfg == nil {
-		cfg = sdkgogo.NewConfig()
-	}
-	engine := sdkgogo.NewGogoEngine(cfg)
-	if err := engine.Init(); err != nil {
-		return nil, err
-	}
-	return &GogoArtifact{engine: engine, threads: gogoThreads()}, nil
-}
-
 func NewGogoArtifactFromEngine(engine *sdkgogo.GogoEngine) *GogoArtifact {
 	return &GogoArtifact{engine: engine, threads: gogoThreads()}
 }

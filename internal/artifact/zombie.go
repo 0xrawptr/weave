@@ -45,17 +45,6 @@ type ZombieResultItem struct {
 	Password string `json:"password"`
 }
 
-func NewZombieArtifact(cfg *sdkzombie.Config) (*ZombieArtifact, error) {
-	if cfg == nil {
-		cfg = sdkzombie.NewConfig()
-	}
-	engine := sdkzombie.NewEngine(cfg)
-	if err := engine.Init(); err != nil {
-		return nil, err
-	}
-	return &ZombieArtifact{engine: engine}, nil
-}
-
 // NewZombieArtifactFromEngine wraps an already-initialized SDK engine.
 func NewZombieArtifactFromEngine(engine *sdkzombie.Engine) *ZombieArtifact {
 	return &ZombieArtifact{engine: engine}

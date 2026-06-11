@@ -151,28 +151,6 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		updated_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
-	CREATE TABLE IF NOT EXISTS scans (
-		id TEXT PRIMARY KEY,
-		workflow_id TEXT NOT NULL,
-		workflow_type TEXT NOT NULL,
-		target_id TEXT REFERENCES targets(id),
-		status TEXT NOT NULL DEFAULT 'pending',
-		created_at TIMESTAMPTZ DEFAULT NOW(),
-		updated_at TIMESTAMPTZ DEFAULT NOW()
-	);
-
-	CREATE TABLE IF NOT EXISTS scan_results (
-		id TEXT PRIMARY KEY,
-		scan_id TEXT REFERENCES scans(id),
-		artifact TEXT NOT NULL,
-		input JSONB,
-		output JSONB,
-		success BOOLEAN DEFAULT false,
-		error TEXT,
-		duration_ms BIGINT DEFAULT 0,
-		created_at TIMESTAMPTZ DEFAULT NOW()
-	);
-
 	CREATE TABLE IF NOT EXISTS artifact_stats (
 		id TEXT PRIMARY KEY,
 		campaign_id TEXT NOT NULL DEFAULT '',
@@ -336,8 +314,6 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_work_items_artifact ON work_items(artifact);
 	CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(queue);
 	CREATE INDEX IF NOT EXISTS idx_work_items_priority ON work_items(priority);
-	CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id);
-	CREATE INDEX IF NOT EXISTS idx_scans_workflow ON scans(workflow_id);
 	`
 
 	_, err := p.pool.Exec(ctx, schema)
@@ -349,6 +325,26 @@ func (p *PostgresStore) EnsureTarget(ctx context.Context, t *Target) error {
 		`INSERT INTO targets (id, type, value) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
 		t.ID, t.Type, t.Value)
 	return err
+}
+
+func (p *PostgresStore) GetTargetsByIDs(ctx context.Context, ids []string) (map[string]Target, error) {
+	out := make(map[string]Target, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := p.pool.Query(ctx, `SELECT id, type, value, created_at FROM targets WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var target Target
+		if err := rows.Scan(&target.ID, &target.Type, &target.Value, &target.CreatedAt); err != nil {
+			return nil, err
+		}
+		out[target.ID] = target
+	}
+	return out, rows.Err()
 }
 
 func (p *PostgresStore) UpsertCampaign(ctx context.Context, campaign Campaign) error {
@@ -643,14 +639,6 @@ func (p *PostgresStore) InsertRawEvent(ctx context.Context, e *RawEvent) error {
 		`INSERT INTO raw_events (id, campaign_id, artifact, target_id, target_value, target_type, workflow_id, data)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
 		e.ID, e.CampaignID, e.Artifact, e.TargetID, e.TargetValue, e.TargetType, e.WorkflowID, e.Data)
-	return err
-}
-
-func (p *PostgresStore) InsertScanResult(ctx context.Context, sr *ScanResult) error {
-	_, err := p.pool.Exec(ctx,
-		`INSERT INTO scan_results (id, scan_id, artifact, input, output, success, error, duration_ms)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		sr.ID, sr.ScanID, sr.Artifact, sr.Input, sr.Output, sr.Success, sr.Error, sr.DurationMs)
 	return err
 }
 
@@ -1745,7 +1733,7 @@ func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter
 	query := `WITH retryable AS (
 		SELECT id FROM work_items
 		WHERE status = 'retry_waiting'
-		  AND attempts < max_attempts`
+		  AND (attempts < max_attempts OR error LIKE 'condition_wait:%')`
 	args := []interface{}{}
 	argIdx := 1
 	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
@@ -1755,6 +1743,7 @@ func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter
 	)
 	UPDATE work_items SET
 		status = 'pending',
+		attempts = CASE WHEN error LIKE 'condition_wait:%%' AND attempts > 0 THEN attempts - 1 ELSE attempts END,
 		workflow_id = '',
 		error = '',
 		heartbeat_at = NULL,
@@ -1917,6 +1906,41 @@ func (p *PostgresStore) QueryAssetEvidence(ctx context.Context, targetID, eviden
 		values = append(values, e)
 	}
 	return values, rows.Err()
+}
+
+func (p *PostgresStore) CountAssetEvidence(ctx context.Context, targetID, evidenceType, source, status, campaignID string) (int, error) {
+	var count int
+	query := `SELECT count(*) FROM asset_evidence WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if targetID != "" {
+		query += fmt.Sprintf(" AND target_id = $%d", argIdx)
+		args = append(args, targetID)
+		argIdx++
+	}
+	if evidenceType != "" {
+		query += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, evidenceType)
+		argIdx++
+	}
+	if source != "" {
+		query += fmt.Sprintf(" AND source = $%d", argIdx)
+		args = append(args, source)
+		argIdx++
+	}
+	if status != "" {
+		query += fmt.Sprintf(" AND status = $%d", argIdx)
+		args = append(args, status)
+		argIdx++
+	}
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+	}
+	if err := p.pool.QueryRow(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (p *PostgresStore) CountAssets(ctx context.Context, targetID, assetType string) (int, error) {

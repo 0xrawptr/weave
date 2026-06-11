@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-
-	"github.com/0xrawptr/weave/internal/data"
 )
 
 type DNSXExtractor struct{}
@@ -42,7 +40,6 @@ func (d *DNSXExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 	}
 
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 
@@ -58,18 +55,21 @@ func (d *DNSXExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		if net.ParseIP(host) != nil {
 			anchorType = "ip"
 		}
-		anchorID := data.GenerateID(anchorType, scanTarget, host)
-		addEntity(result, entitySet, Entity{
+		anchorTarget := targetForValue(host)
+		anchorID := assetID(anchorType, host)
+		anchorEntity := Entity{
 			ID: anchorID, Type: anchorType, Value: host,
-			Source: "dnsx", TargetID: targetID, RawData: rawData,
+			Source: "dnsx", RawData: rawData,
 			Confidence: 1.0, Status: "observed",
-		})
+		}
+		applyTarget(&anchorEntity, anchorTarget)
+		addEntity(result, entitySet, anchorEntity)
 
 		for _, ip := range append(item.A, item.AAAA...) {
-			addDNSXIP(result, entitySet, relationSet, scanTarget, targetID, anchorID, ip, rawData)
+			addDNSXIP(result, entitySet, relationSet, anchorID, ip, rawData)
 		}
 		for _, ip := range item.InternalIPs {
-			addDNSXIP(result, entitySet, relationSet, scanTarget, targetID, anchorID, ip, rawData)
+			addDNSXIP(result, entitySet, relationSet, anchorID, ip, rawData)
 		}
 		for recordType, values := range map[string][]string{
 			"cname": item.CNAME,
@@ -82,39 +82,44 @@ func (d *DNSXExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 			"caa":   item.CAA,
 		} {
 			for _, value := range values {
-				addDNSXRecord(result, entitySet, relationSet, scanTarget, targetID, anchorID, recordType, value)
+				addDNSXRecord(result, entitySet, relationSet, anchorTarget, anchorID, recordType, value)
 			}
 		}
 	}
 	return result, nil
 }
 
-func addDNSXIP(result *ExtractResult, entitySet, relationSet map[string]bool, scanTarget, targetID, anchorID, ip string, rawData []byte) {
+func addDNSXIP(result *ExtractResult, entitySet, relationSet map[string]bool, anchorID, ip string, rawData []byte) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" {
 		return
 	}
-	ipID := data.GenerateID("ip", scanTarget, ip)
-	addEntity(result, entitySet, Entity{
+	ipTarget := targetForHost(ip)
+	ipID := assetID("ip", ip)
+	ipEntity := Entity{
 		ID: ipID, Type: "ip", Value: ip,
-		Source: "dnsx", TargetID: targetID, RawData: rawData,
+		Source: "dnsx", RawData: rawData,
 		Confidence: 0.95, Status: "observed",
-	})
+	}
+	applyTarget(&ipEntity, ipTarget)
+	addEntity(result, entitySet, ipEntity)
 	addRelation(result, relationSet, Relation{FromID: anchorID, ToID: ipID, Type: RelResolvesTo})
 }
 
-func addDNSXRecord(result *ExtractResult, entitySet, relationSet map[string]bool, scanTarget, targetID, anchorID, recordType, value string) {
+func addDNSXRecord(result *ExtractResult, entitySet, relationSet map[string]bool, target targetRef, anchorID, recordType, value string) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return
 	}
 	recordValue := fmt.Sprintf("%s:%s", recordType, value)
-	recordID := data.GenerateID("dns_record", scanTarget, recordValue)
+	recordID := evidenceID("dns_record", target, recordValue)
 	raw, _ := json.Marshal(map[string]string{"type": recordType, "value": value})
-	addEntity(result, entitySet, Entity{
+	recordEntity := Entity{
 		ID: recordID, Type: "dns_record", Value: recordValue,
-		Source: "dnsx", TargetID: targetID, RawData: raw,
+		Source: "dnsx", RawData: raw,
 		Confidence: 0.9, Status: "observed",
-	})
+	}
+	applyTarget(&recordEntity, target)
+	addEntity(result, entitySet, recordEntity)
 	addRelation(result, relationSet, Relation{FromID: anchorID, ToID: recordID, Type: RelRelatesTo})
 }

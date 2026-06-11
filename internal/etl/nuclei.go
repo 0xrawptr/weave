@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/0xrawptr/weave/internal/data"
 )
 
 type NucleiExtractor struct{}
@@ -49,7 +47,6 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		return nil, fmt.Errorf("parse nuclei result: %w", err)
 	}
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 	for _, item := range out.Results {
@@ -58,43 +55,52 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		}
 		itemRaw, _ := json.Marshal(item)
 		urlValue := firstNonEmpty(item.URL, item.Target, item.Matched)
+		target := targetForValue(scanTarget)
+		urlID := ""
 		if urlValue != "" {
 			var urlQuality *Quality
 			if canonical, quality := buildHTTPQuality(HTTPQualityInput{URL: urlValue}); canonical != "" {
 				urlValue = canonical
 				urlQuality = &quality
 			}
-			urlID := data.GenerateID("url", scanTarget, urlValue)
-			addEntity(result, entitySet, Entity{
+			target = targetForURL(urlValue)
+			urlID = assetID("url", target.Value)
+			urlEntity := Entity{
 				ID: urlID, Type: "url", Value: urlValue,
-				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Status: "observed", Quality: urlQuality,
-			})
+			}
+			applyTarget(&urlEntity, target)
+			addEntity(result, entitySet, urlEntity)
 		}
 
-		templateID := data.GenerateID("template", scanTarget, item.TemplateID)
+		templateID := evidenceID("template", target, item.TemplateID)
 		if item.TemplateID != "" {
-			addEntity(result, entitySet, Entity{
+			templateEntity := Entity{
 				ID: templateID, Type: "template", Value: item.TemplateID,
-				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
 				Priority: severityPriority(item.Severity), Status: nucleiFindingStatus(item.Severity), Tags: item.Tags,
-			})
+			}
+			applyTarget(&templateEntity, target)
+			addEntity(result, entitySet, templateEntity)
 		}
 
 		vulnID := ""
 		if nucleiIsVulnerability(item.Severity, item.TemplateID, item.CVEs) {
-			vulnID = data.GenerateID("vuln", scanTarget, urlValue, item.TemplateID)
-			addEntity(result, entitySet, Entity{
+			vulnID = evidenceID("vuln", target, urlValue, item.TemplateID)
+			vulnEntity := Entity{
 				ID: vulnID, Type: "vulnerability",
 				Value:  fmt.Sprintf("%s: %s", strings.ToLower(item.Severity), item.Info),
-				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
 				Priority: severityPriority(item.Severity), Status: "confirmed",
-			})
-			if urlValue != "" {
+			}
+			applyTarget(&vulnEntity, target)
+			addEntity(result, entitySet, vulnEntity)
+			if urlID != "" {
 				addRelation(result, relationSet, Relation{
-					FromID: data.GenerateID("url", scanTarget, urlValue), ToID: vulnID, Type: RelHasVulnerability,
+					FromID: urlID, ToID: vulnID, Type: RelHasVulnerability,
 				})
 			}
 			if item.TemplateID != "" {
@@ -104,13 +110,15 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 			}
 		}
 		for _, cve := range nucleiCVEs(item.TemplateID, item.CVEs) {
-			cveID := data.GenerateID("cve", scanTarget, cve)
-			addEntity(result, entitySet, Entity{
+			cveID := evidenceID("cve", target, cve)
+			cveEntity := Entity{
 				ID: cveID, Type: "cve", Value: cve,
-				Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
 				Priority: severityPriority(item.Severity), Status: "confirmed",
-			})
+			}
+			applyTarget(&cveEntity, target)
+			addEntity(result, entitySet, cveEntity)
 			if vulnID != "" {
 				addRelation(result, relationSet, Relation{FromID: vulnID, ToID: cveID, Type: RelRelatesTo})
 			}
@@ -118,12 +126,14 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				addRelation(result, relationSet, Relation{FromID: cveID, ToID: templateID, Type: RelHasTemplate})
 			}
 			if item.CPE != "" {
-				cpeID := data.GenerateID("cpe", scanTarget, item.CPE)
-				addEntity(result, entitySet, Entity{
+				cpeID := evidenceID("cpe", target, item.CPE)
+				cpeEntity := Entity{
 					ID: cpeID, Type: "cpe", Value: item.CPE,
-					Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+					Source: "nuclei", RawData: itemRaw,
 					Confidence: 0.8, Status: "confirmed",
-				})
+				}
+				applyTarget(&cpeEntity, target)
+				addEntity(result, entitySet, cpeEntity)
 				addRelation(result, relationSet, Relation{FromID: cveID, ToID: cpeID, Type: RelHasCPE})
 			}
 			for _, cwe := range item.CWEs {
@@ -131,12 +141,14 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				if cwe == "" {
 					continue
 				}
-				cweID := data.GenerateID("cwe", scanTarget, cwe)
-				addEntity(result, entitySet, Entity{
+				cweID := evidenceID("cwe", target, cwe)
+				cweEntity := Entity{
 					ID: cweID, Type: "cwe", Value: cwe,
-					Source: "nuclei", TargetID: targetID, RawData: itemRaw,
+					Source: "nuclei", RawData: itemRaw,
 					Confidence: 0.8, Status: "confirmed",
-				})
+				}
+				applyTarget(&cweEntity, target)
+				addEntity(result, entitySet, cweEntity)
 				addRelation(result, relationSet, Relation{FromID: cveID, ToID: cweID, Type: RelHasCWE})
 			}
 		}

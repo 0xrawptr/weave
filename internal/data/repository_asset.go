@@ -3,6 +3,8 @@ package data
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 )
 
@@ -86,14 +88,13 @@ func (r *Repository) GetWebURLsInCampaign(ctx context.Context, scanTarget, campa
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := TargetID(scanTarget)
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "service", campaignID, "", 100000, 0)
+	assets, err := r.assetsInScope(ctx, scanTarget, campaignID, "service", "gogo", "")
 	if err != nil {
 		return nil, err
 	}
 	var urls []string
 	for _, a := range assets {
-		if a.Source == "gogo" && plannerVisibleAssetStatus(a.Status) {
+		if plannerVisibleAssetStatus(a.Status) {
 			urls = append(urls, a.Value)
 		}
 	}
@@ -108,8 +109,27 @@ func (r *Repository) CountAssetsInCampaign(ctx context.Context, scanTarget, camp
 	if r.Postgres == nil {
 		return 0, nil
 	}
-	targetID := TargetID(scanTarget)
-	return r.Postgres.CountAssetsFilteredByCampaign(ctx, targetID, assetType, source, status, campaignID)
+	if plannerEvidenceType(assetType) {
+		values, err := r.evidenceInScope(ctx, scanTarget, campaignID, assetType, source, status)
+		if err != nil {
+			return 0, err
+		}
+		return len(values), nil
+	}
+	assets, err := r.assetsInScope(ctx, scanTarget, campaignID, assetType, source, status)
+	if err != nil {
+		return 0, err
+	}
+	return len(assets), nil
+}
+
+func plannerEvidenceType(value string) bool {
+	switch value {
+	case "fingerprint", "product", "version", "template", "tag", "cpe", "cve", "cwe", "intel", "extracted":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetDiscoveredURLs returns HTTP URLs discovered by URL-expansion artifacts
@@ -123,14 +143,13 @@ func (r *Repository) GetDiscoveredURLsInCampaign(ctx context.Context, scanTarget
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := TargetID(scanTarget)
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "url", campaignID, "", 100000, 0)
+	assets, err := r.assetsInScope(ctx, scanTarget, campaignID, "url", "spray", "")
 	if err != nil {
 		return nil, err
 	}
 	out := make([]Asset, 0, len(assets))
 	for _, a := range assets {
-		if a.Source == "spray" && isHTTPURL(a.Value) && plannerConsumableURLStatus(a.Status) {
+		if isHTTPURL(a.Value) && plannerConsumableURLStatus(a.Status) {
 			out = append(out, a)
 		}
 	}
@@ -179,8 +198,7 @@ func (r *Repository) GetFingerprintsInCampaign(ctx context.Context, scanTarget, 
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := TargetID(scanTarget)
-	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "fingerprint", campaignID, "", 10000, 0)
+	values, err := r.evidenceInScope(ctx, scanTarget, campaignID, "fingerprint", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +223,7 @@ func (r *Repository) GetTemplateIDsInCampaign(ctx context.Context, scanTarget, c
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := TargetID(scanTarget)
-	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "template", campaignID, "", 10000, 0)
+	values, err := r.evidenceInScope(ctx, scanTarget, campaignID, "template", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -230,8 +247,7 @@ func (r *Repository) GetTagsInCampaign(ctx context.Context, scanTarget, campaign
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := TargetID(scanTarget)
-	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "tag", campaignID, "", 10000, 0)
+	values, err := r.evidenceInScope(ctx, scanTarget, campaignID, "tag", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -255,8 +271,7 @@ func (r *Repository) GetCVEAssetsInCampaign(ctx context.Context, scanTarget, cam
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := TargetID(scanTarget)
-	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "cve", campaignID, "", 10000, 0)
+	values, err := r.evidenceInScope(ctx, scanTarget, campaignID, "cve", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +316,7 @@ func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTar
 	}
 	var evidence []EvidenceRecord
 	for _, evidenceType := range []string{"fingerprint", "product", "version", "cve", "template", "intel", "cpe", "cwe", "tag"} {
-		values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, evidenceType, campaignID, "", 10000, 0)
+		values, err := r.evidenceInScope(ctx, scanTarget, campaignID, evidenceType, "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -322,6 +337,102 @@ func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTar
 		}
 	}
 	return dedupeEvidence(evidence), nil
+}
+
+func (r *Repository) assetsInScope(ctx context.Context, scanTarget, campaignID, assetType, source, status string) ([]Asset, error) {
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, "", assetType, campaignID, status, 100000, 0)
+	if err != nil {
+		return nil, err
+	}
+	matches := targetScopeMatcher(scanTarget)
+	out := make([]Asset, 0, len(assets))
+	for _, asset := range assets {
+		if source != "" && asset.Source != source {
+			continue
+		}
+		if matches(asset.Value) {
+			out = append(out, asset)
+		}
+	}
+	return out, nil
+}
+
+func (r *Repository) evidenceInScope(ctx context.Context, scanTarget, campaignID, evidenceType, source, status string) ([]AssetEvidence, error) {
+	values, err := r.Postgres.QueryAssetEvidence(ctx, "", evidenceType, campaignID, status, 100000, 0)
+	if err != nil {
+		return nil, err
+	}
+	targetIDs := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		if source != "" && value.Source != source {
+			continue
+		}
+		if value.TargetID != "" && !seen[value.TargetID] {
+			seen[value.TargetID] = true
+			targetIDs = append(targetIDs, value.TargetID)
+		}
+	}
+	targets, err := r.Postgres.GetTargetsByIDs(ctx, targetIDs)
+	if err != nil {
+		return nil, err
+	}
+	matches := targetScopeMatcher(scanTarget)
+	out := make([]AssetEvidence, 0, len(values))
+	for _, value := range values {
+		if source != "" && value.Source != source {
+			continue
+		}
+		target, ok := targets[value.TargetID]
+		if !ok {
+			continue
+		}
+		if matches(target.Value) {
+			out = append(out, value)
+		}
+	}
+	return out, nil
+}
+
+func targetScopeMatcher(scanTarget string) func(string) bool {
+	scanTarget = strings.TrimSpace(strings.ToLower(scanTarget))
+	if scanTarget == "" {
+		return func(string) bool { return true }
+	}
+	if _, cidr, err := net.ParseCIDR(scanTarget); err == nil {
+		return func(value string) bool {
+			host := targetHost(value)
+			ip := net.ParseIP(host)
+			return ip != nil && cidr.Contains(ip)
+		}
+	}
+	targetHostValue := targetHost(scanTarget)
+	targetIP := net.ParseIP(targetHostValue)
+	return func(value string) bool {
+		value = strings.TrimSpace(strings.ToLower(value))
+		if value == scanTarget {
+			return true
+		}
+		host := targetHost(value)
+		if targetIP != nil {
+			return host == targetHostValue
+		}
+		return host == targetHostValue || strings.HasSuffix(host, "."+targetHostValue)
+	}
+}
+
+func targetHost(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	if u, err := url.Parse(value); err == nil && u.Host != "" {
+		return strings.ToLower(u.Hostname())
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return strings.ToLower(host)
+	}
+	return strings.Trim(value, "[]")
 }
 
 func filterPlannerEvidence(values []EvidenceRecord) []EvidenceRecord {

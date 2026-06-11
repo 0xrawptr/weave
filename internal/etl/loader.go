@@ -21,6 +21,9 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 	campaignID := CampaignIDFromContext(ctx)
 	for _, e := range r.Entities {
 		status := defaultStatus(e.Status, "observed")
+		if err := l.ensureEntityTarget(ctx, &e); err != nil {
+			return err
+		}
 		if evidenceOnlyType(e.Type) {
 			if err := l.saveEvidenceEntity(ctx, e, ""); err != nil {
 				return err
@@ -193,6 +196,25 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 		}
 	}
 	return nil
+}
+
+func (l *dbLoader) ensureEntityTarget(ctx context.Context, e *Entity) error {
+	if e.TargetID == "" {
+		target := targetForValue(e.Value)
+		applyTarget(e, target)
+	}
+	targetValue := e.TargetValue
+	if targetValue == "" {
+		targetValue = e.Value
+	}
+	targetType := e.TargetType
+	if targetType == "" {
+		targetType = inferTargetType(targetValue)
+	}
+	if l.repo == nil || l.repo.Postgres == nil || e.TargetID == "" || targetValue == "" {
+		return nil
+	}
+	return l.repo.EnsureTarget(ctx, &data.Target{ID: e.TargetID, Type: targetType, Value: targetValue})
 }
 
 func entityRawData(e Entity) []byte {

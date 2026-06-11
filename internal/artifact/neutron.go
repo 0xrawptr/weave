@@ -26,17 +26,6 @@ type NeutronOutput struct {
 	Total   int                    `json:"total"`
 }
 
-func NewNeutronArtifact(cfg *sdkneutron.Config) (*NeutronArtifact, error) {
-	if cfg == nil {
-		cfg = &sdkneutron.Config{}
-	}
-	engine, err := sdkneutron.NewEngine(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &NeutronArtifact{engine: engine}, nil
-}
-
 // NewNeutronArtifactFromEngine wraps an already-initialized SDK engine.
 func NewNeutronArtifactFromEngine(engine *sdkneutron.Engine) *NeutronArtifact {
 	return &NeutronArtifact{engine: engine}

@@ -7,6 +7,8 @@ type Entity struct {
 	Value       string    `json:"value"`
 	Source      string    `json:"source"` // which artifact produced it
 	TargetID    string    `json:"target_id"`
+	TargetType  string    `json:"target_type,omitempty"`
+	TargetValue string    `json:"target_value,omitempty"`
 	RawData     []byte    `json:"raw_data,omitempty"`
 	Product     string    `json:"product,omitempty"`
 	Version     string    `json:"version,omitempty"`

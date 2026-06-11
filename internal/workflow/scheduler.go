@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/0xrawptr/weave/internal/artifact"
@@ -75,6 +76,7 @@ type ScheduledWorkItemWorkflowInput struct {
 
 const schedulerHighValuePriority = 60
 const schedulerMaxDispatchPerRun = 10
+const schedulerHeartbeatInterval = 2 * time.Minute
 
 func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*SchedulerWorkflowResult, error) {
 	input.BatchInput = normalizeBatchPortScanInput(input.BatchInput)
@@ -354,7 +356,7 @@ func ScheduledPortScanWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 
 	gogoCtx := artifactActivityContext(ctx, "gogo", schedulerInput.BatchInput.ActivityTimeoutSeconds)
 	var gogoResult artifact.ActivityResult
-	err := workflow.ExecuteActivity(gogoCtx, "gogo", artifact.Input{
+	err := executeArtifactActivityWithWorkItemHeartbeat(gogoCtx, stateCtx, item.ID, workflowID, schedulerLeaseSeconds(schedulerInput), "gogo", artifact.Input{
 		Target:     item.Target,
 		CampaignID: schedulerInput.BatchInput.CampaignID,
 		Data: mustMarshal(map[string]interface{}{
@@ -362,7 +364,7 @@ func ScheduledPortScanWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 			"ports":         schedulerInput.BatchInput.Ports,
 			"source_target": sourceTarget,
 		}),
-	}).Get(gogoCtx, &gogoResult)
+	}, &gogoResult)
 	if err == nil && !gogoResult.Success {
 		if gogoResult.Error != "" {
 			err = temporal.NewApplicationError(gogoResult.Error, "gogo_failed")
@@ -466,10 +468,7 @@ func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input Schedul
 			return err
 		}
 		if !conditionOK {
-			if err := skipScheduledActionRecord(stateCtx, item, itemInput, conditionMessage); err != nil {
-				return err
-			}
-			return setBatchWorkItemStatus(stateCtx, item.ID, "skipped", workflowID, conditionMessage, false)
+			return deferActionWorkItemCondition(stateCtx, item.ID, workflowID, conditionMessage)
 		}
 	}
 	claimed, err := claimScheduledActionRecord(stateCtx, item, itemInput, workflowID)
@@ -481,13 +480,14 @@ func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input Schedul
 		return setBatchWorkItemStatus(stateCtx, item.ID, "skipped", workflowID, reason, false)
 	}
 
-	actionResult, err := ActionWorkflow(ctx, ActionWorkflowInput{
-		Artifact:               item.Artifact,
-		Target:                 actionTarget,
-		CampaignID:             schedulerInput.BatchInput.CampaignID,
-		Input:                  itemInput.ActionInput,
-		ActivityTimeoutSeconds: schedulerInput.BatchInput.ActivityTimeoutSeconds,
-	})
+	actionCtx := artifactActivityContext(ctx, item.Artifact, schedulerInput.BatchInput.ActivityTimeoutSeconds)
+	var actionValue artifact.ActivityResult
+	err = executeArtifactActivityWithWorkItemHeartbeat(actionCtx, stateCtx, item.ID, workflowID, schedulerLeaseSeconds(schedulerInput), item.Artifact, artifact.Input{
+		Target:     actionTarget,
+		CampaignID: schedulerInput.BatchInput.CampaignID,
+		Data:       mustMarshal(itemInput.ActionInput),
+	}, &actionValue)
+	actionResult := &actionValue
 	if err != nil {
 		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "", err.Error()); updateErr != nil {
 			return updateErr
@@ -499,10 +499,26 @@ func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input Schedul
 		if actionResult != nil && actionResult.Error != "" {
 			errorMessage = actionResult.Error
 		}
+		if isNoopArtifactAction(item.Artifact, errorMessage, nil) {
+			if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "skipped", errorMessage); updateErr != nil {
+				return updateErr
+			}
+			return setBatchWorkItemStatus(stateCtx, item.ID, "skipped", workflowID, errorMessage, false)
+		}
 		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "", errorMessage); updateErr != nil {
 			return updateErr
 		}
 		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, errorMessage, false)
+	}
+	if isNoopArtifactAction(item.Artifact, "", actionResult.Data) {
+		reason := "noop action"
+		if item.Artifact == "nuclei" {
+			reason = "no templates available"
+		}
+		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "skipped", reason); updateErr != nil {
+			return updateErr
+		}
+		return setBatchWorkItemStatus(stateCtx, item.ID, "skipped", workflowID, reason, false)
 	}
 	if shouldReplanAfterAction(item.Type) {
 		if err := upsertNextPlannedDAGFollowUp(stateCtx, schedulerInput, item); err != nil {
@@ -513,6 +529,28 @@ func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input Schedul
 		return err
 	}
 	return setBatchWorkItemStatus(stateCtx, item.ID, "completed", workflowID, "", false)
+}
+
+func isNoopArtifactAction(artifactName, errorMessage string, raw []byte) bool {
+	if artifactName != "nuclei" {
+		return false
+	}
+	if errorMessage != "" {
+		value := strings.ToLower(errorMessage)
+		return strings.Contains(value, "no templates available") ||
+			strings.Contains(value, "no templates provided") ||
+			strings.Contains(value, "no templates found")
+	}
+	if len(raw) == 0 {
+		return false
+	}
+	var out struct {
+		SkippedReason string `json:"skipped_reason"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return false
+	}
+	return out.SkippedReason == "no_templates_available"
 }
 
 func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) (bool, error) {
@@ -537,6 +575,49 @@ func completeScheduledActionRecord(ctx workflow.Context, actionID string, succes
 		Success: success,
 		Status:  status,
 		Error:   errorMessage,
+	}).Get(ctx, nil)
+}
+
+func deferActionWorkItemCondition(ctx workflow.Context, itemID, workflowID, reason string) error {
+	if reason == "" {
+		reason = "run_if condition was not satisfied"
+	}
+	return setBatchWorkItemStatus(ctx, itemID, data.WorkItemStatusRetryWaiting, workflowID, "condition_wait: "+reason, false)
+}
+
+func executeArtifactActivityWithWorkItemHeartbeat(activityCtx, stateCtx workflow.Context, itemID, workflowID string, leaseSeconds int, activityName string, input artifact.Input, result *artifact.ActivityResult) error {
+	future := workflow.ExecuteActivity(activityCtx, activityName, input)
+	selector := workflow.NewSelector(activityCtx)
+	done := false
+	var activityErr error
+	selector.AddFuture(future, func(f workflow.Future) {
+		activityErr = f.Get(activityCtx, result)
+		done = true
+	})
+	for !done {
+		timer := workflow.NewTimer(activityCtx, schedulerHeartbeatInterval)
+		timerFired := false
+		selector.AddFuture(timer, func(workflow.Future) {
+			timerFired = true
+		})
+		selector.Select(activityCtx)
+		if done {
+			break
+		}
+		if timerFired {
+			if err := heartbeatScheduledWorkItem(stateCtx, itemID, workflowID, leaseSeconds); err != nil {
+				return err
+			}
+		}
+	}
+	return activityErr
+}
+
+func heartbeatScheduledWorkItem(ctx workflow.Context, itemID, workflowID string, leaseSeconds int) error {
+	return workflow.ExecuteActivity(ctx, planner.HeartbeatWorkItemActivityName, data.WorkItemHeartbeatRequest{
+		ID:           itemID,
+		WorkflowID:   workflowID,
+		LeaseSeconds: leaseSeconds,
 	}).Get(ctx, nil)
 }
 
@@ -787,7 +868,7 @@ func schedulerQueueLimit(input SchedulerWorkflowInput, queue string) int {
 	case "http":
 		return input.BatchInput.PlannedDAGConcurrency
 	case "spray":
-		return minPositive(input.BatchInput.PlannedDAGConcurrency, 3)
+		return minPositive(input.BatchInput.PlannedDAGConcurrency, 6)
 	case "nuclei":
 		return minPositive(input.BatchInput.PlannedDAGConcurrency, 5)
 	default:
@@ -1247,7 +1328,7 @@ func sprayShardWordSize(input SchedulerWorkflowInput) int {
 	if input.BatchInput.SprayShardWords > 0 {
 		return input.BatchInput.SprayShardWords
 	}
-	return 500
+	return 2000
 }
 
 func nucleiGroupTargetSize(input SchedulerWorkflowInput) int {

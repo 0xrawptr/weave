@@ -42,28 +42,32 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 	}
 
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 
 	for _, item := range output.Results {
 		raw, _ := json.Marshal(item)
+		ipTarget := targetForHost(item.IP)
 
 		// IP entity.
-		ipID := data.GenerateID("ip", scanTarget, item.IP)
+		ipID := assetID("ip", item.IP)
 		if !entitySet[ipID] {
-			result.Entities = append(result.Entities, Entity{
+			entity := Entity{
 				ID: ipID, Type: "ip", Value: item.IP,
-				Source: "gogo", TargetID: targetID, Confidence: 1.0, Status: "observed",
-			})
+				Source: "gogo", Confidence: 1.0, Status: "observed",
+			}
+			applyTarget(&entity, ipTarget)
+			result.Entities = append(result.Entities, entity)
 			entitySet[ipID] = true
 		}
 
 		// Port entity. IP → has_port → port.
-		portID := data.GenerateID("port", scanTarget, item.IP, item.Port)
-		result.Entities = append(result.Entities, Entity{
+		portID := data.GenerateID("port", item.IP, item.Port)
+		portEntity := Entity{
 			ID: portID, Type: "port", Value: fmt.Sprintf("%s:%s", item.IP, item.Port),
-			Source: "gogo", TargetID: targetID, RawData: raw, Confidence: 1.0, Status: "observed",
-		})
+			Source: "gogo", RawData: raw, Confidence: 1.0, Status: "observed",
+		}
+		applyTarget(&portEntity, ipTarget)
+		result.Entities = append(result.Entities, portEntity)
 		result.Relations = append(result.Relations, Relation{
 			FromID: ipID, ToID: portID, Type: "has_port",
 		})
@@ -96,30 +100,35 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 				servicePriority = qualityPriority(0, quality)
 			}
 		}
-		svcID := data.GenerateID("service", scanTarget, item.IP, item.Port, item.Protocol)
-		result.Entities = append(result.Entities, Entity{
+		serviceTarget := targetForURL(serviceValue)
+		svcID := assetID("service", serviceTarget.Value)
+		serviceEntity := Entity{
 			ID: svcID, Type: "service",
 			Value:  serviceValue,
-			Source: "gogo", TargetID: targetID, RawData: raw, Confidence: serviceConfidence, Status: serviceStatus, Priority: servicePriority,
+			Source: "gogo", RawData: raw, Confidence: serviceConfidence, Status: serviceStatus, Priority: servicePriority,
 			Quality: serviceQuality,
-		})
+		}
+		applyTarget(&serviceEntity, serviceTarget)
+		result.Entities = append(result.Entities, serviceEntity)
 		result.Relations = append(result.Relations, Relation{
 			FromID: portID, ToID: svcID, Type: "runs",
 		})
 
 		// Fingerprint entities. Service → has_fingerprint → fingerprint.
 		for fpName := range item.Frameworks {
-			fpID := data.GenerateID("fingerprint", scanTarget, fpName)
+			fpID := evidenceID("fingerprint", serviceTarget, fpName)
 			fpStatus := "observed"
 			fpConfidence := 0.7
 			if serviceQuality != nil && serviceQuality.Noise {
 				fpStatus = "noise"
 				fpConfidence = 0.2
 			}
-			result.Entities = append(result.Entities, Entity{
+			fpEntity := Entity{
 				ID: fpID, Type: "fingerprint", Value: fpName,
-				Source: "gogo", TargetID: targetID, Confidence: fpConfidence, Status: fpStatus,
-			})
+				Source: "gogo", Confidence: fpConfidence, Status: fpStatus,
+			}
+			applyTarget(&fpEntity, serviceTarget)
+			result.Entities = append(result.Entities, fpEntity)
 			result.Relations = append(result.Relations, Relation{
 				FromID: svcID, ToID: fpID, Type: "has_fingerprint",
 			})

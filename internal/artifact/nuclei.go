@@ -27,8 +27,9 @@ type NucleiInput struct {
 
 // NucleiOutput contains the scan results.
 type NucleiOutput struct {
-	Results []NucleiResultItem `json:"results"`
-	Total   int                `json:"total"`
+	Results       []NucleiResultItem `json:"results"`
+	Total         int                `json:"total"`
+	SkippedReason string             `json:"skipped_reason,omitempty"`
 }
 
 // NucleiResultItem represents a single finding.
@@ -145,7 +146,7 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 	)
 	if err != nil {
 		if isNucleiNoTemplatesError(err) {
-			data, _ := json.Marshal(NucleiOutput{Results: nil, Total: 0})
+			data, _ := json.Marshal(NucleiOutput{Results: nil, Total: 0, SkippedReason: "no_templates_available"})
 			recordArtifactHeartbeat(ctx, n.Name(), input.Target, "skipped", started, map[string]interface{}{
 				"reason":  "no_templates_available",
 				"targets": len(targets),
@@ -213,6 +214,16 @@ func (n *NucleiArtifact) Execute(ctx context.Context, input Input) (Output, erro
 		})
 	})
 	if err != nil {
+		if isNucleiNoTemplatesError(err) {
+			data, _ := json.Marshal(NucleiOutput{Results: nil, Total: 0, SkippedReason: "no_templates_available"})
+			recordArtifactHeartbeat(ctx, n.Name(), input.Target, "skipped", started, map[string]interface{}{
+				"reason":  "no_templates_available",
+				"targets": len(targets),
+				"tags":    len(tags),
+				"ids":     len(ids),
+			})
+			return Output{Artifact: n.Name(), Target: input.Target, Success: true, Data: data}, nil
+		}
 		return Output{Artifact: n.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
 	recordArtifactHeartbeat(ctx, n.Name(), input.Target, "completed", started, map[string]interface{}{

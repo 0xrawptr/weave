@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/0xrawptr/weave/internal/data"
 )
 
 // ZombieExtractor extracts confirmed credential assets from zombie output.
@@ -32,7 +30,6 @@ func (z *ZombieExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 	}
 
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 	for _, item := range out.Results {
@@ -45,20 +42,25 @@ func (z *ZombieExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		if service != "" {
 			serviceValue = service + "://" + item.Address
 		}
-		serviceID := data.GenerateID("service", scanTarget, serviceValue)
-		addEntity(result, entitySet, Entity{
+		serviceTarget := targetForValue(serviceValue)
+		serviceID := assetID("service", serviceValue)
+		serviceEntity := Entity{
 			ID: serviceID, Type: "service", Value: serviceValue,
-			Source: "zombie", TargetID: targetID, RawData: itemRaw,
+			Source: "zombie", RawData: itemRaw,
 			Confidence: 0.8, Status: "observed",
-		})
+		}
+		applyTarget(&serviceEntity, serviceTarget)
+		addEntity(result, entitySet, serviceEntity)
 
 		credValue := item.Username + ":" + item.Password + "@" + item.Address
-		credID := data.GenerateID("credential", scanTarget, item.Address, service, item.Username, item.Password)
-		addEntity(result, entitySet, Entity{
+		credID := evidenceID("credential", serviceTarget, item.Username, item.Address, service)
+		credEntity := Entity{
 			ID: credID, Type: "credential", Value: credValue,
-			Source: "zombie", TargetID: targetID, RawData: itemRaw,
+			Source: "zombie", RawData: itemRaw,
 			Confidence: 1.0, Severity: "high", Priority: 80, Status: "confirmed",
-		})
+		}
+		applyTarget(&credEntity, serviceTarget)
+		addEntity(result, entitySet, credEntity)
 		addRelation(result, relationSet, Relation{FromID: serviceID, ToID: credID, Type: RelHasCredential})
 	}
 	return result, nil

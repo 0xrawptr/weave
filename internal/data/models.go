@@ -103,30 +103,6 @@ type AssetEvidence struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// Scan represents a workflow execution record.
-type Scan struct {
-	ID           string    `json:"id"`
-	WorkflowID   string    `json:"workflow_id"`
-	WorkflowType string    `json:"workflow_type"`
-	TargetID     string    `json:"target_id"`
-	Status       string    `json:"status"` // pending, running, completed, failed, cancelled
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-// ScanResult represents the output of a single artifact within a workflow.
-type ScanResult struct {
-	ID         string    `json:"id"`
-	ScanID     string    `json:"scan_id"`
-	Artifact   string    `json:"artifact"`
-	Input      []byte    `json:"input"`
-	Output     []byte    `json:"output"`
-	Success    bool      `json:"success"`
-	Error      string    `json:"error,omitempty"`
-	DurationMs int64     `json:"duration_ms"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
 // ArtifactStat records engine-neutral execution counters emitted by SDK artifacts.
 type ArtifactStat struct {
 	ID         string    `json:"id"`

@@ -409,3 +409,18 @@ func TestSchedulerFailureStatus(t *testing.T) {
 		t.Fatalf("failure status = %q, want failed", got)
 	}
 }
+
+func TestIsNoopArtifactAction(t *testing.T) {
+	if !isNoopArtifactAction("nuclei", `cause="No templates available"`, nil) {
+		t.Fatalf("expected nuclei no-template error to be noop")
+	}
+	if !isNoopArtifactAction("nuclei", "", []byte(`{"total":0,"skipped_reason":"no_templates_available"}`)) {
+		t.Fatalf("expected nuclei skipped_reason output to be noop")
+	}
+	if isNoopArtifactAction("nuclei", "", []byte(`{"total":0}`)) {
+		t.Fatalf("zero findings with templates should not be noop")
+	}
+	if isNoopArtifactAction("spray", `cause="No templates available"`, nil) {
+		t.Fatalf("only nuclei no-template should be noop")
+	}
+}

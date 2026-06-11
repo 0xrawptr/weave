@@ -50,7 +50,7 @@ func TestLoadSetsWorkerDefaults(t *testing.T) {
 	if cfg.ArtifactWorkerConfig("gogo").MaxConcurrentActivityTasks != 4 {
 		t.Fatalf("gogo activity concurrency = %d", cfg.ArtifactWorkerConfig("gogo").MaxConcurrentActivityTasks)
 	}
-	if cfg.ArtifactWorkerConfig("spray").MaxConcurrentActivityTasks != 2 {
+	if cfg.ArtifactWorkerConfig("spray").MaxConcurrentActivityTasks != 6 {
 		t.Fatalf("spray activity concurrency = %d", cfg.ArtifactWorkerConfig("spray").MaxConcurrentActivityTasks)
 	}
 	if cfg.ArtifactWorkerConfig("unknown").MaxConcurrentActivityTasks != 4 {

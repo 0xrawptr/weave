@@ -166,7 +166,7 @@ func (c *Config) setWorkerDefaults() {
 			WorkerStopTimeout:                30 * time.Second,
 		},
 		"spray": {
-			MaxConcurrentActivityTasks:       2,
+			MaxConcurrentActivityTasks:       6,
 			MaxConcurrentActivityTaskPollers: 2,
 			WorkerStopTimeout:                30 * time.Second,
 		},

@@ -99,17 +99,6 @@ type SprayExtractItem struct {
 	Values   []string `json:"values,omitempty"`
 }
 
-func NewSprayArtifact(cfg *sdkspray.Config) (*SprayArtifact, error) {
-	if cfg == nil {
-		cfg = sdkspray.NewConfig()
-	}
-	engine := sdkspray.NewSprayEngine(cfg)
-	if err := engine.Init(); err != nil {
-		return nil, err
-	}
-	return &SprayArtifact{engine: engine}, nil
-}
-
 // NewSprayArtifactFromEngine wraps an already-initialized SDK engine.
 func NewSprayArtifactFromEngine(engine *sdkspray.SprayEngine) *SprayArtifact {
 	return &SprayArtifact{engine: engine}
@@ -283,10 +272,6 @@ func (s *SprayArtifact) emitResult(ctx context.Context, input Input, item SprayR
 	if s.resultHandler != nil && item.URL != "" {
 		s.resultHandler(ctx, input.Target, input.CampaignID, item)
 	}
-}
-
-func fullSprayWordlist() []string {
-	return FullSprayWordlist()
 }
 
 func FullSprayWordlist() []string {

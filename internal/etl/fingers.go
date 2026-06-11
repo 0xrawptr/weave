@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/0xrawptr/weave/internal/data"
 )
 
 type FingersExtractor struct{}
@@ -33,22 +31,27 @@ func (f *FingersExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 		return nil, fmt.Errorf("parse fingers result: %w", err)
 	}
 	result := &ExtractResult{}
-	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 	for _, item := range out.Frameworks {
 		itemRaw, _ := json.Marshal(item)
-		fpID := data.GenerateID("fingerprint", scanTarget, item.Name)
+		target := targetForValue(scanTarget)
+		if item.Target != "" {
+			target = targetForURL(item.Target)
+		}
+		fpID := evidenceID("fingerprint", target, item.Name)
 		var cpes []string
 		if item.CPE != "" {
 			cpes = []string{item.CPE}
 		}
-		addEntity(result, entitySet, Entity{
+		fpEntity := Entity{
 			ID: fpID, Type: "fingerprint", Value: item.Name,
-			Source: "fingers", TargetID: targetID, RawData: itemRaw,
+			Source: "fingers", RawData: itemRaw,
 			Product: item.Product, Version: item.Version, Tags: item.Tags,
 			CPEs: cpes, Confidence: 0.85, Status: "observed",
-		})
+		}
+		applyTarget(&fpEntity, target)
+		addEntity(result, entitySet, fpEntity)
 		if item.Target == "" {
 			continue
 		}
@@ -58,12 +61,15 @@ func (f *FingersExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 			urlValue = canonical
 			urlQuality = &quality
 		}
-		urlID := data.GenerateID("url", scanTarget, urlValue)
-		addEntity(result, entitySet, Entity{
+		urlTarget := targetForURL(urlValue)
+		urlID := assetID("url", urlTarget.Value)
+		urlEntity := Entity{
 			ID: urlID, Type: "url", Value: urlValue,
-			Source: "fingers", TargetID: targetID, RawData: itemRaw,
+			Source: "fingers", RawData: itemRaw,
 			Confidence: 0.9, Status: "observed", Quality: urlQuality,
-		})
+		}
+		applyTarget(&urlEntity, urlTarget)
+		addEntity(result, entitySet, urlEntity)
 		addRelation(result, relationSet, Relation{FromID: urlID, ToID: fpID, Type: RelHasFingerprint})
 	}
 	return result, nil

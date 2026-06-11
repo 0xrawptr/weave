@@ -50,9 +50,8 @@ func TestGogoExtractor(t *testing.T) {
 	}
 
 	// Verify relation directions.
-	targetID := data.TargetID("192.168.1.0/24")
-	ip1ID := data.GenerateID("ip", "192.168.1.0/24", "192.168.1.1")
-	port22ID := data.GenerateID("port", "192.168.1.0/24", "192.168.1.1", "22")
+	ip1ID := data.GenerateID("ip", "192.168.1.1")
+	port22ID := data.GenerateID("port", "192.168.1.1", "22")
 
 	// Check IP → has_port → port direction.
 	for _, rel := range result.Relations {
@@ -62,8 +61,26 @@ func TestGogoExtractor(t *testing.T) {
 	}
 	t.Errorf("missing relation: ip(%s) → has_port → port(%s)", ip1ID[:8], port22ID[:8])
 ok:
+	assertGogoTargetID(t, result, "ip", "192.168.1.1", data.TargetID("192.168.1.1"))
+	assertGogoTargetID(t, result, "ip", "192.168.1.2", data.TargetID("192.168.1.2"))
+	assertGogoTargetID(t, result, "port", "192.168.1.1:22", data.TargetID("192.168.1.1"))
+	assertGogoTargetID(t, result, "port", "192.168.1.2:443", data.TargetID("192.168.1.2"))
+	if data.TargetID("192.168.1.1") == data.TargetID("192.168.1.0/24") {
+		t.Fatal("test setup unexpectedly produced identical target IDs")
+	}
+}
 
-	_ = targetID // used
+func assertGogoTargetID(t *testing.T, result *ExtractResult, entityType, value, want string) {
+	t.Helper()
+	for _, entity := range result.Entities {
+		if entity.Type == entityType && entity.Value == value {
+			if entity.TargetID != want {
+				t.Fatalf("%s %s target_id = %s, want %s", entityType, value, entity.TargetID, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing %s entity %s", entityType, value)
 }
 
 func TestGogoExtractorEmpty(t *testing.T) {

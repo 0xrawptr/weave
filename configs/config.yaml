@@ -26,7 +26,7 @@ temporal:
         max_concurrent_activity_task_pollers: 2
         worker_stop_timeout: 30s
       spray:
-        max_concurrent_activity_tasks: 2
+        max_concurrent_activity_tasks: 6
         max_concurrent_activity_task_pollers: 2
         worker_stop_timeout: 30s
       nuclei:
