@@ -29,6 +29,31 @@ func (r *Repository) SaveAsset(ctx context.Context, asset *Asset) error {
 	return nil
 }
 
+func (r *Repository) SaveEvidence(ctx context.Context, evidence *AssetEvidence) error {
+	if r.Postgres != nil {
+		if err := r.Postgres.InsertAssetEvidence(ctx, evidence); err != nil {
+			return err
+		}
+	}
+	if r.Neo4j != nil {
+		return r.Neo4j.CreateAssetNode(ctx, &Asset{
+			ID:          evidence.ID,
+			CampaignID:  evidence.CampaignID,
+			Type:        evidence.Type,
+			Value:       evidence.Value,
+			Source:      evidence.Source,
+			TargetID:    evidence.TargetID,
+			RawData:     evidence.RawData,
+			Confidence:  evidence.Confidence,
+			Severity:    evidence.Severity,
+			Priority:    evidence.Priority,
+			Status:      evidence.Status,
+			SourceRunID: evidence.SourceRunID,
+		})
+	}
+	return nil
+}
+
 func (r *Repository) SaveRelation(ctx context.Context, rel AssetRelation) error {
 	if r.Neo4j == nil {
 		return nil
@@ -61,7 +86,7 @@ func (r *Repository) GetWebURLsInCampaign(ctx context.Context, scanTarget, campa
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := generateID("target", scanTarget)
+	targetID := TargetID(scanTarget)
 	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "service", campaignID, "", 100000, 0)
 	if err != nil {
 		return nil, err
@@ -83,7 +108,7 @@ func (r *Repository) CountAssetsInCampaign(ctx context.Context, scanTarget, camp
 	if r.Postgres == nil {
 		return 0, nil
 	}
-	targetID := generateID("target", scanTarget)
+	targetID := TargetID(scanTarget)
 	return r.Postgres.CountAssetsFilteredByCampaign(ctx, targetID, assetType, source, status, campaignID)
 }
 
@@ -98,7 +123,7 @@ func (r *Repository) GetDiscoveredURLsInCampaign(ctx context.Context, scanTarget
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := generateID("target", scanTarget)
+	targetID := TargetID(scanTarget)
 	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "url", campaignID, "", 100000, 0)
 	if err != nil {
 		return nil, err
@@ -154,17 +179,17 @@ func (r *Repository) GetFingerprintsInCampaign(ctx context.Context, scanTarget, 
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "fingerprint", campaignID, "", 10000, 0)
+	targetID := TargetID(scanTarget)
+	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "fingerprint", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
 	seen := make(map[string]bool)
 	var names []string
-	for _, a := range assets {
-		if plannerVisibleAssetStatus(a.Status) && !seen[a.Value] {
-			seen[a.Value] = true
-			names = append(names, a.Value)
+	for _, value := range values {
+		if plannerVisibleAssetStatus(value.Status) && !seen[value.Value] {
+			seen[value.Value] = true
+			names = append(names, value.Value)
 		}
 	}
 	return names, nil
@@ -180,17 +205,17 @@ func (r *Repository) GetTemplateIDsInCampaign(ctx context.Context, scanTarget, c
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "template", campaignID, "", 10000, 0)
+	targetID := TargetID(scanTarget)
+	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "template", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
 	seen := make(map[string]bool)
 	var ids []string
-	for _, a := range assets {
-		if plannerVisibleAssetStatus(a.Status) && !seen[a.Value] {
-			seen[a.Value] = true
-			ids = append(ids, a.Value)
+	for _, value := range values {
+		if plannerVisibleAssetStatus(value.Status) && !seen[value.Value] {
+			seen[value.Value] = true
+			ids = append(ids, value.Value)
 		}
 	}
 	return ids, nil
@@ -205,17 +230,17 @@ func (r *Repository) GetTagsInCampaign(ctx context.Context, scanTarget, campaign
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "tag", campaignID, "", 10000, 0)
+	targetID := TargetID(scanTarget)
+	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "tag", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
 	seen := make(map[string]bool)
 	var tags []string
-	for _, a := range assets {
-		if plannerVisibleAssetStatus(a.Status) && !seen[a.Value] {
-			seen[a.Value] = true
-			tags = append(tags, a.Value)
+	for _, value := range values {
+		if plannerVisibleAssetStatus(value.Status) && !seen[value.Value] {
+			seen[value.Value] = true
+			tags = append(tags, value.Value)
 		}
 	}
 	return tags, nil
@@ -230,15 +255,27 @@ func (r *Repository) GetCVEAssetsInCampaign(ctx context.Context, scanTarget, cam
 	if r.Postgres == nil {
 		return nil, nil
 	}
-	targetID := generateID("target", scanTarget)
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, "cve", campaignID, "", 10000, 0)
+	targetID := TargetID(scanTarget)
+	values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, "cve", campaignID, "", 10000, 0)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Asset, 0, len(assets))
-	for _, asset := range assets {
-		if plannerVisibleAssetStatus(asset.Status) {
-			out = append(out, asset)
+	out := make([]Asset, 0, len(values))
+	for _, value := range values {
+		if plannerVisibleAssetStatus(value.Status) {
+			out = append(out, Asset{
+				ID:         value.ID,
+				CampaignID: value.CampaignID,
+				Type:       value.Type,
+				Value:      value.Value,
+				Source:     value.Source,
+				TargetID:   value.TargetID,
+				RawData:    value.RawData,
+				Confidence: value.Confidence,
+				Severity:   value.Severity,
+				Priority:   value.Priority,
+				Status:     value.Status,
+			})
 		}
 	}
 	return out, nil
@@ -252,7 +289,7 @@ func (r *Repository) GetKnowledgeEvidence(ctx context.Context, scanTarget string
 }
 
 func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTarget, campaignID string) ([]EvidenceRecord, error) {
-	targetID := generateID("target", scanTarget)
+	targetID := TargetID(scanTarget)
 	if r.Neo4j != nil {
 		evidence, err := r.Neo4j.QueryKnowledgeEvidence(ctx, targetID, campaignID)
 		if err == nil && len(evidence) > 0 {
@@ -263,24 +300,24 @@ func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTar
 		return nil, nil
 	}
 	var evidence []EvidenceRecord
-	for _, assetType := range []string{"product", "cve", "template", "intel", "cpe", "cwe"} {
-		assets, err := r.Postgres.QueryAssetsFiltered(ctx, targetID, assetType, campaignID, "", 10000, 0)
+	for _, evidenceType := range []string{"fingerprint", "product", "version", "cve", "template", "intel", "cpe", "cwe", "tag"} {
+		values, err := r.Postgres.QueryAssetEvidence(ctx, targetID, evidenceType, campaignID, "", 10000, 0)
 		if err != nil {
 			return nil, err
 		}
-		for _, asset := range assets {
-			if !plannerVisibleAssetStatus(asset.Status) {
+		for _, value := range values {
+			if !plannerVisibleAssetStatus(value.Status) {
 				continue
 			}
 			evidence = append(evidence, EvidenceRecord{
-				Type:       asset.Type,
-				Value:      asset.Value,
-				Source:     asset.Source,
-				Confidence: asset.Confidence,
-				Severity:   asset.Severity,
-				Priority:   asset.Priority,
-				Status:     asset.Status,
-				Path:       []EvidencePathStep{{Type: asset.Type, Value: asset.Value}},
+				Type:       value.Type,
+				Value:      value.Value,
+				Source:     value.Source,
+				Confidence: value.Confidence,
+				Severity:   value.Severity,
+				Priority:   value.Priority,
+				Status:     value.Status,
+				Path:       []EvidencePathStep{{Type: value.Type, Value: value.Value}},
 			})
 		}
 	}

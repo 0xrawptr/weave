@@ -81,6 +81,28 @@ type AssetEvent struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// AssetEvidence stores planner/knowledge evidence observed on an asset. It is
+// intentionally separate from assets: values such as "nginx", "linkfinder" or a
+// CVE are evidence about an attack surface, not an attack surface by themselves.
+type AssetEvidence struct {
+	ID          string    `json:"id"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
+	TargetID    string    `json:"target_id"`
+	SubjectID   string    `json:"subject_id,omitempty"`
+	Type        string    `json:"type"`
+	Value       string    `json:"value"`
+	Source      string    `json:"source"`
+	RawData     []byte    `json:"raw_data,omitempty"`
+	Confidence  float64   `json:"confidence,omitempty"`
+	Severity    string    `json:"severity,omitempty"`
+	Priority    int       `json:"priority,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+	SourceRunID string    `json:"source_run_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // Scan represents a workflow execution record.
 type Scan struct {
 	ID           string    `json:"id"`
@@ -300,14 +322,15 @@ type ArtifactStatSummary struct {
 
 // RawEvent stores artifact output exactly as produced, before any transformation.
 type RawEvent struct {
-	ID         string    `json:"id"`
-	CampaignID string    `json:"campaign_id,omitempty"`
-	Artifact   string    `json:"artifact"`
-	TargetID   string    `json:"target_id"`
-	TargetType string    `json:"target_type"` // "cidr", "domain", "ip"
-	WorkflowID string    `json:"workflow_id"`
-	Data       []byte    `json:"data"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	CampaignID  string    `json:"campaign_id,omitempty"`
+	Artifact    string    `json:"artifact"`
+	TargetID    string    `json:"target_id"`    // normalized target hash, references targets.id
+	TargetValue string    `json:"target_value"` // original scan target value
+	TargetType  string    `json:"target_type"`  // "cidr", "domain", "ip"
+	WorkflowID  string    `json:"workflow_id"`
+	Data        []byte    `json:"data"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // AssetRelation represents an edge between two assets in the graph.

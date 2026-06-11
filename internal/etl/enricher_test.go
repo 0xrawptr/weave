@@ -29,7 +29,7 @@ info:
 		t.Fatalf("load knowledge: %v", err)
 	}
 
-	targetID := data.GenerateID("target", "example.com")
+	targetID := data.TargetID("example.com")
 	result := &ExtractResult{
 		Entities: []Entity{{
 			ID:       data.GenerateID("fingerprint", "example.com", "weblogic"),

@@ -14,15 +14,20 @@ import (
 	"go.temporal.io/sdk/client"
 )
 
-type RetryFailedBatchChunksRequest struct {
+type StartBatchRequest struct {
+	Targets                 []string                `json:"targets"`
+	Target                  string                  `json:"target,omitempty"`
+	CampaignID              string                  `json:"campaign_id,omitempty"`
+	Ports                   string                  `json:"ports,omitempty"`
 	MaxConcurrency          int                     `json:"max_concurrency,omitempty"`
+	ChunkPrefix             int                     `json:"chunk_prefix,omitempty"`
 	MaxAttempts             int                     `json:"max_attempts,omitempty"`
 	RetryDelaySeconds       int                     `json:"retry_delay_seconds,omitempty"`
 	PriorityTargets         []string                `json:"priority_targets,omitempty"`
 	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
 	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
 	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
-	RunPlannedDAG           bool                    `json:"run_planned_dag,omitempty"`
+	RunPlannedDAG           *bool                   `json:"run_planned_dag,omitempty"`
 	PlannedDAGConcurrency   int                     `json:"planned_dag_concurrency,omitempty"`
 	PlannedDAGMaxIterations int                     `json:"planned_dag_max_iterations,omitempty"`
 	PlannedDAGContinue      bool                    `json:"planned_dag_continue_on_failure,omitempty"`
@@ -74,6 +79,75 @@ type batchProgressDTO struct {
 	Skipped         int `json:"skipped"`
 	Dead            int `json:"dead"`
 	ProgressPercent int `json:"progress_percent"`
+}
+
+func (s *Server) StartBatch(c *gin.Context) {
+	if s.temporal == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "temporal service not available"})
+		return
+	}
+
+	var req StartBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	targets := cleanStringSlice(req.Targets)
+	if len(targets) == 0 {
+		targets = splitTargetList(req.Target)
+	}
+	if len(targets) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "targets are required"})
+		return
+	}
+	ports := strings.TrimSpace(req.Ports)
+	if ports == "" {
+		ports = "top3"
+	}
+	runPlannedDAG := true
+	if req.RunPlannedDAG != nil {
+		runPlannedDAG = *req.RunPlannedDAG
+	}
+
+	workflowID := generateWorkflowID("batch_portscan")
+	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
+		ID:                  workflowID,
+		TaskQueue:           s.cfg.Temporal.TaskQueue,
+		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
+	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
+		Targets:                 targets,
+		PriorityTargets:         cleanStringSlice(req.PriorityTargets),
+		CampaignID:              strings.TrimSpace(req.CampaignID),
+		Ports:                   ports,
+		MaxConcurrency:          req.MaxConcurrency,
+		ChunkPrefix:             req.ChunkPrefix,
+		MaxAttempts:             req.MaxAttempts,
+		RetryDelaySeconds:       req.RetryDelaySeconds,
+		ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
+		QueueLimits:             req.QueueLimits,
+		ResourceLimits:          req.ResourceLimits,
+		RunPlannedDAG:           runPlannedDAG,
+		PlannedDAGConcurrency:   req.PlannedDAGConcurrency,
+		PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,
+		PlannedDAGContinue:      req.PlannedDAGContinue,
+		SprayShardBaseURLs:      req.SprayShardBaseURLs,
+		SprayShardWords:         req.SprayShardWords,
+		NucleiGroupTargets:      req.NucleiGroupTargets,
+		NucleiGroupTemplates:    req.NucleiGroupTemplates,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{
+		"workflow_id":     wfRun.GetID(),
+		"run_id":          wfRun.GetRunID(),
+		"campaign_id":     req.CampaignID,
+		"targets":         targets,
+		"ports":           ports,
+		"run_planned_dag": runPlannedDAG,
+		"summary":         fmt.Sprintf("/api/v1/work-items/summary?campaign_id=%s", req.CampaignID),
+	})
 }
 
 func (s *Server) ListBatches(c *gin.Context) {
@@ -220,87 +294,6 @@ func (s *Server) ListBatchChunks(c *gin.Context) {
 		"total":    len(chunks),
 		"limit":    limit,
 		"offset":   offset,
-	})
-}
-
-func (s *Server) RetryFailedBatchChunks(c *gin.Context) {
-	if s.repo == nil || s.repo.Postgres == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
-		return
-	}
-	if s.temporal == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "temporal service not available"})
-		return
-	}
-
-	var req RetryFailedBatchChunksRequest
-	if c.Request.Body != nil {
-		_ = c.ShouldBindJSON(&req)
-	}
-
-	batchID := c.Param("id")
-	run, err := s.repo.GetBatchRun(c.Request.Context(), batchID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-	chunks, err := s.repo.GetFailedBatchChunks(c.Request.Context(), batchID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if len(chunks) == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"batch_id": batchID,
-			"message":  "no failed chunks to retry",
-			"count":    0,
-		})
-		return
-	}
-
-	targets := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		targets = append(targets, chunk.Chunk)
-	}
-	ports := run.Ports
-	if ports == "" {
-		ports = "top3"
-	}
-	workflowID := fmt.Sprintf("batch_retry-%s-%d", batchID, time.Now().UnixNano())
-	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
-		ID:                  workflowID,
-		TaskQueue:           s.cfg.Temporal.TaskQueue,
-		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
-	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
-		Targets:                 targets,
-		PriorityTargets:         req.PriorityTargets,
-		CampaignID:              run.CampaignID,
-		Ports:                   ports,
-		MaxConcurrency:          req.MaxConcurrency,
-		MaxAttempts:             req.MaxAttempts,
-		RetryDelaySeconds:       req.RetryDelaySeconds,
-		ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
-		QueueLimits:             req.QueueLimits,
-		ResourceLimits:          req.ResourceLimits,
-		RunPlannedDAG:           req.RunPlannedDAG,
-		PlannedDAGConcurrency:   req.PlannedDAGConcurrency,
-		PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,
-		PlannedDAGContinue:      req.PlannedDAGContinue,
-		SprayShardBaseURLs:      req.SprayShardBaseURLs,
-		SprayShardWords:         req.SprayShardWords,
-		NucleiGroupTargets:      req.NucleiGroupTargets,
-		NucleiGroupTemplates:    req.NucleiGroupTemplates,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusAccepted, gin.H{
-		"batch_id":          batchID,
-		"retry_workflow_id": wfRun.GetID(),
-		"run_id":            wfRun.GetRunID(),
-		"targets":           targets,
-		"count":             len(targets),
 	})
 }
 

@@ -12,23 +12,39 @@ import (
 // SprayExtractor extracts discovered/checkable URLs from spray output.
 type SprayExtractor struct{}
 
+type sprayFrameworkItem struct {
+	Name        string                 `json:"name"`
+	Version     string                 `json:"version,omitempty"`
+	Tags        []string               `json:"tags,omitempty"`
+	IsFocus     bool                   `json:"is_focus,omitempty"`
+	MatchDetail map[string]interface{} `json:"match_detail,omitempty"`
+}
+
+type sprayExtractItem struct {
+	Name     string   `json:"name"`
+	Severity string   `json:"severity,omitempty"`
+	Values   []string `json:"values,omitempty"`
+}
+
 func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData []byte) (*ExtractResult, error) {
 	if rawData == nil {
 		return nil, nil
 	}
 	type sprayItem struct {
-		URL           string `json:"url"`
-		StatusCode    int    `json:"status_code"`
-		Title         string `json:"title,omitempty"`
-		ContentType   string `json:"content_type,omitempty"`
-		ContentLength int64  `json:"content_length,omitempty"`
-		BodyHash      string `json:"body_hash,omitempty"`
-		BodySimhash   string `json:"body_simhash,omitempty"`
-		FaviconHash   string `json:"favicon_hash,omitempty"`
-		Location      string `json:"location,omitempty"`
-		Valid         *bool  `json:"valid,omitempty"`
-		Fuzzy         bool   `json:"fuzzy,omitempty"`
-		Reason        string `json:"reason,omitempty"`
+		URL           string               `json:"url"`
+		StatusCode    int                  `json:"status_code"`
+		Title         string               `json:"title,omitempty"`
+		ContentType   string               `json:"content_type,omitempty"`
+		ContentLength int64                `json:"content_length,omitempty"`
+		BodyHash      string               `json:"body_hash,omitempty"`
+		BodySimhash   string               `json:"body_simhash,omitempty"`
+		FaviconHash   string               `json:"favicon_hash,omitempty"`
+		Location      string               `json:"location,omitempty"`
+		Valid         *bool                `json:"valid,omitempty"`
+		Fuzzy         bool                 `json:"fuzzy,omitempty"`
+		Reason        string               `json:"reason,omitempty"`
+		Frameworks    []sprayFrameworkItem `json:"frameworks,omitempty"`
+		Extracts      []sprayExtractItem   `json:"extracts,omitempty"`
 	}
 	type sprayOutput struct {
 		Results []sprayItem `json:"results"`
@@ -40,8 +56,9 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 	}
 
 	result := &ExtractResult{}
-	targetID := data.GenerateID("target", scanTarget)
+	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
+	relationSet := make(map[string]bool)
 
 	type candidate struct {
 		item      sprayItem
@@ -88,8 +105,46 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 			Quality:    &quality,
 			Reason:     qualityReason(quality),
 		})
+		for _, framework := range candidate.item.Frameworks {
+			name := strings.TrimSpace(framework.Name)
+			if name == "" {
+				continue
+			}
+			fpID := data.GenerateID("fingerprint", scanTarget, name)
+			addEntity(result, entitySet, Entity{
+				ID: fpID, Type: "fingerprint", Value: name,
+				Source: "spray", TargetID: targetID, RawData: candidate.raw,
+				Product: name, Version: framework.Version, Tags: framework.Tags,
+				Confidence: sprayFingerprintConfidence(len(framework.MatchDetail) > 0), Status: "observed",
+			})
+			addRelation(result, relationSet, Relation{FromID: urlID, ToID: fpID, Type: RelHasFingerprint})
+		}
+		for _, extracted := range candidate.item.Extracts {
+			name := strings.TrimSpace(extracted.Name)
+			for _, value := range extracted.Values {
+				value = strings.TrimSpace(value)
+				if name == "" || value == "" {
+					continue
+				}
+				extractedID := data.GenerateID("extracted", scanTarget, name, value)
+				addEntity(result, entitySet, Entity{
+					ID: extractedID, Type: "extracted", Value: value,
+					Source: "spray", TargetID: targetID, RawData: candidate.raw,
+					Severity:   strings.ToLower(extracted.Severity),
+					Confidence: 0.75, Status: "observed", Tags: []string{name},
+				})
+				addRelation(result, relationSet, Relation{FromID: urlID, ToID: extractedID, Type: RelRelatesTo})
+			}
+		}
 	}
 	return result, nil
+}
+
+func sprayFingerprintConfidence(hasMatchDetail bool) float64 {
+	if hasMatchDetail {
+		return 0.85
+	}
+	return 0.75
 }
 
 func persistSprayURL(quality Quality) bool {

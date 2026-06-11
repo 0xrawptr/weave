@@ -47,7 +47,7 @@ func (n *NeutronExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 	}
 
 	result := &ExtractResult{}
-	targetID := data.GenerateID("target", scanTarget)
+	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 	for _, item := range out.Results {

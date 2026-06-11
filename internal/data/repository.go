@@ -32,6 +32,10 @@ func GenerateID(parts ...string) string {
 
 func generateID(parts ...string) string { return GenerateID(parts...) }
 
+func TargetID(value string) string {
+	return GenerateID("target", value)
+}
+
 func (r *Repository) CheckDuplicate(ctx context.Context, target, artifact string, input []byte) (bool, error) {
 	key := DeduplicationKey(target, artifact, input)
 	return r.Redis.IsDuplicate(ctx, key)

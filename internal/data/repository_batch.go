@@ -40,10 +40,3 @@ func (r *Repository) GetBatchChunks(ctx context.Context, batchID, status string,
 	}
 	return r.Postgres.QueryBatchChunks(ctx, batchID, status, limit, offset)
 }
-
-func (r *Repository) GetFailedBatchChunks(ctx context.Context, batchID string) ([]BatchChunk, error) {
-	if r.Postgres == nil {
-		return nil, nil
-	}
-	return r.Postgres.QueryBatchChunks(ctx, batchID, "failed", 100000, 0)
-}

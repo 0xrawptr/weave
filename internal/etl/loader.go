@@ -21,22 +21,28 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 	campaignID := CampaignIDFromContext(ctx)
 	for _, e := range r.Entities {
 		status := defaultStatus(e.Status, "observed")
-		asset := &data.Asset{
-			ID:          e.ID,
-			CampaignID:  campaignID,
-			Type:        e.Type,
-			Value:       e.Value,
-			Source:      e.Source,
-			TargetID:    e.TargetID,
-			RawData:     entityRawData(e),
-			Confidence:  e.Confidence,
-			Severity:    e.Severity,
-			Priority:    e.Priority,
-			Status:      status,
-			SourceRunID: e.SourceRunID,
-		}
-		if err := l.repo.SaveAsset(ctx, asset); err != nil {
-			return fmt.Errorf("save asset %s: %w", e.ID, err)
+		if evidenceOnlyType(e.Type) {
+			if err := l.saveEvidenceEntity(ctx, e, ""); err != nil {
+				return err
+			}
+		} else {
+			asset := &data.Asset{
+				ID:          e.ID,
+				CampaignID:  campaignID,
+				Type:        e.Type,
+				Value:       e.Value,
+				Source:      e.Source,
+				TargetID:    e.TargetID,
+				RawData:     entityRawData(e),
+				Confidence:  e.Confidence,
+				Severity:    e.Severity,
+				Priority:    e.Priority,
+				Status:      status,
+				SourceRunID: e.SourceRunID,
+			}
+			if err := l.repo.SaveAsset(ctx, asset); err != nil {
+				return fmt.Errorf("save asset %s: %w", e.ID, err)
+			}
 		}
 		if status == data.AssetStatusNoise {
 			continue
@@ -50,7 +56,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 		// Persist enriched template IDs as template assets.
 		for _, tid := range e.TemplateIDs {
 			tplID := data.GenerateID("template", e.TargetID, tid)
-			tplAsset := &data.Asset{
+			tplAsset := &data.AssetEvidence{
 				ID:         tplID,
 				CampaignID: campaignID,
 				Type:       "template",
@@ -61,7 +67,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				Status:     "candidate",
 				Priority:   e.Priority,
 			}
-			if err := l.repo.SaveAsset(ctx, tplAsset); err != nil {
+			if err := l.repo.SaveEvidence(ctx, tplAsset); err != nil {
 				return fmt.Errorf("save template %s: %w", tid, err)
 			}
 			if productID != "" {
@@ -77,7 +83,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 		// instead of only raw fingerprint names.
 		for _, tag := range e.Tags {
 			tagID := data.GenerateID("tag", e.TargetID, tag)
-			tagAsset := &data.Asset{
+			tagAsset := &data.AssetEvidence{
 				ID:         tagID,
 				CampaignID: campaignID,
 				Type:       "tag",
@@ -87,7 +93,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				Confidence: 0.5,
 				Status:     "candidate",
 			}
-			if err := l.repo.SaveAsset(ctx, tagAsset); err != nil {
+			if err := l.repo.SaveEvidence(ctx, tagAsset); err != nil {
 				return fmt.Errorf("save tag %s: %w", tag, err)
 			}
 			if err := l.repo.SaveRelation(ctx, data.AssetRelation{
@@ -99,7 +105,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 
 		for _, cpe := range e.CPEs {
 			cpeID := data.GenerateID("cpe", e.TargetID, cpe)
-			cpeAsset := &data.Asset{
+			cpeAsset := &data.AssetEvidence{
 				ID:         cpeID,
 				CampaignID: campaignID,
 				Type:       "cpe",
@@ -109,7 +115,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				Confidence: 0.5,
 				Status:     "candidate",
 			}
-			if err := l.repo.SaveAsset(ctx, cpeAsset); err != nil {
+			if err := l.repo.SaveEvidence(ctx, cpeAsset); err != nil {
 				return fmt.Errorf("save cpe %s: %w", cpe, err)
 			}
 			if productID != "" {
@@ -137,7 +143,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				intel = value
 				raw, _ = json.Marshal(intel)
 			}
-			cveAsset := &data.Asset{
+			cveAsset := &data.AssetEvidence{
 				ID:         cveID,
 				CampaignID: campaignID,
 				Type:       "cve",
@@ -150,7 +156,7 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				Priority:   cvePriority(e.CVEIntel, cve),
 				Status:     "candidate",
 			}
-			if err := l.repo.SaveAsset(ctx, cveAsset); err != nil {
+			if err := l.repo.SaveEvidence(ctx, cveAsset); err != nil {
 				return fmt.Errorf("save cve %s: %w", cve, err)
 			}
 			if productID != "" {
@@ -207,6 +213,39 @@ func entityRawData(e Entity) []byte {
 	return out
 }
 
+func (l *dbLoader) saveEvidenceEntity(ctx context.Context, e Entity, subjectID string) error {
+	status := defaultStatus(e.Status, "observed")
+	evidence := &data.AssetEvidence{
+		ID:          e.ID,
+		CampaignID:  CampaignIDFromContext(ctx),
+		TargetID:    e.TargetID,
+		SubjectID:   subjectID,
+		Type:        e.Type,
+		Value:       e.Value,
+		Source:      e.Source,
+		RawData:     entityRawData(e),
+		Confidence:  e.Confidence,
+		Severity:    e.Severity,
+		Priority:    e.Priority,
+		Status:      status,
+		Reason:      e.Reason,
+		SourceRunID: e.SourceRunID,
+	}
+	if err := l.repo.SaveEvidence(ctx, evidence); err != nil {
+		return fmt.Errorf("save evidence %s: %w", e.ID, err)
+	}
+	return nil
+}
+
+func evidenceOnlyType(entityType string) bool {
+	switch entityType {
+	case "fingerprint", "product", "version", "template", "tag", "cpe", "cve", "cwe", "intel", "extracted":
+		return true
+	default:
+		return false
+	}
+}
+
 func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, error) {
 	if e.Product == "" && e.Version == "" && !needsSyntheticProduct(e) {
 		return "", nil
@@ -219,7 +258,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 		return "", nil
 	}
 	productID := data.GenerateID("product", e.TargetID, productValue)
-	product := &data.Asset{
+	product := &data.AssetEvidence{
 		ID:         productID,
 		CampaignID: CampaignIDFromContext(ctx),
 		Type:       "product",
@@ -230,7 +269,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 		Status:     defaultStatus(e.Status, "observed"),
 		Priority:   e.Priority,
 	}
-	if err := l.repo.SaveAsset(ctx, product); err != nil {
+	if err := l.repo.SaveEvidence(ctx, product); err != nil {
 		return "", fmt.Errorf("save product %s: %w", productValue, err)
 	}
 	if err := l.repo.SaveRelation(ctx, data.AssetRelation{
@@ -242,7 +281,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 		return productID, nil
 	}
 	versionID := data.GenerateID("version", e.TargetID, productValue, e.Version)
-	version := &data.Asset{
+	version := &data.AssetEvidence{
 		ID:         versionID,
 		CampaignID: CampaignIDFromContext(ctx),
 		Type:       "version",
@@ -253,7 +292,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 		Status:     defaultStatus(e.Status, "observed"),
 		Priority:   e.Priority,
 	}
-	if err := l.repo.SaveAsset(ctx, version); err != nil {
+	if err := l.repo.SaveEvidence(ctx, version); err != nil {
 		return "", fmt.Errorf("save version %s: %w", e.Version, err)
 	}
 	if err := l.repo.SaveRelation(ctx, data.AssetRelation{
@@ -275,7 +314,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 	}
 	if productValue != "" {
 		productID := data.GenerateID("product", e.TargetID, productValue)
-		product := &data.Asset{
+		product := &data.AssetEvidence{
 			ID:         productID,
 			CampaignID: CampaignIDFromContext(ctx),
 			Type:       "product",
@@ -286,7 +325,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 			Status:     "candidate",
 			Priority:   cvePriority(e.CVEIntel, intel.ID),
 		}
-		if err := l.repo.SaveAsset(ctx, product); err != nil {
+		if err := l.repo.SaveEvidence(ctx, product); err != nil {
 			return fmt.Errorf("save cve product %s: %w", productValue, err)
 		}
 		if err := l.repo.SaveRelation(ctx, data.AssetRelation{
@@ -298,7 +337,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 
 	for _, cpe := range intel.CPEs {
 		cpeID := data.GenerateID("cpe", e.TargetID, cpe)
-		cpeAsset := &data.Asset{
+		cpeAsset := &data.AssetEvidence{
 			ID:         cpeID,
 			CampaignID: CampaignIDFromContext(ctx),
 			Type:       "cpe",
@@ -308,7 +347,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 			Confidence: 0.5,
 			Status:     "candidate",
 		}
-		if err := l.repo.SaveAsset(ctx, cpeAsset); err != nil {
+		if err := l.repo.SaveEvidence(ctx, cpeAsset); err != nil {
 			return fmt.Errorf("save cpe %s: %w", cpe, err)
 		}
 		if err := l.repo.SaveRelation(ctx, data.AssetRelation{
@@ -319,7 +358,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 	}
 	for _, cwe := range intel.CWEs {
 		cweID := data.GenerateID("cwe", e.TargetID, cwe)
-		cweAsset := &data.Asset{
+		cweAsset := &data.AssetEvidence{
 			ID:         cweID,
 			CampaignID: CampaignIDFromContext(ctx),
 			Type:       "cwe",
@@ -329,7 +368,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 			Confidence: 0.5,
 			Status:     "candidate",
 		}
-		if err := l.repo.SaveAsset(ctx, cweAsset); err != nil {
+		if err := l.repo.SaveEvidence(ctx, cweAsset); err != nil {
 			return fmt.Errorf("save cwe %s: %w", cwe, err)
 		}
 		if err := l.repo.SaveRelation(ctx, data.AssetRelation{
@@ -361,7 +400,7 @@ func (l *dbLoader) saveCVEIntel(ctx context.Context, e Entity, cveID string, int
 	}
 	raw, _ := json.Marshal(intel)
 	intelID := data.GenerateID("intel", e.TargetID, intel.ID)
-	intelAsset := &data.Asset{
+	intelAsset := &data.AssetEvidence{
 		ID:         intelID,
 		CampaignID: CampaignIDFromContext(ctx),
 		Type:       "intel",
@@ -374,7 +413,7 @@ func (l *dbLoader) saveCVEIntel(ctx context.Context, e Entity, cveID string, int
 		Priority:   cvePriority(e.CVEIntel, intel.ID),
 		Status:     "candidate",
 	}
-	if err := l.repo.SaveAsset(ctx, intelAsset); err != nil {
+	if err := l.repo.SaveEvidence(ctx, intelAsset); err != nil {
 		return fmt.Errorf("save cve intel %s: %w", intel.ID, err)
 	}
 	if err := l.repo.SaveRelation(ctx, data.AssetRelation{

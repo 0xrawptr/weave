@@ -62,6 +62,13 @@ func TestGenerateIDFormat(t *testing.T) {
 	}
 }
 
+func TestTargetID(t *testing.T) {
+	value := "220.191.208.240/29"
+	if got, want := TargetID(value), GenerateID("target", value); got != want {
+		t.Fatalf("TargetID(%q) = %q, want %q", value, got, want)
+	}
+}
+
 func TestPlannerConsumableURLStatusExcludesQueued(t *testing.T) {
 	if plannerConsumableURLStatus(AssetStatusQueued) {
 		t.Fatalf("queued URLs should stay in assets without entering planner replan")

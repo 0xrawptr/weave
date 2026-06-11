@@ -29,7 +29,7 @@ func (c *CdncheckExtractor) Extract(ctx context.Context, scanTarget string, rawD
 	}
 
 	result := &ExtractResult{}
-	targetID := data.GenerateID("target", scanTarget)
+	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 

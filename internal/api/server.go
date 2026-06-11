@@ -58,11 +58,6 @@ func (s *Server) setupRoutes() {
 		v1.GET("/campaigns/:id", s.GetCampaign)
 		v1.POST("/campaigns/:id/status", s.UpdateCampaignStatus)
 
-		// Workflow endpoints
-		v1.POST("/workflows", s.StartWorkflow)
-		v1.GET("/workflows/:id", s.GetWorkflow)
-		v1.DELETE("/workflows/:id", s.CancelWorkflow)
-
 		// Result endpoints
 		v1.GET("/results", s.ListResults)
 		v1.GET("/events", s.ListEvents)
@@ -72,8 +67,8 @@ func (s *Server) setupRoutes() {
 		v1.GET("/results/:id/events", s.ListResultEvents)
 		v1.POST("/results/:id/status", s.UpdateResultStatus)
 		v1.GET("/batches", s.ListBatches)
+		v1.POST("/batches", s.StartBatch)
 		v1.GET("/batches/:id/chunks", s.ListBatchChunks)
-		v1.POST("/batches/:id/retry_failed", s.RetryFailedBatchChunks)
 		v1.POST("/batches/:id/resume_scheduler", s.ResumeBatchScheduler)
 		v1.GET("/work-items", s.ListWorkItems)
 		v1.GET("/work-items/summary", s.WorkItemSummary)
@@ -85,7 +80,6 @@ func (s *Server) setupRoutes() {
 
 		// Planner endpoints
 		v1.GET("/plan", s.PlanTarget)
-		v1.GET("/plan/dag", s.PlanDAGTarget)
 		v1.GET("/actions", s.ListActions)
 		v1.POST("/actions", s.StartAction)
 	}

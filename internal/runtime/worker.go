@@ -35,6 +35,7 @@ func ConfigureArtifactWorker(w sdkworker.Worker, runtimeApp *app.App, onlyArtifa
 	repo := runtimeApp.Repo
 	persistHook, dedupHook, markDoneHook := buildHooks(repo)
 	wireGogoStreaming(runtimeApp)
+	wireSprayStreaming(runtimeApp)
 	registerArtifactActivities(w, runtimeApp, persistHook, dedupHook, markDoneHook, onlyArtifact)
 }
 
@@ -97,6 +98,39 @@ func wireGogoStreaming(runtimeApp *app.App) {
 	})
 }
 
+func wireSprayStreaming(runtimeApp *app.App) {
+	repo := runtimeApp.Repo
+	reg := runtimeApp.Registry
+	a, err := reg.Get("spray")
+	if err != nil {
+		return
+	}
+	a.(*artifact.SprayArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, result artifact.SprayResultItem) {
+		raw, _ := json.Marshal(result)
+		workflowID := ""
+		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
+			workflowID = info.WorkflowExecution.ID
+		}
+		_ = repo.SaveRawEvent(ctx, &data.RawEvent{
+			ID:         fmt.Sprintf("spray-stream-%d", time.Now().UnixNano()),
+			CampaignID: campaignID,
+			Artifact:   "spray",
+			TargetID:   target,
+			TargetType: targetType(target),
+			WorkflowID: workflowID,
+			Data:       raw,
+		})
+		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}, "total": 1})
+		if err := runtimeApp.Pipelines.Spray.Process(etl.WithCampaignID(ctx, campaignID), target, wrapped); err != nil {
+			log.Printf("WARNING: spray streaming ETL failed: %v", err)
+			return
+		}
+		if err := upsertStreamingSprayFollowUp(ctx, repo, workflowID, campaignID, result); err != nil {
+			log.Printf("WARNING: spray streaming follow-up scheduling failed: %v", err)
+		}
+	})
+}
+
 func upsertStreamingGogoFollowUp(ctx context.Context, repo *data.Repository, workflowID, campaignID string, result *sdktypes.GOGOResult) error {
 	if repo == nil || result == nil || workflowID == "" || !shouldPlanFromStreamingGogo(result) {
 		return nil
@@ -128,6 +162,37 @@ func upsertStreamingGogoFollowUp(ctx context.Context, repo *data.Repository, wor
 	})
 }
 
+func upsertStreamingSprayFollowUp(ctx context.Context, repo *data.Repository, workflowID, campaignID string, result artifact.SprayResultItem) error {
+	if repo == nil || workflowID == "" || !shouldPlanFromStreamingSpray(result) {
+		return nil
+	}
+	parent, err := repo.GetWorkItemByWorkflowID(ctx, workflowID)
+	if err != nil || parent == nil {
+		return err
+	}
+	if parent.Type != "spray_shard" || parent.BatchID == "" || parent.Target == "" {
+		return nil
+	}
+	if campaignID == "" {
+		campaignID = parent.CampaignID
+	}
+	iteration := 1
+	return repo.UpsertWorkItem(ctx, data.WorkItem{
+		ID:          data.GenerateID("work_item", parent.BatchID, "planned_dag_followup", parent.Target, fmt.Sprintf("%d", iteration)),
+		CampaignID:  campaignID,
+		BatchID:     parent.BatchID,
+		ParentID:    parent.ID,
+		Type:        "planned_dag_followup",
+		Target:      parent.Target,
+		Artifact:    "planned_dag",
+		Queue:       "planner",
+		Input:       mustMarshalRuntime(map[string]interface{}{"target": parent.Target, "iteration": iteration}),
+		Priority:    streamingSprayFollowUpPriority(result),
+		Status:      data.WorkItemStatusPending,
+		MaxAttempts: 1,
+	})
+}
+
 func shouldPlanFromStreamingGogo(result *sdktypes.GOGOResult) bool {
 	if result == nil {
 		return false
@@ -136,6 +201,14 @@ func shouldPlanFromStreamingGogo(result *sdktypes.GOGOResult) bool {
 		return true
 	}
 	return strings.HasPrefix(result.Uri, "http://") || strings.HasPrefix(result.Uri, "https://")
+}
+
+func shouldPlanFromStreamingSpray(result artifact.SprayResultItem) bool {
+	if result.URL == "" || !result.Valid || result.Fuzzy {
+		return false
+	}
+	statusCode := result.StatusCode
+	return statusCode >= 200 && statusCode < 500
 }
 
 func streamingGogoFollowUpPriority(result *sdktypes.GOGOResult) int {
@@ -151,6 +224,18 @@ func streamingGogoFollowUpPriority(result *sdktypes.GOGOResult) int {
 		return 50
 	default:
 		return 40
+	}
+}
+
+func streamingSprayFollowUpPriority(result artifact.SprayResultItem) int {
+	if len(result.Frameworks) > 0 || len(result.Extracts) > 0 {
+		return 75
+	}
+	switch {
+	case result.StatusCode >= 200 && result.StatusCode < 400:
+		return 55
+	default:
+		return 45
 	}
 }
 
@@ -283,20 +368,13 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 }
 
 func registerWorkflows(w sdkworker.Worker) {
-	w.RegisterWorkflow(workflow.DomainWorkflow)
-	w.RegisterWorkflow(workflow.IPWorkflow)
-	w.RegisterWorkflow(workflow.CompanyWorkflow)
-	w.RegisterWorkflow(workflow.PortScanWorkflow)
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)
-	w.RegisterWorkflow(workflow.DAGWorkflow)
-	w.RegisterWorkflow(workflow.PlannedDAGWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)
-	w.RegisterWorkflow(workflow.PlannedWorkflow)
-	log.Println("registered workflows: domain, ip, company, portscan, batch_portscan, scheduler, scheduled_work_items, dag, planned_dag, action, planned")
+	log.Println("registered workflows: batch_portscan, scheduler, scheduled_work_items, action")
 }
 
 func targetType(raw string) string {

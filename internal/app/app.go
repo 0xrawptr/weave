@@ -15,6 +15,7 @@ import (
 	"github.com/chainreactors/sdk/pkg/provider"
 	sdkspray "github.com/chainreactors/sdk/spray"
 	sdkzombie "github.com/chainreactors/sdk/zombie"
+	spraypkg "github.com/chainreactors/spray/pkg"
 )
 
 type Pipelines struct {
@@ -111,11 +112,11 @@ func buildSDKClient(cfg *config.Config) *sdkclient.Client {
 		opts = append(opts, sdkclient.WithGogoConfig(gogoCfg))
 	}
 
-	sprayCfg := sdkspray.NewConfig()
+	sprayCfg := sdkspray.NewConfig().WithMatchDetail().WithResourceProvider(spraypkg.LoadEmbeddedConfig)
 	if cfg.Artifacts.Spray.Capacity > 0 {
 		sprayCfg.WithCapacity(cfg.Artifacts.Spray.Capacity)
-		opts = append(opts, sdkclient.WithSprayConfig(sprayCfg))
 	}
+	opts = append(opts, sdkclient.WithSprayConfig(sprayCfg))
 
 	neutronCfg := sdkneutron.NewConfig()
 	if cfg.Artifacts.Neutron.Capacity > 0 {

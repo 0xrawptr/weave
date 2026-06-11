@@ -3,6 +3,7 @@ package artifact
 import (
 	"testing"
 
+	"github.com/chainreactors/fingers/common"
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
 )
 
@@ -34,6 +35,45 @@ func TestSprayResultItemPreservesHTTPMetadata(t *testing.T) {
 	}
 }
 
+func TestSprayResultItemPreservesFrameworksAndExtracts(t *testing.T) {
+	item := sprayResultItem(&sdktypes.SprayResult{
+		UrlString: "https://example.com/console",
+		Status:    200,
+		IsValid:   true,
+		Frameworks: sdktypes.Frameworks{
+			"tongweb": &sdktypes.Framework{
+				Name:    "TongWeb",
+				Tags:    []string{"java", "appserver"},
+				IsFocus: true,
+				Attributes: &common.Attributes{
+					Version: "7.0",
+				},
+				MatchDetail: &sdktypes.MatchDetail{
+					RuleIndex:    2,
+					MatcherType:  "body",
+					MatcherIndex: 1,
+					MatcherValue: "TongWeb",
+					SendData:     "/console",
+				},
+			},
+		},
+		Extracteds: sdktypes.Extracteds{
+			{Name: "url", Severity: "info", ExtractResult: []string{"https://example.com/api"}},
+		},
+	})
+
+	if len(item.Frameworks) != 1 {
+		t.Fatalf("expected framework metadata, got %#v", item.Frameworks)
+	}
+	fw := item.Frameworks[0]
+	if fw.Name != "TongWeb" || fw.Version != "7.0" || fw.MatchDetail["matcher_type"] != "body" {
+		t.Fatalf("framework metadata not preserved: %#v", fw)
+	}
+	if len(item.Extracts) != 1 || item.Extracts[0].Values[0] != "https://example.com/api" {
+		t.Fatalf("extract metadata not preserved: %#v", item.Extracts)
+	}
+}
+
 func TestSliceWordlist(t *testing.T) {
 	words := []string{"a", "b", "c", "d"}
 	got := sliceWordlist(words, 1, 2)
@@ -46,5 +86,15 @@ func TestSliceWordlist(t *testing.T) {
 	}
 	if got := sliceWordlist(words, 10, 2); len(got) != 0 {
 		t.Fatalf("out of range slice = %#v", got)
+	}
+}
+
+func TestFullSprayWordlistUsesDefaultDictionary(t *testing.T) {
+	words := FullSprayWordlist()
+	if len(words) == 0 {
+		t.Fatal("expected default spray wordlist")
+	}
+	if len(words) != len(defaultSprayWordlist()) {
+		t.Fatalf("full wordlist should map to default dictionary, got %d", len(words))
 	}
 }

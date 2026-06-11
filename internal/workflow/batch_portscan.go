@@ -42,35 +42,21 @@ type ResourceLimits struct {
 }
 
 type BatchPortScanResult struct {
-	Targets         []string                   `json:"targets"`
-	PriorityTargets []string                   `json:"priority_targets,omitempty"`
-	Ports           string                     `json:"ports"`
-	MaxConcurrency  int                        `json:"max_concurrency"`
-	ChunkPrefix     int                        `json:"chunk_prefix"`
-	MaxAttempts     int                        `json:"max_attempts"`
-	RetryDelay      int                        `json:"retry_delay_seconds,omitempty"`
-	RunPlannedDAG   bool                       `json:"run_planned_dag,omitempty"`
-	TotalChunks     int                        `json:"total_chunks"`
-	Completed       int                        `json:"completed"`
-	Failed          int                        `json:"failed"`
-	FollowUpTotal   int                        `json:"follow_up_total,omitempty"`
-	FollowUpFailed  int                        `json:"follow_up_failed,omitempty"`
-	ActionTotal     int                        `json:"action_total,omitempty"`
-	ActionFailed    int                        `json:"action_failed,omitempty"`
-	Chunks          []BatchPortScanChunkResult `json:"chunks,omitempty"`
-}
-
-type BatchPortScanChunkResult struct {
-	Target             string `json:"target"`
-	Chunk              string `json:"chunk"`
-	WorkflowID         string `json:"workflow_id,omitempty"`
-	Success            bool   `json:"success"`
-	Error              string `json:"error,omitempty"`
-	FollowUpWorkflowID string `json:"follow_up_workflow_id,omitempty"`
-	FollowUpCompleted  int    `json:"follow_up_completed,omitempty"`
-	FollowUpFailed     int    `json:"follow_up_failed,omitempty"`
-	FollowUpSkipped    int    `json:"follow_up_skipped,omitempty"`
-	FollowUpError      string `json:"follow_up_error,omitempty"`
+	Targets         []string `json:"targets"`
+	PriorityTargets []string `json:"priority_targets,omitempty"`
+	Ports           string   `json:"ports"`
+	MaxConcurrency  int      `json:"max_concurrency"`
+	ChunkPrefix     int      `json:"chunk_prefix"`
+	MaxAttempts     int      `json:"max_attempts"`
+	RetryDelay      int      `json:"retry_delay_seconds,omitempty"`
+	RunPlannedDAG   bool     `json:"run_planned_dag,omitempty"`
+	TotalChunks     int      `json:"total_chunks"`
+	Completed       int      `json:"completed"`
+	Failed          int      `json:"failed"`
+	FollowUpTotal   int      `json:"follow_up_total,omitempty"`
+	FollowUpFailed  int      `json:"follow_up_failed,omitempty"`
+	ActionTotal     int      `json:"action_total,omitempty"`
+	ActionFailed    int      `json:"action_failed,omitempty"`
 }
 
 type batchPortScanChunk struct {
@@ -80,8 +66,8 @@ type batchPortScanChunk struct {
 
 const workItemUpsertBatchSize = 25
 
-// BatchPortScanWorkflow expands many IP/CIDR targets into scan chunks and runs
-// gogo-only child workflows with bounded concurrency.
+// BatchPortScanWorkflow expands many IP/CIDR targets into durable work items
+// and hands execution to SchedulerWorkflow.
 func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*BatchPortScanResult, error) {
 	input = normalizeBatchPortScanInput(input)
 
@@ -149,39 +135,6 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 	result.ActionTotal = schedulerResult.ActionTotal
 	result.ActionFailed = schedulerResult.ActionFailed
 	return result, nil
-}
-
-func followUpResultCompleted(result *PlannedDAGWorkflowResult) int {
-	if result == nil {
-		return 0
-	}
-	total := 0
-	for _, run := range result.Runs {
-		total += run.Completed
-	}
-	return total
-}
-
-func followUpResultFailed(result *PlannedDAGWorkflowResult) int {
-	if result == nil {
-		return 0
-	}
-	total := 0
-	for _, run := range result.Runs {
-		total += run.Failed
-	}
-	return total
-}
-
-func followUpResultSkipped(result *PlannedDAGWorkflowResult) int {
-	if result == nil {
-		return 0
-	}
-	total := 0
-	for _, run := range result.Runs {
-		total += run.Skipped
-	}
-	return total
 }
 
 func upsertPortScanBatchRun(ctx workflow.Context, batchID string, input BatchPortScanInput, result *BatchPortScanResult, status string) error {

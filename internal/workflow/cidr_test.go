@@ -64,24 +64,6 @@ func TestPrioritizePortScanChunks(t *testing.T) {
 	}
 }
 
-func TestFollowUpResultTotals(t *testing.T) {
-	result := &PlannedDAGWorkflowResult{
-		Runs: []DAGWorkflowResult{
-			{Completed: 2, Failed: 1, Skipped: 3},
-			{Completed: 4, Failed: 0, Skipped: 1},
-		},
-	}
-	if got := followUpResultCompleted(result); got != 6 {
-		t.Fatalf("completed = %d, want 6", got)
-	}
-	if got := followUpResultFailed(result); got != 1 {
-		t.Fatalf("failed = %d, want 1", got)
-	}
-	if got := followUpResultSkipped(result); got != 4 {
-		t.Fatalf("skipped = %d, want 4", got)
-	}
-}
-
 func TestActionWorkItemFromDAGNode(t *testing.T) {
 	input := SchedulerWorkflowInput{
 		BatchID: "batch-1",

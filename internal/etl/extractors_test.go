@@ -117,6 +117,46 @@ func TestSprayExtractorUsesSDKFuzzySignal(t *testing.T) {
 	}
 }
 
+func TestSprayExtractorPersistsFrameworksAndExtracts(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"url":         "https://example.com/console/login/LoginForm.jsp",
+				"status_code": 200,
+				"valid":       true,
+				"frameworks": []map[string]interface{}{
+					{
+						"name":    "TongWeb",
+						"version": "7.0",
+						"tags":    []string{"java", "appserver"},
+						"match_detail": map[string]interface{}{
+							"matcher_type":  "body",
+							"matcher_value": "TongWeb",
+						},
+					},
+				},
+				"extracts": []map[string]interface{}{
+					{"name": "url", "severity": "info", "values": []string{"https://example.com/api"}},
+				},
+			},
+		},
+		"total": 1,
+	})
+	result, err := (&SprayExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	if findEntity(result.Entities, "fingerprint", "TongWeb") == nil {
+		t.Fatalf("expected spray fingerprint entity, got %#v", result.Entities)
+	}
+	if findEntity(result.Entities, "extracted", "https://example.com/api") == nil {
+		t.Fatalf("expected spray extracted entity, got %#v", result.Entities)
+	}
+	if !hasRelationType(result.Relations, RelHasFingerprint) || !hasRelationType(result.Relations, RelRelatesTo) {
+		t.Fatalf("expected spray evidence relations, got %#v", result.Relations)
+	}
+}
+
 func TestGogoExtractorKeepsRoot404HTTPServiceVisible(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"results": []map[string]interface{}{

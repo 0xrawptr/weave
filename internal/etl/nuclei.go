@@ -49,7 +49,7 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		return nil, fmt.Errorf("parse nuclei result: %w", err)
 	}
 	result := &ExtractResult{}
-	targetID := data.GenerateID("target", scanTarget)
+	targetID := data.TargetID(scanTarget)
 	entitySet := make(map[string]bool)
 	relationSet := make(map[string]bool)
 	for _, item := range out.Results {

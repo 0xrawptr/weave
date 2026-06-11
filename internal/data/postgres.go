@@ -132,6 +132,25 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS asset_evidence (
+		id TEXT PRIMARY KEY,
+		campaign_id TEXT NOT NULL DEFAULT '',
+		target_id TEXT REFERENCES targets(id),
+		subject_id TEXT NOT NULL DEFAULT '',
+		type TEXT NOT NULL,
+		value TEXT NOT NULL,
+		source TEXT NOT NULL,
+		raw_data JSONB,
+		confidence DOUBLE PRECISION DEFAULT 1.0,
+		severity TEXT NOT NULL DEFAULT '',
+		priority INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'observed',
+		reason TEXT NOT NULL DEFAULT '',
+		source_run_id TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
 	CREATE TABLE IF NOT EXISTS scans (
 		id TEXT PRIMARY KEY,
 		workflow_id TEXT NOT NULL,
@@ -175,7 +194,8 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			campaign_id TEXT NOT NULL DEFAULT '',
 			artifact TEXT NOT NULL,
-			target_id TEXT NOT NULL DEFAULT '',
+			target_id TEXT REFERENCES targets(id),
+			target_value TEXT NOT NULL DEFAULT '',
 			target_type TEXT NOT NULL DEFAULT '',
 			workflow_id TEXT NOT NULL DEFAULT '',
 			data JSONB NOT NULL,
@@ -265,6 +285,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT NOW();
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS target_type TEXT NOT NULL DEFAULT '';
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS target_value TEXT NOT NULL DEFAULT '';
 	ALTER TABLE action_records ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
@@ -287,6 +308,11 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_asset_events_asset ON asset_events(asset_id);
 	CREATE INDEX IF NOT EXISTS idx_asset_events_campaign ON asset_events(campaign_id);
 	CREATE INDEX IF NOT EXISTS idx_asset_events_type ON asset_events(event_type);
+	CREATE INDEX IF NOT EXISTS idx_asset_evidence_target ON asset_evidence(target_id);
+	CREATE INDEX IF NOT EXISTS idx_asset_evidence_campaign ON asset_evidence(campaign_id);
+	CREATE INDEX IF NOT EXISTS idx_asset_evidence_subject ON asset_evidence(subject_id);
+	CREATE INDEX IF NOT EXISTS idx_asset_evidence_type ON asset_evidence(type);
+	CREATE INDEX IF NOT EXISTS idx_asset_evidence_status ON asset_evidence(status);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_artifact ON raw_events(artifact);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_campaign ON raw_events(campaign_id);
 	CREATE INDEX IF NOT EXISTS idx_raw_events_target ON raw_events(target_id);
@@ -529,6 +555,37 @@ func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
 	return err
 }
 
+func (p *PostgresStore) InsertAssetEvidence(ctx context.Context, evidence *AssetEvidence) error {
+	if evidence.Status == "" {
+		evidence.Status = "observed"
+	}
+	if evidence.Confidence == 0 {
+		evidence.Confidence = 1.0
+	}
+	_, err := p.pool.Exec(ctx,
+		`INSERT INTO asset_evidence (id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, priority, status, reason, source_run_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		 ON CONFLICT (id) DO UPDATE SET
+			campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE asset_evidence.campaign_id END,
+			subject_id = CASE WHEN EXCLUDED.subject_id <> '' THEN EXCLUDED.subject_id ELSE asset_evidence.subject_id END,
+			raw_data = COALESCE(EXCLUDED.raw_data, asset_evidence.raw_data),
+			confidence = GREATEST(asset_evidence.confidence, EXCLUDED.confidence),
+			severity = CASE WHEN EXCLUDED.severity <> '' THEN EXCLUDED.severity ELSE asset_evidence.severity END,
+			priority = GREATEST(asset_evidence.priority, EXCLUDED.priority),
+			status = CASE
+				WHEN asset_evidence.status IN ('false_positive', 'ignored', 'interesting', 'confirmed') THEN asset_evidence.status
+				WHEN EXCLUDED.status <> '' THEN EXCLUDED.status
+				ELSE asset_evidence.status
+			END,
+			reason = CASE WHEN EXCLUDED.reason <> '' THEN EXCLUDED.reason ELSE asset_evidence.reason END,
+			source_run_id = CASE WHEN EXCLUDED.source_run_id <> '' THEN EXCLUDED.source_run_id ELSE asset_evidence.source_run_id END,
+			updated_at = NOW()`,
+		evidence.ID, evidence.CampaignID, evidence.TargetID, evidence.SubjectID, evidence.Type, evidence.Value,
+		evidence.Source, evidence.RawData, evidence.Confidence, evidence.Severity, evidence.Priority,
+		evidence.Status, evidence.Reason, evidence.SourceRunID)
+	return err
+}
+
 func (p *PostgresStore) InsertAssetEvent(ctx context.Context, event AssetEvent) error {
 	if event.ID == "" {
 		event.ID = GenerateID("asset_event", event.AssetID, event.CampaignID, event.EventType, fmt.Sprintf("%d", time.Now().UnixNano()))
@@ -583,9 +640,9 @@ func (p *PostgresStore) QueryAssetEvents(ctx context.Context, assetID, campaignI
 
 func (p *PostgresStore) InsertRawEvent(ctx context.Context, e *RawEvent) error {
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO raw_events (id, campaign_id, artifact, target_id, target_type, workflow_id, data)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
-		e.ID, e.CampaignID, e.Artifact, e.TargetID, e.TargetType, e.WorkflowID, e.Data)
+		`INSERT INTO raw_events (id, campaign_id, artifact, target_id, target_value, target_type, workflow_id, data)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+		e.ID, e.CampaignID, e.Artifact, e.TargetID, e.TargetValue, e.TargetType, e.WorkflowID, e.Data)
 	return err
 }
 
@@ -1816,6 +1873,50 @@ func (p *PostgresStore) QueryAssetsFiltered(ctx context.Context, targetID, asset
 		assets = append(assets, a)
 	}
 	return assets, nil
+}
+
+func (p *PostgresStore) QueryAssetEvidence(ctx context.Context, targetID, evidenceType, campaignID, status string, limit, offset int) ([]AssetEvidence, error) {
+	query := `SELECT id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, priority, status, reason, source_run_id, created_at, updated_at FROM asset_evidence WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if targetID != "" {
+		query += fmt.Sprintf(" AND target_id = $%d", argIdx)
+		args = append(args, targetID)
+		argIdx++
+	}
+	if evidenceType != "" {
+		query += fmt.Sprintf(" AND type = $%d", argIdx)
+		args = append(args, evidenceType)
+		argIdx++
+	}
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	if status != "" {
+		query += fmt.Sprintf(" AND status = $%d", argIdx)
+		args = append(args, status)
+		argIdx++
+	}
+	query += fmt.Sprintf(" ORDER BY priority DESC, created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var values []AssetEvidence
+	for rows.Next() {
+		var e AssetEvidence
+		if err := rows.Scan(&e.ID, &e.CampaignID, &e.TargetID, &e.SubjectID, &e.Type, &e.Value, &e.Source, &e.RawData, &e.Confidence, &e.Severity, &e.Priority, &e.Status, &e.Reason, &e.SourceRunID, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		values = append(values, e)
+	}
+	return values, rows.Err()
 }
 
 func (p *PostgresStore) CountAssets(ctx context.Context, targetID, assetType string) (int, error) {

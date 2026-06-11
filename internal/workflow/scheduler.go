@@ -301,6 +301,9 @@ func startScheduledArtifactActionWorkItem(ctx, stateCtx workflow.Context, input 
 }
 
 func startScheduledWorkItemChild(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem, childID string, workflowFunc interface{}) error {
+	if err := setBatchWorkItemStatusWithLease(stateCtx, item.ID, data.WorkItemStatusRunning, childID, "", false, schedulerLeaseSeconds(input)); err != nil {
+		return err
+	}
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID:          childID,
 		ParentClosePolicy:   enumspb.PARENT_CLOSE_POLICY_ABANDON,
@@ -313,9 +316,6 @@ func startScheduledWorkItemChild(ctx, stateCtx workflow.Context, input Scheduler
 	})
 	if err := future.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
 		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), childID, err.Error(), false)
-	}
-	if err := setBatchWorkItemStatusWithLease(stateCtx, item.ID, "running", childID, "", false, schedulerLeaseSeconds(input)); err != nil {
-		return err
 	}
 	return nil
 }
@@ -352,12 +352,24 @@ func ScheduledPortScanWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 		return err
 	}
 
-	_, err := PortScanWorkflow(ctx, PortScanInput{
-		IP:                     item.Target,
-		CampaignID:             schedulerInput.BatchInput.CampaignID,
-		Ports:                  schedulerInput.BatchInput.Ports,
-		ActivityTimeoutSeconds: schedulerInput.BatchInput.ActivityTimeoutSeconds,
-	})
+	gogoCtx := artifactActivityContext(ctx, "gogo", schedulerInput.BatchInput.ActivityTimeoutSeconds)
+	var gogoResult artifact.ActivityResult
+	err := workflow.ExecuteActivity(gogoCtx, "gogo", artifact.Input{
+		Target:     item.Target,
+		CampaignID: schedulerInput.BatchInput.CampaignID,
+		Data: mustMarshal(map[string]interface{}{
+			"ip":            item.Target,
+			"ports":         schedulerInput.BatchInput.Ports,
+			"source_target": sourceTarget,
+		}),
+	}).Get(gogoCtx, &gogoResult)
+	if err == nil && !gogoResult.Success {
+		if gogoResult.Error != "" {
+			err = temporal.NewApplicationError(gogoResult.Error, "gogo_failed")
+		} else {
+			err = temporal.NewApplicationError("gogo scan failed", "gogo_failed")
+		}
+	}
 	if err != nil {
 		if updateErr := upsertPortScanBatchChunk(stateCtx, schedulerInput.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, workflowID, "failed", err.Error()); updateErr != nil {
 			return updateErr

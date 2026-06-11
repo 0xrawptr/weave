@@ -50,7 +50,7 @@ func TestGogoExtractor(t *testing.T) {
 	}
 
 	// Verify relation directions.
-	targetID := data.GenerateID("target", "192.168.1.0/24")
+	targetID := data.TargetID("192.168.1.0/24")
 	ip1ID := data.GenerateID("ip", "192.168.1.0/24", "192.168.1.1")
 	port22ID := data.GenerateID("port", "192.168.1.0/24", "192.168.1.1", "22")
 

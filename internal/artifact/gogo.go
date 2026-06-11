@@ -107,7 +107,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 	gogoCtx := sdkgogo.NewContext().WithContext(ctx).SetThreads(g.threads).SetStatsHandler(collector.Handler())
 	wf := &types.Workflow{IP: gogoIn.IP, Ports: gogoIn.Ports}
 
-	resultCh, err := g.engine.WorkflowStream(gogoCtx, wf)
+	resultCh, err := g.engine.Execute(gogoCtx, sdkgogo.NewWorkflowTask(wf))
 	if err != nil {
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
@@ -122,7 +122,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 
 	for {
 		select {
-		case result, ok := <-resultCh:
+		case sdkResult, ok := <-resultCh:
 			if !ok {
 				summaryData, _ := json.Marshal(GogoSummary{Total: count, WebURLs: webURLs})
 				return Output{
@@ -133,15 +133,17 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 					Stats:    collector.Stats(),
 				}, nil
 			}
-			if result != nil {
-				count++
-				latestIP = result.Ip
-				if result.IsHttp() {
-					webURLs = append(webURLs, result.GetBaseURL())
-				}
-				if g.resultHandler != nil {
-					g.resultHandler(ctx, input.Target, input.CampaignID, result)
-				}
+			result, ok := types.ResultData[*types.GOGOResult](sdkResult)
+			if !ok || result == nil {
+				continue
+			}
+			count++
+			latestIP = result.Ip
+			if result.IsHttp() {
+				webURLs = append(webURLs, result.GetBaseURL())
+			}
+			if g.resultHandler != nil {
+				g.resultHandler(ctx, input.Target, input.CampaignID, result)
 			}
 		case <-ticker.C:
 			h := map[string]interface{}{
