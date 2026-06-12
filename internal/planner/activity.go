@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/0xrawptr/weave/internal/admission"
 	"github.com/0xrawptr/weave/internal/data"
 	"go.temporal.io/sdk/activity"
 )
@@ -13,14 +14,18 @@ const PlanDAGTargetActivityName = "plan_dag_target"
 const ClaimActionActivityName = "claim_action"
 const CompleteActionActivityName = "complete_action"
 const EvaluateConditionActivityName = "evaluate_condition"
+const GetCampaignPhaseActivityName = "get_campaign_phase"
+const UpdateCampaignPhaseActivityName = "update_campaign_phase"
 const UpsertBatchRunActivityName = "upsert_batch_run"
 const UpsertBatchChunkActivityName = "upsert_batch_chunk"
 const UpsertWorkItemActivityName = "upsert_work_item"
 const UpsertWorkItemsActivityName = "upsert_work_items"
+const AdmitWorkItemsActivityName = "admit_work_items"
 const ClaimWorkItemActivityName = "claim_work_item"
 const SetWorkItemStatusActivityName = "set_work_item_status"
 const GetCampaignStatusActivityName = "get_campaign_status"
 const WorkItemSummaryActivityName = "work_item_summary"
+const SchedulerSnapshotActivityName = "scheduler_snapshot"
 const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
 const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_items"
 
@@ -175,6 +180,35 @@ func minCount(value int) int {
 	return value
 }
 
+type CampaignPhaseUpdate struct {
+	CampaignID string `json:"campaign_id"`
+	BatchID    string `json:"batch_id,omitempty"`
+	Phase      string `json:"phase"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+func (a *Activity) UpdateCampaignPhase(ctx context.Context, update CampaignPhaseUpdate) (data.Campaign, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.Campaign{ID: update.CampaignID, Phase: update.Phase, PhaseReason: update.Reason}, nil
+	}
+	campaign, err := a.planner.repo.UpdateCampaignPhase(ctx, update.CampaignID, update.BatchID, update.Phase, update.Reason)
+	if err != nil || campaign == nil {
+		return data.Campaign{}, err
+	}
+	return *campaign, nil
+}
+
+func (a *Activity) GetCampaignPhase(ctx context.Context, campaignID string) (string, error) {
+	if campaignID == "" || a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.CampaignPhaseBootstrap, nil
+	}
+	campaign, err := a.planner.repo.GetCampaign(ctx, campaignID)
+	if err != nil || campaign == nil || campaign.Phase == "" {
+		return data.CampaignPhaseBootstrap, err
+	}
+	return data.NormalizeCampaignPhase(campaign.Phase), nil
+}
+
 func (a *Activity) UpsertBatchRun(ctx context.Context, run data.BatchRun) error {
 	if a == nil || a.planner == nil || a.planner.repo == nil {
 		return nil
@@ -201,6 +235,38 @@ func (a *Activity) UpsertWorkItems(ctx context.Context, items []data.WorkItem) e
 		return nil
 	}
 	return a.planner.repo.UpsertWorkItems(ctx, items)
+}
+
+type AdmitWorkItemsRequest struct {
+	CampaignID   string          `json:"campaign_id,omitempty"`
+	BatchID      string          `json:"batch_id,omitempty"`
+	ScopeTargets []string        `json:"scope_targets,omitempty"`
+	Items        []data.WorkItem `json:"items,omitempty"`
+}
+
+func (a *Activity) AdmitWorkItems(ctx context.Context, request AdmitWorkItemsRequest) (admission.Result, error) {
+	if len(request.Items) == 0 {
+		return admission.Result{}, nil
+	}
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return admission.Admit(admission.Request{
+			CampaignID:   request.CampaignID,
+			BatchID:      request.BatchID,
+			ScopeTargets: request.ScopeTargets,
+			Items:        request.Items,
+		}), nil
+	}
+	existing, err := a.planner.repo.GetWorkItems(ctx, request.CampaignID, request.BatchID, "", "", "", "", 100000, 0)
+	if err != nil {
+		return admission.Result{}, err
+	}
+	return admission.Admit(admission.Request{
+		CampaignID:   request.CampaignID,
+		BatchID:      request.BatchID,
+		ScopeTargets: request.ScopeTargets,
+		Items:        request.Items,
+		Existing:     existing,
+	}), nil
 }
 
 func (a *Activity) ClaimWorkItem(ctx context.Context, request data.WorkItemClaimRequest) (data.WorkItem, error) {
@@ -269,6 +335,21 @@ func (a *Activity) WorkItemSummary(ctx context.Context, request WorkItemSummaryR
 		total += count
 	}
 	return WorkItemSummary{ByStatus: counts, Total: total}, nil
+}
+
+type SchedulerSnapshotRequest struct {
+	CampaignID string `json:"campaign_id,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
+}
+
+func (a *Activity) SchedulerSnapshot(ctx context.Context, request SchedulerSnapshotRequest) (data.WorkItemProgressSummary, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.WorkItemProgressSummary{ByStatus: map[string]int{}}, nil
+	}
+	return a.planner.repo.GetWorkItemProgressSummary(ctx, data.WorkItemFilter{
+		CampaignID: request.CampaignID,
+		BatchID:    request.BatchID,
+	})
 }
 
 type RecoverStaleWorkItemsRequest struct {

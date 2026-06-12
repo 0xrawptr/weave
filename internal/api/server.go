@@ -56,6 +56,7 @@ func (s *Server) setupRoutes() {
 		v1.POST("/campaigns", s.CreateCampaign)
 		v1.GET("/campaigns", s.ListCampaigns)
 		v1.GET("/campaigns/:id", s.GetCampaign)
+		v1.GET("/campaigns/:id/runtime", s.GetCampaignRuntime)
 		v1.POST("/campaigns/:id/status", s.UpdateCampaignStatus)
 
 		// Result endpoints

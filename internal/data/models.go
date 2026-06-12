@@ -43,9 +43,22 @@ type Campaign struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	Status      string    `json:"status"` // active, paused, completed, archived
+	Phase       string    `json:"phase,omitempty"`
+	PhaseReason string    `json:"phase_reason,omitempty"`
 	Targets     []string  `json:"targets,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CampaignPhaseEvent records explicit campaign controller state transitions.
+type CampaignPhaseEvent struct {
+	ID         string    `json:"id"`
+	CampaignID string    `json:"campaign_id"`
+	BatchID    string    `json:"batch_id,omitempty"`
+	FromPhase  string    `json:"from_phase,omitempty"`
+	ToPhase    string    `json:"to_phase"`
+	Reason     string    `json:"reason,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // CampaignTarget records an input scope item attached to a campaign.
@@ -285,9 +298,89 @@ type WorkItemProgressSummary struct {
 	ByType           []WorkItemGroupSummary `json:"by_type"`
 	ByQueue          []WorkItemGroupSummary `json:"by_queue"`
 	ByArtifact       []WorkItemGroupSummary `json:"by_artifact"`
+	ByTarget         []WorkItemGroupSummary `json:"by_target,omitempty"`
 	GeneratedAt      time.Time              `json:"generated_at"`
 	ETASeconds       int64                  `json:"eta_seconds,omitempty"`
 	ThroughputPerMin int                    `json:"throughput_per_min,omitempty"`
+}
+
+type CampaignRuntimeView struct {
+	Campaign            *Campaign               `json:"campaign,omitempty"`
+	Phase               string                  `json:"phase"`
+	PhaseReason         string                  `json:"phase_reason,omitempty"`
+	PhaseBlockingReason string                  `json:"phase_blocking_reason,omitempty"`
+	ExecutionPlan       []RuntimePlanItem       `json:"execution_plan,omitempty"`
+	OpenPhaseWork       []WorkItemGroupSummary  `json:"open_phase_work,omitempty"`
+	BlockedQueues       []QueueRuntimeState     `json:"blocked_queues,omitempty"`
+	SlowTargets         []TargetRuntimeState    `json:"slow_targets,omitempty"`
+	ArtifactHealth      []ArtifactRuntimeHealth `json:"artifact_health,omitempty"`
+	ETA                 ETARuntimeState         `json:"eta"`
+	Summary             WorkItemProgressSummary `json:"summary"`
+	RecentPhaseEvents   []CampaignPhaseEvent    `json:"recent_phase_events,omitempty"`
+	GeneratedAt         time.Time               `json:"generated_at"`
+}
+
+type RuntimePlanItem struct {
+	Type           string `json:"type"`
+	Queue          string `json:"queue"`
+	Artifact       string `json:"artifact"`
+	Phase          string `json:"phase"`
+	Allowed        bool   `json:"allowed"`
+	State          string `json:"state"`
+	Reason         string `json:"reason"`
+	Pending        int    `json:"pending"`
+	Starting       int    `json:"starting,omitempty"`
+	Running        int    `json:"running"`
+	Completed      int    `json:"completed"`
+	Failed         int    `json:"failed"`
+	Dead           int    `json:"dead"`
+	RetryWaiting   int    `json:"retry_waiting,omitempty"`
+	Paused         int    `json:"paused,omitempty"`
+	StaleRunning   int    `json:"stale_running,omitempty"`
+	NextPhase      string `json:"next_phase,omitempty"`
+	BlockingReason string `json:"blocking_reason,omitempty"`
+}
+
+type QueueRuntimeState struct {
+	Queue        string `json:"queue"`
+	Pending      int    `json:"pending"`
+	Starting     int    `json:"starting,omitempty"`
+	Running      int    `json:"running"`
+	RetryWaiting int    `json:"retry_waiting,omitempty"`
+	Paused       int    `json:"paused,omitempty"`
+	StaleRunning int    `json:"stale_running,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	Reason       string `json:"reason"`
+}
+
+type TargetRuntimeState struct {
+	Target                 string `json:"target"`
+	Total                  int    `json:"total"`
+	Queued                 int    `json:"queued"`
+	Running                int    `json:"running"`
+	Failed                 int    `json:"failed"`
+	Dead                   int    `json:"dead"`
+	ETASeconds             int64  `json:"eta_seconds,omitempty"`
+	OldestRunningStartedAt string `json:"oldest_running_started_at,omitempty"`
+	LastError              string `json:"last_error,omitempty"`
+	Reason                 string `json:"reason"`
+}
+
+type ArtifactRuntimeHealth struct {
+	Artifact         string `json:"artifact"`
+	TotalRuns        int    `json:"total_runs"`
+	Requests         int64  `json:"requests,omitempty"`
+	Results          int64  `json:"results,omitempty"`
+	Errors           int64  `json:"errors,omitempty"`
+	ErrorRatePercent int    `json:"error_rate_percent,omitempty"`
+	ThroughputPerMin int64  `json:"throughput_per_min,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+type ETARuntimeState struct {
+	Seconds    int64  `json:"seconds,omitempty"`
+	Confidence string `json:"confidence"`
+	Reason     string `json:"reason"`
 }
 
 type ArtifactStatSummary struct {

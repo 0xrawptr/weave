@@ -60,6 +60,9 @@ func CanTransitionWorkItemStatus(from, to string) bool {
 		return to == WorkItemStatusPending ||
 			to == WorkItemStatusCancelled ||
 			to == WorkItemStatusDead
+	case WorkItemStatusDead:
+		return to == WorkItemStatusCompleted ||
+			to == WorkItemStatusSkipped
 	default:
 		return false
 	}

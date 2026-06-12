@@ -105,9 +105,30 @@ func (s *Server) StartBatch(c *gin.Context) {
 	if ports == "" {
 		ports = "top3"
 	}
+	campaignID := strings.TrimSpace(req.CampaignID)
+	if campaignID == "" {
+		campaignID = generateWorkflowID("campaign")
+	}
 	runPlannedDAG := true
 	if req.RunPlannedDAG != nil {
 		runPlannedDAG = *req.RunPlannedDAG
+	}
+	if s.repo != nil {
+		phase := workflow.NormalizeCampaignPhase(req.CampaignPhase)
+		if phase == workflow.CampaignPhaseAuto {
+			phase = workflow.CampaignPhaseBootstrap
+		}
+		if err := s.repo.UpsertCampaign(c.Request.Context(), data.Campaign{
+			ID:          campaignID,
+			Name:        campaignID,
+			Status:      data.CampaignStatusActive,
+			Phase:       phase,
+			PhaseReason: "batch submitted",
+			Targets:     targets,
+		}); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	workflowID := generateWorkflowID("batch_portscan")
@@ -118,7 +139,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
 		Targets:                 targets,
 		NowTargets:              cleanStringSlice(req.NowTargets),
-		CampaignID:              strings.TrimSpace(req.CampaignID),
+		CampaignID:              campaignID,
 		Ports:                   ports,
 		MaxConcurrency:          req.MaxConcurrency,
 		ChunkPrefix:             req.ChunkPrefix,
@@ -144,7 +165,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"workflow_id":     wfRun.GetID(),
 		"run_id":          wfRun.GetRunID(),
-		"campaign_id":     req.CampaignID,
+		"campaign_id":     campaignID,
 		"targets":         targets,
 		"ports":           ports,
 		"campaign_phase":  workflow.NormalizeCampaignPhase(req.CampaignPhase),

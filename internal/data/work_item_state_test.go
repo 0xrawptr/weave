@@ -18,9 +18,12 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 		{WorkItemStatusFailed, WorkItemStatusRetryWaiting, true},
 		{WorkItemStatusRetryWaiting, WorkItemStatusPending, true},
 		{WorkItemStatusPaused, WorkItemStatusPending, true},
+		{WorkItemStatusDead, WorkItemStatusCompleted, true},
+		{WorkItemStatusDead, WorkItemStatusSkipped, true},
 		{WorkItemStatusStarting, WorkItemStatusPending, false},
 		{WorkItemStatusCompleted, WorkItemStatusRunning, false},
 		{WorkItemStatusDead, WorkItemStatusPending, false},
+		{WorkItemStatusDead, WorkItemStatusRunning, false},
 		{WorkItemStatusCancelled, WorkItemStatusRunning, false},
 	}
 

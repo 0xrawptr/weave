@@ -180,14 +180,25 @@ func (s *Server) WorkItemSummary(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	var campaign *data.Campaign
+	var runtimeView *data.CampaignRuntimeView
+	if filter.CampaignID != "" {
+		campaign, _ = s.repo.GetCampaign(c.Request.Context(), filter.CampaignID)
+		if view, viewErr := s.repo.GetCampaignRuntimeView(c.Request.Context(), filter.CampaignID, filter.BatchID); viewErr == nil {
+			runtimeView = &view
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"by_status":          summary.ByStatus,
+		"campaign":           campaign,
+		"runtime":            runtimeView,
 		"total":              summary.Total,
 		"overall":            summary.Overall,
 		"by_type":            summary.ByType,
 		"by_queue":           summary.ByQueue,
 		"by_artifact":        summary.ByArtifact,
+		"by_target":          summary.ByTarget,
 		"eta_seconds":        summary.ETASeconds,
 		"throughput_per_min": summary.ThroughputPerMin,
 		"artifact_stats":     artifactStats,

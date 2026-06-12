@@ -14,6 +14,7 @@ type CreateCampaignRequest struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
 	Status      string   `json:"status,omitempty"`
+	Phase       string   `json:"phase,omitempty"`
 	Targets     []string `json:"targets,omitempty"`
 }
 
@@ -42,11 +43,16 @@ func (s *Server) CreateCampaign(c *gin.Context) {
 	if req.Status == "" {
 		req.Status = data.CampaignStatusActive
 	}
+	if req.Phase == "" {
+		req.Phase = data.CampaignPhaseBootstrap
+	}
 	campaign := data.Campaign{
 		ID:          req.ID,
 		Name:        req.Name,
 		Description: req.Description,
 		Status:      req.Status,
+		Phase:       req.Phase,
+		PhaseReason: "campaign created",
 		Targets:     cleanStringSlice(req.Targets),
 	}
 	if err := s.repo.UpsertCampaign(c.Request.Context(), campaign); err != nil {
@@ -91,7 +97,24 @@ func (s *Server) GetCampaign(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, campaign)
+	events, _ := s.repo.GetCampaignPhaseEvents(c.Request.Context(), campaign.ID, 20, 0)
+	c.JSON(http.StatusOK, gin.H{
+		"campaign":     campaign,
+		"phase_events": events,
+	})
+}
+
+func (s *Server) GetCampaignRuntime(c *gin.Context) {
+	if s.repo == nil || s.repo.Postgres == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
+		return
+	}
+	view, err := s.repo.GetCampaignRuntimeView(c.Request.Context(), c.Param("id"), c.Query("batch_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, view)
 }
 
 func (s *Server) UpdateCampaignStatus(c *gin.Context) {

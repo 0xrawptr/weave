@@ -66,8 +66,20 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		name TEXT NOT NULL,
 		description TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL DEFAULT 'active',
+		phase TEXT NOT NULL DEFAULT 'bootstrap',
+		phase_reason TEXT NOT NULL DEFAULT '',
 		created_at TIMESTAMPTZ DEFAULT NOW(),
 		updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS campaign_phase_events (
+		id TEXT PRIMARY KEY,
+		campaign_id TEXT REFERENCES campaigns(id),
+		batch_id TEXT NOT NULL DEFAULT '',
+		from_phase TEXT NOT NULL DEFAULT '',
+		to_phase TEXT NOT NULL,
+		reason TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
 	CREATE TABLE IF NOT EXISTS campaign_targets (
@@ -258,6 +270,8 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_run_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT NOW();
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT NOW();
+	ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS phase TEXT NOT NULL DEFAULT 'bootstrap';
+	ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS phase_reason TEXT NOT NULL DEFAULT '';
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS target_type TEXT NOT NULL DEFAULT '';
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS target_value TEXT NOT NULL DEFAULT '';
@@ -275,6 +289,8 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE asset_evidence DROP COLUMN IF EXISTS priority;
 
 	CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
+	CREATE INDEX IF NOT EXISTS idx_campaigns_phase ON campaigns(phase);
+	CREATE INDEX IF NOT EXISTS idx_campaign_phase_events_campaign ON campaign_phase_events(campaign_id);
 	CREATE INDEX IF NOT EXISTS idx_campaign_targets_campaign ON campaign_targets(campaign_id);
 	CREATE INDEX IF NOT EXISTS idx_campaign_targets_value ON campaign_targets(value);
 	CREATE INDEX IF NOT EXISTS idx_assets_target ON assets(target_id);
@@ -354,15 +370,20 @@ func (p *PostgresStore) UpsertCampaign(ctx context.Context, campaign Campaign) e
 	if campaign.Status == "" {
 		campaign.Status = "active"
 	}
+	if campaign.Phase == "" {
+		campaign.Phase = "bootstrap"
+	}
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO campaigns (id, name, description, status, updated_at)
-		 VALUES ($1, $2, $3, $4, NOW())
+		`INSERT INTO campaigns (id, name, description, status, phase, phase_reason, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 		 ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			status = EXCLUDED.status,
+			phase = EXCLUDED.phase,
+			phase_reason = EXCLUDED.phase_reason,
 			updated_at = NOW()`,
-		campaign.ID, campaign.Name, campaign.Description, campaign.Status)
+		campaign.ID, campaign.Name, campaign.Description, campaign.Status, campaign.Phase, campaign.PhaseReason)
 	if err != nil {
 		return err
 	}
@@ -402,9 +423,9 @@ func (p *PostgresStore) UpsertCampaignTarget(ctx context.Context, target Campaig
 }
 
 func (p *PostgresStore) GetCampaign(ctx context.Context, id string) (*Campaign, error) {
-	row := p.pool.QueryRow(ctx, `SELECT id, name, description, status, created_at, updated_at FROM campaigns WHERE id = $1`, id)
+	row := p.pool.QueryRow(ctx, `SELECT id, name, description, status, phase, phase_reason, created_at, updated_at FROM campaigns WHERE id = $1`, id)
 	var campaign Campaign
-	if err := row.Scan(&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Status, &campaign.CreatedAt, &campaign.UpdatedAt); err != nil {
+	if err := row.Scan(&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Status, &campaign.Phase, &campaign.PhaseReason, &campaign.CreatedAt, &campaign.UpdatedAt); err != nil {
 		return nil, err
 	}
 	targets, err := p.QueryCampaignTargets(ctx, id)
@@ -418,7 +439,7 @@ func (p *PostgresStore) GetCampaign(ctx context.Context, id string) (*Campaign, 
 }
 
 func (p *PostgresStore) QueryCampaigns(ctx context.Context, status string, limit, offset int) ([]Campaign, error) {
-	query := `SELECT id, name, description, status, created_at, updated_at FROM campaigns WHERE 1=1`
+	query := `SELECT id, name, description, status, phase, phase_reason, created_at, updated_at FROM campaigns WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
 	if status != "" {
@@ -437,7 +458,7 @@ func (p *PostgresStore) QueryCampaigns(ctx context.Context, status string, limit
 	var campaigns []Campaign
 	for rows.Next() {
 		var campaign Campaign
-		if err := rows.Scan(&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Status, &campaign.CreatedAt, &campaign.UpdatedAt); err != nil {
+		if err := rows.Scan(&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Status, &campaign.Phase, &campaign.PhaseReason, &campaign.CreatedAt, &campaign.UpdatedAt); err != nil {
 			return nil, err
 		}
 		campaigns = append(campaigns, campaign)
@@ -466,6 +487,88 @@ func (p *PostgresStore) QueryCampaignTargets(ctx context.Context, campaignID str
 func (p *PostgresStore) UpdateCampaignStatus(ctx context.Context, id, status string) error {
 	_, err := p.pool.Exec(ctx, `UPDATE campaigns SET status = $2, updated_at = NOW() WHERE id = $1`, id, status)
 	return err
+}
+
+func (p *PostgresStore) UpdateCampaignPhase(ctx context.Context, campaignID, batchID, phase, reason string) (*Campaign, error) {
+	if campaignID == "" {
+		return nil, fmt.Errorf("campaign id is required")
+	}
+	if phase == "" {
+		return nil, fmt.Errorf("campaign phase is required")
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var previous string
+	err = tx.QueryRow(ctx, `SELECT phase FROM campaigns WHERE id = $1 FOR UPDATE`, campaignID).Scan(&previous)
+	if err == pgx.ErrNoRows {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO campaigns (id, name, status, phase, phase_reason, updated_at)
+			 VALUES ($1, $1, 'active', $2, $3, NOW())`,
+			campaignID, phase, reason)
+		if err != nil {
+			return nil, err
+		}
+		previous = ""
+	} else if err != nil {
+		return nil, err
+	}
+
+	if previous != phase {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO campaign_phase_events (id, campaign_id, batch_id, from_phase, to_phase, reason)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			GenerateID("campaign_phase_event", campaignID, batchID, previous, phase, fmt.Sprintf("%d", time.Now().UnixNano())),
+			campaignID, batchID, previous, phase, reason)
+		if err != nil {
+			return nil, err
+		}
+	}
+	_, err = tx.Exec(ctx,
+		`UPDATE campaigns SET phase = $2, phase_reason = $3, updated_at = NOW() WHERE id = $1`,
+		campaignID, phase, reason)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return p.GetCampaign(ctx, campaignID)
+}
+
+func (p *PostgresStore) QueryCampaignPhaseEvents(ctx context.Context, campaignID string, limit, offset int) ([]CampaignPhaseEvent, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	query := `SELECT id, campaign_id, batch_id, from_phase, to_phase, reason, created_at
+		FROM campaign_phase_events WHERE 1=1`
+	args := []interface{}{}
+	argIdx := 1
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []CampaignPhaseEvent
+	for rows.Next() {
+		var event CampaignPhaseEvent
+		if err := rows.Scan(&event.ID, &event.CampaignID, &event.BatchID, &event.FromPhase, &event.ToPhase, &event.Reason, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
@@ -1415,12 +1518,17 @@ func (p *PostgresStore) GetWorkItemProgressSummary(ctx context.Context, filter W
 	if err != nil {
 		return WorkItemProgressSummary{}, err
 	}
+	byTarget, err := p.queryWorkItemGroupSummary(ctx, filter, "target")
+	if err != nil {
+		return WorkItemProgressSummary{}, err
+	}
 
 	summary := WorkItemProgressSummary{
 		ByStatus:    map[string]int{},
 		ByType:      byType,
 		ByQueue:     byQueue,
 		ByArtifact:  byArtifact,
+		ByTarget:    byTarget,
 		GeneratedAt: time.Now(),
 	}
 	if len(overall) > 0 {
@@ -1451,7 +1559,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 	orderExpr := "total DESC"
 	switch groupBy {
 	case "":
-	case "type", "queue", "artifact":
+	case "type", "queue", "artifact", "target":
 		groupExpr = groupBy
 		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'starting', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
 	default:
