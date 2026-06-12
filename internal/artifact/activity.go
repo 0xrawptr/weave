@@ -38,8 +38,11 @@ type RawEventHandler func(ctx context.Context, artifact, target, workflowID, cam
 // StatsHook stores normalized SDK execution counters emitted by artifacts.
 type StatsHook func(ctx context.Context, artifact, target, workflowID, campaignID string, stats []ExecutionStat) error
 
+// WorkItemHeartbeatHook mirrors Temporal activity heartbeat state to the durable scheduler ledger.
+type WorkItemHeartbeatHook func(ctx context.Context, workItemID, workflowID string, leaseSeconds int) error
+
 // NewActivityFunc creates a named Temporal activity function for the given artifact.
-func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook, rawEvent RawEventHandler, statsHook StatsHook) ActivityFunc {
+func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone MarkDoneHook, rawEvent RawEventHandler, statsHook StatsHook, heartbeatHook WorkItemHeartbeatHook) ActivityFunc {
 	return func(ctx context.Context, input Input) (*ActivityResult, error) {
 		logger := activity.GetLogger(ctx)
 		logger.Info("artifact started", "artifact", a.Name(), "target", input.Target)
@@ -53,7 +56,10 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 		}
 
 		start := time.Now()
-		stopHeartbeat := startActivityHeartbeat(ctx, a.Name(), input.Target, start)
+		if input.WorkflowID == "" {
+			input.WorkflowID = activity.GetInfo(ctx).WorkflowExecution.ID
+		}
+		stopHeartbeat := startActivityHeartbeat(ctx, a.Name(), input.Target, input, start, heartbeatHook)
 		defer stopHeartbeat()
 
 		if err := validateInput(a.InputSchema(), input); err != nil {
@@ -175,10 +181,13 @@ func outputResultCount(raw []byte) int64 {
 	}
 }
 
-func startActivityHeartbeat(ctx context.Context, artifactName, target string, start time.Time) func() {
+func startActivityHeartbeat(ctx context.Context, artifactName, target string, input Input, start time.Time, heartbeatHook WorkItemHeartbeatHook) func() {
 	done := make(chan struct{})
 	record := func() {
 		recordArtifactHeartbeat(ctx, artifactName, target, "running", start, nil)
+		if heartbeatHook != nil && input.WorkItemID != "" {
+			_ = heartbeatHook(ctx, input.WorkItemID, input.WorkflowID, input.HeartbeatLeaseSeconds)
+		}
 	}
 	record()
 	go func() {

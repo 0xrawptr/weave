@@ -98,6 +98,10 @@ func NewRegistryFromClient(c *sdkclient.Client) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zombie: %w", err)
 	}
+	protonEngine, err := c.Proton()
+	if err != nil {
+		return nil, fmt.Errorf("proton: %w", err)
+	}
 	cdncheckEngine, err := NewCdncheckArtifact()
 	if err != nil {
 		return nil, fmt.Errorf("cdncheck: %w", err)
@@ -117,6 +121,7 @@ func NewRegistryFromClient(c *sdkclient.Client) (*Registry, error) {
 	reg.Register(NewNeutronArtifactFromEngine(neutronEngine))
 	reg.Register(NewSprayArtifactFromEngine(sprayEngine))
 	reg.Register(NewZombieArtifactFromEngine(zombieEngine))
+	reg.Register(NewProtonArtifactFromEngine(protonEngine))
 	reg.Register(cdncheckEngine)
 	reg.Register(dnsxEngine)
 	reg.Register(nucleiEngine)

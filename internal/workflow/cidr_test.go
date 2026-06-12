@@ -203,35 +203,50 @@ func TestPlannerSignalSchedule(t *testing.T) {
 	}
 }
 
-func TestScheduledActionPhasesUseWeightedRoundRobinOrder(t *testing.T) {
-	phases := scheduledActionPhases()
-	if len(phases) != 3 {
-		t.Fatalf("len(phases) = %d, want 3", len(phases))
+func TestSchedulerPhasePlansGateWorkItemTypes(t *testing.T) {
+	tests := []struct {
+		phase string
+		want  []string
+		now   bool
+	}{
+		{phase: CampaignPhaseBootstrap, want: []string{"dns_preflight"}},
+		{phase: CampaignPhaseDiscovery, want: []string{"portscan_chunk", "planned_dag_followup", "fingers_action"}},
+		{phase: CampaignPhaseExpansion, want: []string{"spray_shard", "fingers_action"}},
+		{phase: CampaignPhaseVerification, want: []string{"nuclei_group"}},
+		{phase: CampaignPhaseSteady, want: []string{"dns_preflight", "portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard", "nuclei_group"}, now: true},
 	}
-	if phases[0].itemType != "nuclei_group" || phases[0].weight != 3 ||
-		phases[1].itemType != "fingers_action" || phases[1].weight != 2 ||
-		phases[2].itemType != "spray_shard" || phases[2].weight != 1 {
-		t.Fatalf("unexpected phase order: %#v", phases)
+	for _, tt := range tests {
+		t.Run(tt.phase, func(t *testing.T) {
+			plan := schedulerPhasePlanFor(tt.phase)
+			if plan.NowOnly != tt.now {
+				t.Fatalf("NowOnly = %v, want %v", plan.NowOnly, tt.now)
+			}
+			if len(plan.ItemTypes) != len(tt.want) {
+				t.Fatalf("item types = %#v, want %#v", plan.ItemTypes, tt.want)
+			}
+			for i := range tt.want {
+				if plan.ItemTypes[i] != tt.want[i] {
+					t.Fatalf("item types = %#v, want %#v", plan.ItemTypes, tt.want)
+				}
+			}
+		})
 	}
 }
 
-func TestRoundRobinPhaseQuotaRespectsQueueLimit(t *testing.T) {
-	input := SchedulerWorkflowInput{
-		ContinueAfter: 50,
-		BatchInput: BatchPortScanInput{
-			PlannedDAGConcurrency: 10,
-			QueueLimits: map[string]int{
-				"nuclei": 1,
-			},
-		},
+func TestNormalizeCampaignPhase(t *testing.T) {
+	tests := map[string]string{
+		"":             CampaignPhaseAuto,
+		"unknown":      CampaignPhaseAuto,
+		"BOOTSTRAP":    CampaignPhaseBootstrap,
+		"DISCOVERY":    CampaignPhaseDiscovery,
+		" expansion ":  CampaignPhaseExpansion,
+		"verification": CampaignPhaseVerification,
+		"steady":       CampaignPhaseSteady,
 	}
-	phase := schedulerActionPhase{
-		itemType:       "nuclei_group",
-		weight:         3,
-		maxConcurrency: func(input SchedulerWorkflowInput) int { return schedulerQueueLimit(input, "nuclei") },
-	}
-	if got := roundRobinPhaseQuota(input, phase); got != 1 {
-		t.Fatalf("quota = %d, want queue limit 1", got)
+	for input, want := range tests {
+		if got := NormalizeCampaignPhase(input); got != want {
+			t.Fatalf("NormalizeCampaignPhase(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

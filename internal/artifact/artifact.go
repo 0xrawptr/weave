@@ -23,9 +23,12 @@ func CampaignIDFromContext(ctx context.Context) string {
 
 // Input is the common input wrapper for all artifacts.
 type Input struct {
-	Target     string          `json:"target"`
-	CampaignID string          `json:"campaign_id,omitempty"`
-	Data       json.RawMessage `json:"data,omitempty"`
+	Target                string          `json:"target"`
+	CampaignID            string          `json:"campaign_id,omitempty"`
+	WorkItemID            string          `json:"work_item_id,omitempty"`
+	WorkflowID            string          `json:"workflow_id,omitempty"`
+	HeartbeatLeaseSeconds int             `json:"heartbeat_lease_seconds,omitempty"`
+	Data                  json.RawMessage `json:"data,omitempty"`
 }
 
 // Output is the common output wrapper for all artifacts.

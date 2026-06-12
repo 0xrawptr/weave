@@ -27,6 +27,7 @@ type StartBatchRequest struct {
 	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
 	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
 	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
+	CampaignPhase           string                  `json:"campaign_phase,omitempty"`
 	RunPlannedDAG           *bool                   `json:"run_planned_dag,omitempty"`
 	PlannedDAGConcurrency   int                     `json:"planned_dag_concurrency,omitempty"`
 	PlannedDAGMaxIterations int                     `json:"planned_dag_max_iterations,omitempty"`
@@ -44,6 +45,7 @@ type ResumeBatchSchedulerRequest struct {
 	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
 	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
 	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
+	CampaignPhase           string                  `json:"campaign_phase,omitempty"`
 	RunPlannedDAG           *bool                   `json:"run_planned_dag,omitempty"`
 	PlannedDAGConcurrency   int                     `json:"planned_dag_concurrency,omitempty"`
 	PlannedDAGMaxIterations int                     `json:"planned_dag_max_iterations,omitempty"`
@@ -125,6 +127,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 		ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
 		QueueLimits:             req.QueueLimits,
 		ResourceLimits:          req.ResourceLimits,
+		CampaignPhase:           req.CampaignPhase,
 		RunPlannedDAG:           runPlannedDAG,
 		PlannedDAGConcurrency:   req.PlannedDAGConcurrency,
 		PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,
@@ -144,6 +147,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 		"campaign_id":     req.CampaignID,
 		"targets":         targets,
 		"ports":           ports,
+		"campaign_phase":  workflow.NormalizeCampaignPhase(req.CampaignPhase),
 		"run_planned_dag": runPlannedDAG,
 		"summary":         fmt.Sprintf("/api/v1/work-items/summary?campaign_id=%s", req.CampaignID),
 	})
@@ -343,6 +347,7 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 			ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
 			QueueLimits:             req.QueueLimits,
 			ResourceLimits:          req.ResourceLimits,
+			CampaignPhase:           req.CampaignPhase,
 			RunPlannedDAG:           runPlannedDAG,
 			PlannedDAGConcurrency:   req.PlannedDAGConcurrency,
 			PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,

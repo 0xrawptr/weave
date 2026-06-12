@@ -74,6 +74,7 @@ type ArtifactsConfig struct {
 	DNSX    ArtifactOpts `yaml:"dnsx"`
 	Neutron ArtifactOpts `yaml:"neutron"`
 	Zombie  ArtifactOpts `yaml:"zombie"`
+	Proton  ProtonOpts   `yaml:"proton"`
 }
 
 type KnowledgeConfig struct {
@@ -89,6 +90,16 @@ type ArtifactOpts struct {
 	Threads  int           `yaml:"threads,omitempty"`
 	Capacity int           `yaml:"capacity,omitempty"`
 	Timeout  time.Duration `yaml:"timeout"`
+}
+
+type ProtonOpts struct {
+	ArtifactOpts  `yaml:",inline"`
+	TemplatePaths []string `yaml:"template_paths,omitempty"`
+	Tags          []string `yaml:"tags,omitempty"`
+	ExcludeTags   []string `yaml:"exclude_tags,omitempty"`
+	IDs           []string `yaml:"ids,omitempty"`
+	ExcludeIDs    []string `yaml:"exclude_ids,omitempty"`
+	TextOnly      *bool    `yaml:"text_only,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
@@ -186,6 +197,11 @@ func (c *Config) setWorkerDefaults() {
 			WorkerStopTimeout:                30 * time.Second,
 		},
 		"fingers": {
+			MaxConcurrentActivityTasks:       8,
+			MaxConcurrentActivityTaskPollers: 2,
+			WorkerStopTimeout:                30 * time.Second,
+		},
+		"proton": {
 			MaxConcurrentActivityTasks:       8,
 			MaxConcurrentActivityTaskPollers: 2,
 			WorkerStopTimeout:                30 * time.Second,

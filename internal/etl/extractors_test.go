@@ -215,6 +215,37 @@ func TestZombieExtractor(t *testing.T) {
 	}
 }
 
+func TestProtonExtractor(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"template-id":   "aws-access-key",
+				"template-name": "AWS Access Key",
+				"severity":      "high",
+				"file":          "app.env",
+				"matches": map[string]interface{}{
+					"key": []map[string]interface{}{{"value": "AKIAIOSFODNN7EXAMPLE", "line": 7}},
+				},
+			},
+		},
+		"total": 1,
+	})
+	result, err := (&ProtonExtractor{}).Extract(context.Background(), "example.com", raw)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	credential := findEntity(result.Entities, "credential", "aws-access-key @ app.env")
+	if credential == nil || credential.Status != "confirmed" || credential.Severity != "high" {
+		t.Fatalf("expected confirmed proton credential, got %#v", credential)
+	}
+	if findEntity(result.Entities, "template", "aws-access-key") == nil {
+		t.Fatalf("expected proton template entity, got %#v", result.Entities)
+	}
+	if !hasRelationType(result.Relations, RelHasCredential) || !hasRelationType(result.Relations, RelDetects) {
+		t.Fatalf("expected proton credential/template relations, got %#v", result.Relations)
+	}
+}
+
 func TestCdncheckExtractor(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"is_cdn":   true,

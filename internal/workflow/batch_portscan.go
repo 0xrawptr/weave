@@ -23,6 +23,7 @@ type BatchPortScanInput struct {
 	ActivityTimeoutSeconds int            `json:"activity_timeout_seconds,omitempty"`
 	QueueLimits            map[string]int `json:"queue_limits,omitempty"`
 	ResourceLimits         ResourceLimits `json:"resource_limits,omitempty"`
+	CampaignPhase          string         `json:"campaign_phase,omitempty"`
 
 	RunPlannedDAG           bool `json:"run_planned_dag,omitempty"`
 	PlannedDAGConcurrency   int  `json:"planned_dag_concurrency,omitempty"`
@@ -49,6 +50,7 @@ type BatchPortScanResult struct {
 	ChunkPrefix    int      `json:"chunk_prefix"`
 	MaxAttempts    int      `json:"max_attempts"`
 	RetryDelay     int      `json:"retry_delay_seconds,omitempty"`
+	CampaignPhase  string   `json:"campaign_phase,omitempty"`
 	RunPlannedDAG  bool     `json:"run_planned_dag,omitempty"`
 	TotalChunks    int      `json:"total_chunks"`
 	Completed      int      `json:"completed"`
@@ -81,6 +83,7 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 		ChunkPrefix:    input.ChunkPrefix,
 		MaxAttempts:    input.MaxAttempts,
 		RetryDelay:     input.RetryDelaySeconds,
+		CampaignPhase:  input.CampaignPhase,
 		RunPlannedDAG:  input.RunPlannedDAG,
 		TotalChunks:    len(chunks),
 	}

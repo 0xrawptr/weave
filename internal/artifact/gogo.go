@@ -15,7 +15,7 @@ import (
 )
 
 type GogoArtifact struct {
-	engine        *sdkgogo.GogoEngine
+	engine        *sdkgogo.Engine
 	threads       int
 	resultHandler func(ctx context.Context, target, campaignID string, result *types.GOGOResult) // streaming persist
 }
@@ -32,7 +32,7 @@ type GogoSummary struct {
 	WebURLs []string `json:"web_urls"`
 }
 
-func NewGogoArtifactFromEngine(engine *sdkgogo.GogoEngine) *GogoArtifact {
+func NewGogoArtifactFromEngine(engine *sdkgogo.Engine) *GogoArtifact {
 	return &GogoArtifact{engine: engine, threads: gogoThreads()}
 }
 

@@ -14,7 +14,7 @@ import (
 
 // SprayArtifact wraps the SDK spray engine for HTTP path fuzzing and URL discovery.
 type SprayArtifact struct {
-	engine         *sdkspray.SprayEngine
+	engine         *sdkspray.Engine
 	defaultThreads int
 	resultHandler  func(ctx context.Context, target, campaignID string, result SprayResultItem)
 }
@@ -100,7 +100,7 @@ type SprayExtractItem struct {
 }
 
 // NewSprayArtifactFromEngine wraps an already-initialized SDK engine.
-func NewSprayArtifactFromEngine(engine *sdkspray.SprayEngine) *SprayArtifact {
+func NewSprayArtifactFromEngine(engine *sdkspray.Engine) *SprayArtifact {
 	return &SprayArtifact{engine: engine}
 }
 

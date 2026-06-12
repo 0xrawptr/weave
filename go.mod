@@ -4,9 +4,9 @@ go 1.26.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
-	github.com/chainreactors/fingers v1.2.1
+	github.com/chainreactors/fingers v1.2.2-0.20260611155635-f5c144ea1c12
 	github.com/chainreactors/gogo/v2 v2.14.2-0.20260529142124-907a45a1456c
-	github.com/chainreactors/sdk v0.2.4
+	github.com/chainreactors/sdk v0.3.0
 	github.com/chainreactors/spray v1.3.1-0.20260608085629-66dafe7eab4f
 	github.com/chainreactors/utils v0.0.0-20260529172343-6465cb8568b2
 	github.com/gin-gonic/gin v1.12.0
@@ -63,8 +63,8 @@ require (
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/andygrunwald/go-jira v1.16.1 // indirect
-	github.com/antchfx/htmlquery v1.3.5 // indirect
-	github.com/antchfx/xmlquery v1.4.4 // indirect
+	github.com/antchfx/htmlquery v1.3.6 // indirect
+	github.com/antchfx/xmlquery v1.5.1 // indirect
 	github.com/antchfx/xpath v1.3.6 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.5 // indirect
@@ -108,12 +108,13 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chainreactors/files v0.0.0-20240716182835-7884ee1e77f0 // indirect
 	github.com/chainreactors/logs v0.0.0-20260508055944-c678762ed15c // indirect
-	github.com/chainreactors/neutron v0.0.0-20260608084636-c81691731908 // indirect
+	github.com/chainreactors/neutron v0.0.0-20260611050540-e112381dac6b // indirect
+	github.com/chainreactors/neutron/operators/full v0.0.0-20260611050540-e112381dac6b // indirect
 	github.com/chainreactors/parsers v0.0.0-20260608085142-3d2c51baa8fe // indirect
-	github.com/chainreactors/proton v0.2.1-0.20260608085216-03df34ba928d // indirect
+	github.com/chainreactors/proton v0.3.1-0.20260611174627-89c10c8c27e5 // indirect
 	github.com/chainreactors/proxyclient v1.1.1-0.20260529172347-2a80e08d5593 // indirect
 	github.com/chainreactors/words v0.0.0-20260520145736-270600e60fb4 // indirect
-	github.com/chainreactors/zombie v1.2.3-0.20260608085910-705f548f7da1 // indirect
+	github.com/chainreactors/zombie v1.2.3-0.20260611172539-bdd2cdfd5a21 // indirect
 	github.com/charlievieth/fastwalk v1.0.14 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/glamour v0.10.0 // indirect
@@ -239,8 +240,8 @@ require (
 	github.com/imdario/mergo v0.3.16 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/invopop/yaml v0.3.1 // indirect
-	github.com/itchyny/gojq v0.12.17 // indirect
-	github.com/itchyny/timefmt-go v0.1.6 // indirect
+	github.com/itchyny/gojq v0.12.19 // indirect
+	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

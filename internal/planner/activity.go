@@ -19,7 +19,6 @@ const UpsertWorkItemActivityName = "upsert_work_item"
 const UpsertWorkItemsActivityName = "upsert_work_items"
 const ClaimWorkItemActivityName = "claim_work_item"
 const SetWorkItemStatusActivityName = "set_work_item_status"
-const HeartbeatWorkItemActivityName = "heartbeat_work_item"
 const GetCampaignStatusActivityName = "get_campaign_status"
 const WorkItemSummaryActivityName = "work_item_summary"
 const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
@@ -229,13 +228,6 @@ func (a *Activity) SetWorkItemStatus(ctx context.Context, update WorkItemStatusU
 		return nil
 	}
 	return a.planner.repo.SetWorkItemStatusWithLease(ctx, update.ID, update.Status, update.WorkflowID, update.Error, update.IncrementAttempt, update.LeaseSeconds)
-}
-
-func (a *Activity) HeartbeatWorkItem(ctx context.Context, request data.WorkItemHeartbeatRequest) error {
-	if a == nil || a.planner == nil || a.planner.repo == nil {
-		return nil
-	}
-	return a.planner.repo.HeartbeatWorkItem(ctx, request)
 }
 
 func (a *Activity) GetCampaignStatus(ctx context.Context, campaignID string) (string, error) {

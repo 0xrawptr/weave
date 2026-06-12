@@ -155,7 +155,7 @@ func upsertStreamingGogoFollowUp(ctx context.Context, repo *data.Repository, wor
 		Artifact:    "planned_dag",
 		Queue:       "planner",
 		Input:       mustMarshalRuntime(map[string]interface{}{"target": parent.Target, "iteration": iteration}),
-			Schedule:    streamingGogoFollowUpSchedule(result),
+		Schedule:    streamingGogoFollowUpSchedule(result),
 		Status:      data.WorkItemStatusPending,
 		MaxAttempts: 1,
 	})
@@ -186,7 +186,7 @@ func upsertStreamingSprayFollowUp(ctx context.Context, repo *data.Repository, wo
 		Artifact:    "planned_dag",
 		Queue:       "planner",
 		Input:       mustMarshalRuntime(map[string]interface{}{"target": parent.Target, "iteration": iteration}),
-			Schedule:    streamingSprayFollowUpSchedule(result),
+		Schedule:    streamingSprayFollowUpSchedule(result),
 		Status:      data.WorkItemStatusPending,
 		MaxAttempts: 1,
 	})
@@ -237,16 +237,30 @@ func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, persist
 	reg := runtimeApp.Registry
 	rawEvent := buildRawEventHandler(runtimeApp)
 	statsHook := buildStatsHook(repo)
+	heartbeatHook := buildWorkItemHeartbeatHook(repo)
 	for _, info := range reg.List() {
 		if onlyArtifact != "" && info.Name != onlyArtifact {
 			continue
 		}
 		a, _ := reg.Get(info.Name)
 		w.RegisterActivityWithOptions(
-			artifact.NewActivityFunc(a, persistHook, dedupHook, markDoneHook, rawEvent, statsHook),
+			artifact.NewActivityFunc(a, persistHook, dedupHook, markDoneHook, rawEvent, statsHook, heartbeatHook),
 			activity.RegisterOptions{Name: info.Name},
 		)
 		log.Printf("registered activity: %s", info.Name)
+	}
+}
+
+func buildWorkItemHeartbeatHook(repo *data.Repository) artifact.WorkItemHeartbeatHook {
+	return func(ctx context.Context, workItemID, workflowID string, leaseSeconds int) error {
+		if repo == nil || repo.Postgres == nil || workItemID == "" {
+			return nil
+		}
+		return repo.HeartbeatWorkItem(ctx, data.WorkItemHeartbeatRequest{
+			ID:           workItemID,
+			WorkflowID:   workflowID,
+			LeaseSeconds: leaseSeconds,
+		})
 	}
 }
 
@@ -307,6 +321,8 @@ func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target, 
 		etlErr = runtimeApp.Pipelines.Spray.Process(ctx, target, eventData)
 	case "zombie":
 		etlErr = runtimeApp.Pipelines.Zombie.Process(ctx, target, eventData)
+	case "proton":
+		etlErr = runtimeApp.Pipelines.Proton.Process(ctx, target, eventData)
 	case "cdncheck":
 		etlErr = runtimeApp.Pipelines.Cdncheck.Process(ctx, target, eventData)
 	case "dnsx":
@@ -332,7 +348,6 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	w.RegisterActivityWithOptions(planActivity.UpsertWorkItems, activity.RegisterOptions{Name: planner.UpsertWorkItemsActivityName})
 	w.RegisterActivityWithOptions(planActivity.ClaimWorkItem, activity.RegisterOptions{Name: planner.ClaimWorkItemActivityName})
 	w.RegisterActivityWithOptions(planActivity.SetWorkItemStatus, activity.RegisterOptions{Name: planner.SetWorkItemStatusActivityName})
-	w.RegisterActivityWithOptions(planActivity.HeartbeatWorkItem, activity.RegisterOptions{Name: planner.HeartbeatWorkItemActivityName})
 	w.RegisterActivityWithOptions(planActivity.GetCampaignStatus, activity.RegisterOptions{Name: planner.GetCampaignStatusActivityName})
 	w.RegisterActivityWithOptions(planActivity.WorkItemSummary, activity.RegisterOptions{Name: planner.WorkItemSummaryActivityName})
 	w.RegisterActivityWithOptions(planActivity.RecoverStaleWorkItems, activity.RegisterOptions{Name: planner.RecoverStaleWorkItemsActivityName})
@@ -348,7 +363,6 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	log.Printf("registered activity: %s", planner.UpsertWorkItemsActivityName)
 	log.Printf("registered activity: %s", planner.ClaimWorkItemActivityName)
 	log.Printf("registered activity: %s", planner.SetWorkItemStatusActivityName)
-	log.Printf("registered activity: %s", planner.HeartbeatWorkItemActivityName)
 	log.Printf("registered activity: %s", planner.GetCampaignStatusActivityName)
 	log.Printf("registered activity: %s", planner.WorkItemSummaryActivityName)
 	log.Printf("registered activity: %s", planner.RecoverStaleWorkItemsActivityName)
@@ -359,7 +373,7 @@ func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledDNSPreflightWorkItemWorkflow)
-	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemsWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)

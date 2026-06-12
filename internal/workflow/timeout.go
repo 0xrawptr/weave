@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	defaultLongActivityTimeout  = 24 * time.Hour
-	maxLongActivityTimeout      = 7 * 24 * time.Hour
+	defaultLongActivityTimeout  = 2 * time.Hour
+	maxLongActivityTimeout      = 6 * time.Hour
+	defaultHeartbeatTimeout     = 90 * time.Second
 	defaultStateActivityTimeout = 30 * time.Second
 	ControlWorkflowTaskTimeout  = time.Minute
 )
@@ -28,7 +29,7 @@ func longActivityTimeout(seconds int) time.Duration {
 func longActivityContext(ctx workflow.Context, timeoutSeconds int) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: longActivityTimeout(timeoutSeconds),
-		HeartbeatTimeout:    30 * time.Second,
+		HeartbeatTimeout:    defaultHeartbeatTimeout,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 1,
 		},
@@ -39,7 +40,7 @@ func artifactActivityContext(ctx workflow.Context, artifactName string, timeoutS
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           ArtifactTaskQueue(artifactName),
 		StartToCloseTimeout: longActivityTimeout(timeoutSeconds),
-		HeartbeatTimeout:    30 * time.Second,
+		HeartbeatTimeout:    defaultHeartbeatTimeout,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 1,
 		},
@@ -56,7 +57,7 @@ func shortArtifactActivityContext(ctx workflow.Context, artifactName string, tim
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           ArtifactTaskQueue(artifactName),
 		StartToCloseTimeout: timeout,
-		HeartbeatTimeout:    30 * time.Second,
+		HeartbeatTimeout:    defaultHeartbeatTimeout,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: maxAttempts,
 		},

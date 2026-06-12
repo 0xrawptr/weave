@@ -13,6 +13,7 @@ import (
 	sdkgogo "github.com/chainreactors/sdk/gogo"
 	sdkneutron "github.com/chainreactors/sdk/neutron"
 	"github.com/chainreactors/sdk/pkg/provider"
+	sdkproton "github.com/chainreactors/sdk/proton"
 	sdkspray "github.com/chainreactors/sdk/spray"
 	sdkzombie "github.com/chainreactors/sdk/zombie"
 	spraypkg "github.com/chainreactors/spray/pkg"
@@ -24,6 +25,7 @@ type Pipelines struct {
 	Neutron  *etl.Pipeline
 	Spray    *etl.Pipeline
 	Zombie   *etl.Pipeline
+	Proton   *etl.Pipeline
 	Cdncheck *etl.Pipeline
 	DNSX     *etl.Pipeline
 	Nuclei   *etl.Pipeline
@@ -68,6 +70,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 			Neutron:  etl.NewPipeline(&etl.NeutronExtractor{}, loader),
 			Spray:    etl.NewPipeline(&etl.SprayExtractor{}, loader),
 			Zombie:   etl.NewPipeline(&etl.ZombieExtractor{}, loader),
+			Proton:   etl.NewPipeline(&etl.ProtonExtractor{}, loader),
 			Cdncheck: etl.NewPipeline(&etl.CdncheckExtractor{}, loader),
 			DNSX:     etl.NewPipeline(&etl.DNSXExtractor{}, loader),
 			Nuclei:   etl.NewPipeline(&etl.NucleiExtractor{}, loader),
@@ -129,6 +132,30 @@ func buildSDKClient(cfg *config.Config) *sdkclient.Client {
 		zombieCfg.WithCapacity(cfg.Artifacts.Zombie.Capacity)
 		opts = append(opts, sdkclient.WithZombieConfig(zombieCfg))
 	}
+
+	protonCfg := sdkproton.NewConfig()
+	if cfg.Artifacts.Proton.Capacity > 0 {
+		protonCfg.WithCapacity(cfg.Artifacts.Proton.Capacity)
+	}
+	if len(cfg.Artifacts.Proton.TemplatePaths) > 0 {
+		protonCfg.WithTemplatePaths(cfg.Artifacts.Proton.TemplatePaths...)
+	}
+	if len(cfg.Artifacts.Proton.Tags) > 0 {
+		protonCfg.WithTags(cfg.Artifacts.Proton.Tags...)
+	}
+	if len(cfg.Artifacts.Proton.ExcludeTags) > 0 {
+		protonCfg.WithExcludeTags(cfg.Artifacts.Proton.ExcludeTags...)
+	}
+	if len(cfg.Artifacts.Proton.IDs) > 0 {
+		protonCfg.WithIDs(cfg.Artifacts.Proton.IDs...)
+	}
+	if len(cfg.Artifacts.Proton.ExcludeIDs) > 0 {
+		protonCfg.WithExcludeIDs(cfg.Artifacts.Proton.ExcludeIDs...)
+	}
+	if cfg.Artifacts.Proton.TextOnly != nil {
+		protonCfg.WithTextOnly(*cfg.Artifacts.Proton.TextOnly)
+	}
+	opts = append(opts, sdkclient.WithProtonConfig(protonCfg))
 
 	return sdkclient.New(opts...)
 }
