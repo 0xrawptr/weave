@@ -45,7 +45,6 @@ type WorkItemResponse struct {
 	Artifact       string          `json:"artifact"`
 	Queue          string          `json:"queue,omitempty"`
 	Input          json.RawMessage `json:"input,omitempty"`
-	Priority       int             `json:"priority"`
 	Status         string          `json:"status"`
 	Attempts       int             `json:"attempts"`
 	MaxAttempts    int             `json:"max_attempts"`
@@ -123,7 +122,6 @@ func workItemResponse(item data.WorkItem, rawInput bool) WorkItemResponse {
 		Artifact:       item.Artifact,
 		Queue:          item.Queue,
 		Input:          inputJSONResponse(item.Input, rawInput),
-		Priority:       item.Priority,
 		Status:         item.Status,
 		Attempts:       item.Attempts,
 		MaxAttempts:    item.MaxAttempts,

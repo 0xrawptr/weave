@@ -84,26 +84,26 @@ func TestPlannerConsumableURLStatusExcludesQueued(t *testing.T) {
 	}
 }
 
-func TestDedupeEvidenceKeepsHighestPriority(t *testing.T) {
+func TestDedupeEvidenceKeepsHighestSeverity(t *testing.T) {
 	values := dedupeEvidence([]EvidenceRecord{
-		{Type: "cve", Value: "CVE-2020-14882", Priority: 10},
-		{Type: "cve", Value: "CVE-2020-14882", Priority: 90, Severity: "critical"},
-		{Type: "template", Value: "CVE-2020-14882", Priority: 70},
+		{Type: "cve", Value: "CVE-2020-14882", Severity: "low"},
+		{Type: "cve", Value: "CVE-2020-14882", Severity: "critical"},
+		{Type: "template", Value: "CVE-2020-14882", Severity: "medium"},
 	})
 	if len(values) != 2 {
 		t.Fatalf("expected 2 evidence records, got %#v", values)
 	}
 	for _, value := range values {
-		if value.Type == "cve" && value.Priority != 90 {
-			t.Fatalf("expected highest priority CVE evidence, got %#v", value)
+		if value.Type == "cve" && value.Severity != "critical" {
+			t.Fatalf("expected highest severity CVE evidence, got %#v", value)
 		}
 	}
 }
 
-func TestDedupeEvidenceKeepsLongerPathWhenPriorityTies(t *testing.T) {
+func TestDedupeEvidenceKeepsLongerPathWhenSeverityTies(t *testing.T) {
 	values := dedupeEvidence([]EvidenceRecord{
-		{Type: "intel", Value: "CVE intel", Priority: 90, Path: []EvidencePathStep{{Type: "intel", Value: "CVE intel"}}},
-		{Type: "intel", Value: "CVE intel", Priority: 90, Path: []EvidencePathStep{
+		{Type: "intel", Value: "CVE intel", Severity: "critical", Path: []EvidencePathStep{{Type: "intel", Value: "CVE intel"}}},
+		{Type: "intel", Value: "CVE intel", Severity: "critical", Path: []EvidencePathStep{
 			{Type: "fingerprint", Value: "weblogic"},
 			{Relation: "identifies_product", Type: "product", Value: "Oracle WebLogic Server"},
 			{Relation: "affected_by", Type: "cve", Value: "CVE-2020-14882"},

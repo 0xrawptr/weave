@@ -15,7 +15,19 @@ const (
 	WorkItemStatusCancelled    = "cancelled"
 	WorkItemStatusSkipped      = "skipped"
 	WorkItemStatusDead         = "dead"
+
+	ScheduleNow   = "now"
+	ScheduleBatch = "batch"
 )
+
+func NormalizeSchedule(schedule string) string {
+	switch schedule {
+	case ScheduleNow:
+		return ScheduleNow
+	default:
+		return ScheduleBatch
+	}
+}
 
 // Target represents a scan target.
 type Target struct {
@@ -57,7 +69,6 @@ type Asset struct {
 	RawData     []byte    `json:"raw_data"` // original JSON from artifact
 	Confidence  float64   `json:"confidence,omitempty"`
 	Severity    string    `json:"severity,omitempty"`
-	Priority    int       `json:"priority,omitempty"`
 	Status      string    `json:"status,omitempty"` // observed, queued, noise, candidate, confirmed, false_positive, ignored, interesting
 	Lifecycle   string    `json:"lifecycle_status,omitempty"`
 	RawHash     string    `json:"raw_hash,omitempty"`
@@ -95,7 +106,6 @@ type AssetEvidence struct {
 	RawData     []byte    `json:"raw_data,omitempty"`
 	Confidence  float64   `json:"confidence,omitempty"`
 	Severity    string    `json:"severity,omitempty"`
-	Priority    int       `json:"priority,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	Reason      string    `json:"reason,omitempty"`
 	SourceRunID string    `json:"source_run_id,omitempty"`
@@ -128,7 +138,7 @@ type ActionRecord struct {
 	Target      string    `json:"target"`
 	Artifact    string    `json:"artifact"`
 	Input       []byte    `json:"input"`
-	Priority    int       `json:"priority"`
+	Schedule    string    `json:"schedule,omitempty"`
 	Reason      string    `json:"reason"`
 	Status      string    `json:"status"` // candidate, running, completed, failed, skipped
 	Attempts    int       `json:"attempts"`
@@ -182,7 +192,7 @@ type WorkItem struct {
 	Artifact       string    `json:"artifact"`
 	Queue          string    `json:"queue,omitempty"`
 	Input          []byte    `json:"input,omitempty"`
-	Priority       int       `json:"priority"`
+	Schedule       string    `json:"schedule,omitempty"`
 	Status         string    `json:"status"` // pending, running, completed, failed, retry_waiting, paused, cancelled, skipped, dead
 	Attempts       int       `json:"attempts"`
 	MaxAttempts    int       `json:"max_attempts"`
@@ -205,7 +215,7 @@ type WorkItemClaimRequest struct {
 	Target                string `json:"target,omitempty"`
 	WorkflowID            string `json:"workflow_id,omitempty"`
 	LeaseSeconds          int    `json:"lease_seconds,omitempty"`
-	MinPriority           int    `json:"min_priority,omitempty"`
+	Schedule              string `json:"schedule,omitempty"`
 	MaxRunning            int    `json:"max_running,omitempty"`
 	MaxRunningPerArtifact int    `json:"max_running_per_artifact,omitempty"`
 	MaxRunningPerCampaign int    `json:"max_running_per_campaign,omitempty"`
@@ -323,7 +333,6 @@ type EvidenceRecord struct {
 	Source     string             `json:"source,omitempty"`
 	Confidence float64            `json:"confidence,omitempty"`
 	Severity   string             `json:"severity,omitempty"`
-	Priority   int                `json:"priority,omitempty"`
 	Status     string             `json:"status,omitempty"`
 	Path       []EvidencePathStep `json:"path,omitempty"`
 }

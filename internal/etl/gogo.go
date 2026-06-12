@@ -77,7 +77,6 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		var serviceQuality *Quality
 		serviceStatus := "observed"
 		serviceConfidence := 1.0
-		servicePriority := 0
 		statusCode, _ := strconv.Atoi(item.Status)
 		if item.Protocol == "http" || item.Protocol == "https" || item.URI != "" {
 			if item.URI != "" {
@@ -97,7 +96,6 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 				serviceQuality = &quality
 				serviceStatus = gogoServiceStatus(quality)
 				serviceConfidence = httpConfidence(statusCode, quality)
-				servicePriority = qualityPriority(0, quality)
 			}
 		}
 		serviceTarget := targetForURL(serviceValue)
@@ -105,7 +103,7 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		serviceEntity := Entity{
 			ID: svcID, Type: "service",
 			Value:  serviceValue,
-			Source: "gogo", RawData: raw, Confidence: serviceConfidence, Status: serviceStatus, Priority: servicePriority,
+			Source: "gogo", RawData: raw, Confidence: serviceConfidence, Status: serviceStatus,
 			Quality: serviceQuality,
 		}
 		applyTarget(&serviceEntity, serviceTarget)

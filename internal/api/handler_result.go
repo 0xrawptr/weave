@@ -121,20 +121,36 @@ func (s *Server) ListEvents(c *gin.Context) {
 	assetID := c.Query("asset_id")
 	campaignID := c.Query("campaign_id")
 	eventType := c.Query("event_type")
+	target := c.Query("target")
+	source := c.Query("source")
 
 	if s.repo == nil || s.repo.Postgres == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
 		return
 	}
-	events, err := s.repo.Postgres.QueryAssetEvents(c.Request.Context(), assetID, campaignID, eventType, limit, offset)
+	var events []data.AssetEvent
+	var err error
+	if target != "" || source != "" {
+		if assetID != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "asset_id cannot be combined with target/source scoped event queries"})
+			return
+		}
+		events, err = s.repo.GetAssetEventsInCampaign(c.Request.Context(), target, campaignID, eventType, source, limit, offset)
+	} else {
+		events, err = s.repo.Postgres.QueryAssetEvents(c.Request.Context(), assetID, campaignID, eventType, limit, offset)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"events": events,
-		"limit":  limit,
-		"offset": offset,
+		"events":     events,
+		"target":     target,
+		"source":     source,
+		"campaign":   campaignID,
+		"event_type": eventType,
+		"limit":      limit,
+		"offset":     offset,
 	})
 }
 

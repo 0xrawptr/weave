@@ -90,7 +90,6 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		raw_data JSONB,
 		confidence DOUBLE PRECISION DEFAULT 1.0,
 		severity TEXT NOT NULL DEFAULT '',
-		priority INTEGER NOT NULL DEFAULT 0,
 		status TEXT NOT NULL DEFAULT 'observed',
 		lifecycle_status TEXT NOT NULL DEFAULT 'active',
 		raw_hash TEXT NOT NULL DEFAULT '',
@@ -143,7 +142,6 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		raw_data JSONB,
 		confidence DOUBLE PRECISION DEFAULT 1.0,
 		severity TEXT NOT NULL DEFAULT '',
-		priority INTEGER NOT NULL DEFAULT 0,
 		status TEXT NOT NULL DEFAULT 'observed',
 		reason TEXT NOT NULL DEFAULT '',
 		source_run_id TEXT NOT NULL DEFAULT '',
@@ -186,7 +184,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		target TEXT NOT NULL,
 		artifact TEXT NOT NULL,
 		input JSONB NOT NULL,
-		priority INTEGER NOT NULL DEFAULT 0,
+		schedule TEXT NOT NULL DEFAULT 'batch',
 		reason TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL DEFAULT 'candidate',
 		attempts INTEGER NOT NULL DEFAULT 0,
@@ -237,7 +235,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		artifact TEXT NOT NULL DEFAULT '',
 		queue TEXT NOT NULL DEFAULT '',
 		input JSONB,
-		priority INTEGER NOT NULL DEFAULT 0,
+		schedule TEXT NOT NULL DEFAULT 'batch',
 		status TEXT NOT NULL DEFAULT 'pending',
 		attempts INTEGER NOT NULL DEFAULT 0,
 		max_attempts INTEGER NOT NULL DEFAULT 1,
@@ -254,7 +252,6 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION DEFAULT 1.0;
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT '';
-	ALTER TABLE assets ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'observed';
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS lifecycle_status TEXT NOT NULL DEFAULT 'active';
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS raw_hash TEXT NOT NULL DEFAULT '';
@@ -265,10 +262,17 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE raw_events ADD COLUMN IF NOT EXISTS target_value TEXT NOT NULL DEFAULT '';
 	ALTER TABLE action_records ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE action_records ADD COLUMN IF NOT EXISTS schedule TEXT NOT NULL DEFAULT 'batch';
+	ALTER TABLE action_records DROP COLUMN IF EXISTS priority;
 	ALTER TABLE batch_runs ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS schedule TEXT NOT NULL DEFAULT 'batch';
+	ALTER TABLE work_items DROP COLUMN IF EXISTS priority;
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 	ALTER TABLE asset_campaigns ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+	DROP INDEX IF EXISTS idx_assets_priority;
+	ALTER TABLE assets DROP COLUMN IF EXISTS priority;
+	ALTER TABLE asset_evidence DROP COLUMN IF EXISTS priority;
 
 	CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
 	CREATE INDEX IF NOT EXISTS idx_campaign_targets_campaign ON campaign_targets(campaign_id);
@@ -278,7 +282,6 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type);
 	CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status);
 	CREATE INDEX IF NOT EXISTS idx_assets_lifecycle ON assets(lifecycle_status);
-	CREATE INDEX IF NOT EXISTS idx_assets_priority ON assets(priority);
 	CREATE INDEX IF NOT EXISTS idx_asset_observations_asset ON asset_observations(asset_id);
 	CREATE INDEX IF NOT EXISTS idx_asset_observations_source ON asset_observations(source);
 	CREATE INDEX IF NOT EXISTS idx_asset_campaigns_campaign ON asset_campaigns(campaign_id);
@@ -313,7 +316,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_work_items_type ON work_items(type);
 	CREATE INDEX IF NOT EXISTS idx_work_items_artifact ON work_items(artifact);
 	CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(queue);
-	CREATE INDEX IF NOT EXISTS idx_work_items_priority ON work_items(priority);
+	CREATE INDEX IF NOT EXISTS idx_work_items_schedule ON work_items(schedule);
 	`
 
 	_, err := p.pool.Exec(ctx, schema)
@@ -483,15 +486,14 @@ func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
 	}
 	existed := err == nil
 	_, err = p.pool.Exec(ctx,
-		`INSERT INTO assets (id, campaign_id, type, value, source, target_id, raw_data, confidence, severity, priority, status, lifecycle_status, raw_hash, source_run_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		`INSERT INTO assets (id, campaign_id, type, value, source, target_id, raw_data, confidence, severity, status, lifecycle_status, raw_hash, source_run_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 ON CONFLICT (id) DO UPDATE SET
 			campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE assets.campaign_id END,
 			raw_data = COALESCE(EXCLUDED.raw_data, assets.raw_data),
 			raw_hash = CASE WHEN EXCLUDED.raw_hash <> '' THEN EXCLUDED.raw_hash ELSE assets.raw_hash END,
 			confidence = GREATEST(assets.confidence, EXCLUDED.confidence),
 			severity = CASE WHEN EXCLUDED.severity <> '' THEN EXCLUDED.severity ELSE assets.severity END,
-			priority = GREATEST(assets.priority, EXCLUDED.priority),
 			lifecycle_status = 'active',
 			status = CASE
 				WHEN assets.status IN ('false_positive', 'ignored', 'interesting', 'confirmed') THEN assets.status
@@ -504,7 +506,7 @@ func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
 			source_run_id = CASE WHEN EXCLUDED.source_run_id <> '' THEN EXCLUDED.source_run_id ELSE assets.source_run_id END,
 			last_seen = NOW()`,
 		asset.ID, asset.CampaignID, asset.Type, asset.Value, asset.Source, asset.TargetID, asset.RawData,
-		asset.Confidence, asset.Severity, asset.Priority, asset.Status, asset.Lifecycle, asset.RawHash, asset.SourceRunID)
+		asset.Confidence, asset.Severity, asset.Status, asset.Lifecycle, asset.RawHash, asset.SourceRunID)
 	if err != nil {
 		return err
 	}
@@ -559,15 +561,14 @@ func (p *PostgresStore) InsertAssetEvidence(ctx context.Context, evidence *Asset
 		evidence.Confidence = 1.0
 	}
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO asset_evidence (id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, priority, status, reason, source_run_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		`INSERT INTO asset_evidence (id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, status, reason, source_run_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		 ON CONFLICT (id) DO UPDATE SET
 			campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE asset_evidence.campaign_id END,
 			subject_id = CASE WHEN EXCLUDED.subject_id <> '' THEN EXCLUDED.subject_id ELSE asset_evidence.subject_id END,
 			raw_data = COALESCE(EXCLUDED.raw_data, asset_evidence.raw_data),
 			confidence = GREATEST(asset_evidence.confidence, EXCLUDED.confidence),
 			severity = CASE WHEN EXCLUDED.severity <> '' THEN EXCLUDED.severity ELSE asset_evidence.severity END,
-			priority = GREATEST(asset_evidence.priority, EXCLUDED.priority),
 			status = CASE
 				WHEN asset_evidence.status IN ('false_positive', 'ignored', 'interesting', 'confirmed') THEN asset_evidence.status
 				WHEN EXCLUDED.status <> '' THEN EXCLUDED.status
@@ -577,8 +578,7 @@ func (p *PostgresStore) InsertAssetEvidence(ctx context.Context, evidence *Asset
 			source_run_id = CASE WHEN EXCLUDED.source_run_id <> '' THEN EXCLUDED.source_run_id ELSE asset_evidence.source_run_id END,
 			updated_at = NOW()`,
 		evidence.ID, evidence.CampaignID, evidence.TargetID, evidence.SubjectID, evidence.Type, evidence.Value,
-		evidence.Source, evidence.RawData, evidence.Confidence, evidence.Severity, evidence.Priority,
-		evidence.Status, evidence.Reason, evidence.SourceRunID)
+		evidence.Source, evidence.RawData, evidence.Confidence, evidence.Severity, evidence.Status, evidence.Reason, evidence.SourceRunID)
 	return err
 }
 
@@ -802,17 +802,18 @@ func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionReco
 	if record.Status == "" {
 		record.Status = "running"
 	}
+	record.Schedule = NormalizeSchedule(record.Schedule)
 	var id string
 	err := p.pool.QueryRow(ctx,
-		`INSERT INTO action_records (id, campaign_id, target, artifact, input, priority, reason, status, attempts, workflow_id, started_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', 1, $8, NOW(), NOW())
-		 ON CONFLICT (id) DO UPDATE SET
-			campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE action_records.campaign_id END,
-			target = EXCLUDED.target,
-			artifact = EXCLUDED.artifact,
-			input = EXCLUDED.input,
-			priority = EXCLUDED.priority,
-			reason = EXCLUDED.reason,
+		`INSERT INTO action_records (id, campaign_id, target, artifact, input, schedule, reason, status, attempts, workflow_id, started_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', 1, $8, NOW(), NOW())
+			 ON CONFLICT (id) DO UPDATE SET
+				campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE action_records.campaign_id END,
+				target = EXCLUDED.target,
+				artifact = EXCLUDED.artifact,
+				input = EXCLUDED.input,
+				schedule = EXCLUDED.schedule,
+				reason = EXCLUDED.reason,
 			status = 'running',
 			attempts = action_records.attempts + 1,
 			workflow_id = EXCLUDED.workflow_id,
@@ -821,7 +822,7 @@ func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionReco
 			updated_at = NOW()
 		 WHERE action_records.status NOT IN ('running', 'completed')
 		 RETURNING id`,
-		record.ID, record.CampaignID, record.Target, record.Artifact, record.Input, record.Priority, record.Reason, record.WorkflowID).Scan(&id)
+		record.ID, record.CampaignID, record.Target, record.Artifact, record.Input, record.Schedule, record.Reason, record.WorkflowID).Scan(&id)
 	if err == nil {
 		return true, nil
 	}
@@ -851,7 +852,7 @@ func (p *PostgresStore) QueryActionRecords(ctx context.Context, target string) (
 }
 
 func (p *PostgresStore) QueryActionRecordsFiltered(ctx context.Context, target, campaignID string) ([]ActionRecord, error) {
-	query := `SELECT id, campaign_id, target, artifact, input, priority, reason, status, attempts, workflow_id, error,
+	query := `SELECT id, campaign_id, target, artifact, input, schedule, reason, status, attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 		FROM action_records WHERE 1=1`
 	args := []interface{}{}
@@ -865,7 +866,7 @@ func (p *PostgresStore) QueryActionRecordsFiltered(ctx context.Context, target, 
 		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
 		args = append(args, campaignID)
 	}
-	query += ` ORDER BY priority DESC, updated_at DESC`
+	query += ` ORDER BY CASE schedule WHEN 'now' THEN 0 ELSE 1 END, updated_at DESC`
 
 	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -876,7 +877,7 @@ func (p *PostgresStore) QueryActionRecordsFiltered(ctx context.Context, target, 
 	var records []ActionRecord
 	for rows.Next() {
 		var record ActionRecord
-		if err := rows.Scan(&record.ID, &record.CampaignID, &record.Target, &record.Artifact, &record.Input, &record.Priority, &record.Reason, &record.Status, &record.Attempts, &record.WorkflowID, &record.Error, &record.CreatedAt, &record.UpdatedAt, &record.StartedAt, &record.CompletedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.CampaignID, &record.Target, &record.Artifact, &record.Input, &record.Schedule, &record.Reason, &record.Status, &record.Attempts, &record.WorkflowID, &record.Error, &record.CreatedAt, &record.UpdatedAt, &record.StartedAt, &record.CompletedAt); err != nil {
 			return nil, err
 		}
 		records = append(records, record)
@@ -1061,19 +1062,23 @@ func normalizeWorkItemForUpsert(item WorkItem) (WorkItem, error) {
 }
 
 func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) error {
+	item.Schedule = NormalizeSchedule(item.Schedule)
 	_, err := exec.Exec(ctx,
-		`INSERT INTO work_items (id, campaign_id, batch_id, parent_id, type, target, artifact, queue, input, priority, status, attempts, max_attempts, workflow_id, error, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
-		 ON CONFLICT (id) DO UPDATE SET
+		`INSERT INTO work_items (id, campaign_id, batch_id, parent_id, type, target, artifact, queue, input, schedule, status, attempts, max_attempts, workflow_id, error, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+			 ON CONFLICT (id) DO UPDATE SET
 			campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE work_items.campaign_id END,
 			batch_id = CASE WHEN EXCLUDED.batch_id <> '' THEN EXCLUDED.batch_id ELSE work_items.batch_id END,
 			parent_id = CASE WHEN EXCLUDED.parent_id <> '' THEN EXCLUDED.parent_id ELSE work_items.parent_id END,
 			type = EXCLUDED.type,
 			target = EXCLUDED.target,
-			artifact = EXCLUDED.artifact,
-			queue = EXCLUDED.queue,
-			input = CASE WHEN EXCLUDED.input IS NOT NULL THEN EXCLUDED.input ELSE work_items.input END,
-			priority = GREATEST(work_items.priority, EXCLUDED.priority),
+				artifact = EXCLUDED.artifact,
+				queue = EXCLUDED.queue,
+				input = CASE WHEN EXCLUDED.input IS NOT NULL THEN EXCLUDED.input ELSE work_items.input END,
+				schedule = CASE
+					WHEN work_items.schedule = 'now' OR EXCLUDED.schedule = 'now' THEN 'now'
+					ELSE 'batch'
+				END,
 			status = CASE
 				WHEN work_items.status IN ('starting', 'running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
 				ELSE EXCLUDED.status
@@ -1087,7 +1092,7 @@ func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) er
 			workflow_id = CASE WHEN EXCLUDED.workflow_id <> '' THEN EXCLUDED.workflow_id ELSE work_items.workflow_id END,
 			error = EXCLUDED.error,
 			updated_at = NOW()`,
-		item.ID, item.CampaignID, item.BatchID, item.ParentID, item.Type, item.Target, item.Artifact, item.Queue, item.Input, item.Priority,
+		item.ID, item.CampaignID, item.BatchID, item.ParentID, item.Type, item.Target, item.Artifact, item.Queue, item.Input, item.Schedule,
 		item.Status, item.Attempts, item.MaxAttempts, item.WorkflowID, item.Error)
 	return err
 }
@@ -1131,9 +1136,9 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		args = append(args, request.Target)
 		argIdx++
 	}
-	if request.MinPriority > 0 {
-		query += fmt.Sprintf(" AND wi.priority >= $%d", argIdx)
-		args = append(args, request.MinPriority)
+	if request.Schedule != "" {
+		query += fmt.Sprintf(" AND wi.schedule = $%d", argIdx)
+		args = append(args, NormalizeSchedule(request.Schedule))
 		argIdx++
 	}
 	if request.MaxRunning > 0 {
@@ -1156,7 +1161,7 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		args = append(args, request.MaxRunningPerTarget)
 		argIdx++
 	}
-	query += fmt.Sprintf(` ORDER BY wi.priority DESC, wi.created_at ASC
+	query += fmt.Sprintf(` ORDER BY CASE wi.schedule WHEN 'now' THEN 0 ELSE 1 END, wi.created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
 	)
@@ -1171,13 +1176,13 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		updated_at = NOW()
 	FROM candidate
 	WHERE work_items.id = candidate.id
-	RETURNING work_items.id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), priority, status, attempts, max_attempts, workflow_id, error,
+		RETURNING work_items.id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
 		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)`, argIdx, argIdx+1)
 	args = append(args, request.WorkflowID, request.LeaseSeconds)
 
 	var item WorkItem
-	err := p.pool.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Priority, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
+	err := p.pool.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -1254,7 +1259,7 @@ func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemH
 }
 
 func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID, status, itemType, artifactName, target string, limit, offset int) ([]WorkItem, error) {
-	query := `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), priority, status, attempts, max_attempts, workflow_id, error,
+	query := `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
 		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 		FROM work_items WHERE 1=1`
@@ -1290,7 +1295,7 @@ func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID,
 		args = append(args, target)
 		argIdx++
 	}
-	query += fmt.Sprintf(" ORDER BY priority DESC, updated_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	query += fmt.Sprintf(" ORDER BY CASE schedule WHEN 'now' THEN 0 ELSE 1 END, updated_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
 	rows, err := p.pool.Query(ctx, query, args...)
@@ -1302,7 +1307,7 @@ func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID,
 	var items []WorkItem
 	for rows.Next() {
 		var item WorkItem
-		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Priority, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -1315,7 +1320,7 @@ func (p *PostgresStore) GetWorkItemByWorkflowID(ctx context.Context, workflowID 
 		return nil, nil
 	}
 	var item WorkItem
-	err := p.pool.QueryRow(ctx, `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), priority, status, attempts, max_attempts, workflow_id, error,
+	err := p.pool.QueryRow(ctx, `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
 		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 		FROM work_items WHERE workflow_id = $1 ORDER BY updated_at DESC LIMIT 1`, workflowID).Scan(
@@ -1328,7 +1333,7 @@ func (p *PostgresStore) GetWorkItemByWorkflowID(ctx context.Context, workflowID 
 		&item.Artifact,
 		&item.Queue,
 		&item.Input,
-		&item.Priority,
+		&item.Schedule,
 		&item.Status,
 		&item.Attempts,
 		&item.MaxAttempts,
@@ -1738,7 +1743,7 @@ func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter
 	argIdx := 1
 	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
 	query += fmt.Sprintf(` AND updated_at <= NOW() - ($%d * INTERVAL '1 second')
-		ORDER BY priority DESC, updated_at ASC
+		ORDER BY CASE schedule WHEN 'now' THEN 0 ELSE 1 END, updated_at ASC
 		LIMIT $%d
 	)
 	UPDATE work_items SET
@@ -1819,7 +1824,7 @@ func (p *PostgresStore) QueryAssetsByStatus(ctx context.Context, targetID, asset
 }
 
 func (p *PostgresStore) QueryAssetsFiltered(ctx context.Context, targetID, assetType, campaignID, status string, limit, offset int) ([]Asset, error) {
-	query := `SELECT id, campaign_id, type, value, source, target_id, raw_data, confidence, severity, priority, status, lifecycle_status, raw_hash, source_run_id, first_seen, last_seen, created_at FROM assets WHERE 1=1`
+	query := `SELECT id, campaign_id, type, value, source, target_id, raw_data, confidence, severity, status, lifecycle_status, raw_hash, source_run_id, first_seen, last_seen, created_at FROM assets WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
 
@@ -1856,7 +1861,7 @@ func (p *PostgresStore) QueryAssetsFiltered(ctx context.Context, targetID, asset
 	var assets []Asset
 	for rows.Next() {
 		var a Asset
-		if err := rows.Scan(&a.ID, &a.CampaignID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.Confidence, &a.Severity, &a.Priority, &a.Status, &a.Lifecycle, &a.RawHash, &a.SourceRunID, &a.FirstSeen, &a.LastSeen, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.CampaignID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.Confidence, &a.Severity, &a.Status, &a.Lifecycle, &a.RawHash, &a.SourceRunID, &a.FirstSeen, &a.LastSeen, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		assets = append(assets, a)
@@ -1865,7 +1870,7 @@ func (p *PostgresStore) QueryAssetsFiltered(ctx context.Context, targetID, asset
 }
 
 func (p *PostgresStore) QueryAssetEvidence(ctx context.Context, targetID, evidenceType, campaignID, status string, limit, offset int) ([]AssetEvidence, error) {
-	query := `SELECT id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, priority, status, reason, source_run_id, created_at, updated_at FROM asset_evidence WHERE 1=1`
+	query := `SELECT id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, status, reason, source_run_id, created_at, updated_at FROM asset_evidence WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
 	if targetID != "" {
@@ -1888,7 +1893,7 @@ func (p *PostgresStore) QueryAssetEvidence(ctx context.Context, targetID, eviden
 		args = append(args, status)
 		argIdx++
 	}
-	query += fmt.Sprintf(" ORDER BY priority DESC, created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
 	rows, err := p.pool.Query(ctx, query, args...)
@@ -1900,7 +1905,7 @@ func (p *PostgresStore) QueryAssetEvidence(ctx context.Context, targetID, eviden
 	var values []AssetEvidence
 	for rows.Next() {
 		var e AssetEvidence
-		if err := rows.Scan(&e.ID, &e.CampaignID, &e.TargetID, &e.SubjectID, &e.Type, &e.Value, &e.Source, &e.RawData, &e.Confidence, &e.Severity, &e.Priority, &e.Status, &e.Reason, &e.SourceRunID, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.CampaignID, &e.TargetID, &e.SubjectID, &e.Type, &e.Value, &e.Source, &e.RawData, &e.Confidence, &e.Severity, &e.Status, &e.Reason, &e.SourceRunID, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
 		values = append(values, e)
@@ -2003,7 +2008,7 @@ func (p *PostgresStore) CountAssetsFilteredByCampaign(ctx context.Context, targe
 }
 
 func (p *PostgresStore) GetAssetByID(ctx context.Context, id string) (*Asset, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id, campaign_id, type, value, source, target_id, raw_data, confidence, severity, priority, status, lifecycle_status, raw_hash, source_run_id, first_seen, last_seen, created_at FROM assets WHERE id = $1 LIMIT 1`, id)
+	rows, err := p.pool.Query(ctx, `SELECT id, campaign_id, type, value, source, target_id, raw_data, confidence, severity, status, lifecycle_status, raw_hash, source_run_id, first_seen, last_seen, created_at FROM assets WHERE id = $1 LIMIT 1`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -2012,7 +2017,7 @@ func (p *PostgresStore) GetAssetByID(ctx context.Context, id string) (*Asset, er
 		return nil, fmt.Errorf("asset %s not found", id)
 	}
 	var a Asset
-	if err := rows.Scan(&a.ID, &a.CampaignID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.Confidence, &a.Severity, &a.Priority, &a.Status, &a.Lifecycle, &a.RawHash, &a.SourceRunID, &a.FirstSeen, &a.LastSeen, &a.CreatedAt); err != nil {
+	if err := rows.Scan(&a.ID, &a.CampaignID, &a.Type, &a.Value, &a.Source, &a.TargetID, &a.RawData, &a.Confidence, &a.Severity, &a.Status, &a.Lifecycle, &a.RawHash, &a.SourceRunID, &a.FirstSeen, &a.LastSeen, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -2087,7 +2092,6 @@ func assetLifecycleDetails(asset *Asset) []byte {
 		"target_id":        asset.TargetID,
 		"status":           asset.Status,
 		"lifecycle_status": asset.Lifecycle,
-		"priority":         asset.Priority,
 		"severity":         asset.Severity,
 		"confidence":       asset.Confidence,
 		"source_run_id":    asset.SourceRunID,
@@ -2108,7 +2112,6 @@ func assetStatusChangeDetails(asset *Asset, previousStatus string) []byte {
 		"previous_status":  previousStatus,
 		"status":           asset.Status,
 		"lifecycle_status": asset.Lifecycle,
-		"priority":         asset.Priority,
 		"severity":         asset.Severity,
 		"confidence":       asset.Confidence,
 		"source_run_id":    asset.SourceRunID,

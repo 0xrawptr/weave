@@ -68,7 +68,7 @@ func (a *Activity) ClaimAction(ctx context.Context, action Action) (bool, error)
 		Target:     action.Target,
 		Artifact:   action.Artifact,
 		Input:      raw,
-		Priority:   action.Priority,
+		Schedule:   action.Decision.Schedule,
 		Reason:     action.Reason,
 		Status:     "running",
 		WorkflowID: workflowID,
@@ -100,10 +100,11 @@ type ConditionRequest struct {
 }
 
 type AssetCondition struct {
-	Type     string `json:"type,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Status   string `json:"status,omitempty"`
-	MinCount int    `json:"min_count,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Status    string `json:"status,omitempty"`
+	EventType string `json:"event_type,omitempty"`
+	MinCount  int    `json:"min_count,omitempty"`
 }
 
 type ConditionResult struct {
@@ -131,7 +132,7 @@ func (a *Activity) EvaluateCondition(ctx context.Context, request ConditionReque
 
 	result := ConditionResult{OK: true}
 	for _, condition := range request.All {
-		count, err := a.planner.repo.CountAssetsInCampaign(ctx, request.Target, request.CampaignID, condition.Type, condition.Source, condition.Status)
+		count, err := a.countCondition(ctx, request, condition)
 		if err != nil {
 			return result, err
 		}
@@ -147,7 +148,7 @@ func (a *Activity) EvaluateCondition(ctx context.Context, request ConditionReque
 
 	anyOK := false
 	for _, condition := range request.Any {
-		count, err := a.planner.repo.CountAssetsInCampaign(ctx, request.Target, request.CampaignID, condition.Type, condition.Source, condition.Status)
+		count, err := a.countCondition(ctx, request, condition)
 		if err != nil {
 			return result, err
 		}
@@ -159,6 +160,13 @@ func (a *Activity) EvaluateCondition(ctx context.Context, request ConditionReque
 	}
 	result.OK = result.OK && anyOK
 	return result, nil
+}
+
+func (a *Activity) countCondition(ctx context.Context, request ConditionRequest, condition AssetCondition) (int, error) {
+	if condition.EventType != "" {
+		return a.planner.repo.CountAssetEventsInCampaign(ctx, request.Target, request.CampaignID, condition.EventType, condition.Source)
+	}
+	return a.planner.repo.CountAssetsInCampaign(ctx, request.Target, request.CampaignID, condition.Type, condition.Source, condition.Status)
 }
 
 func minCount(value int) int {

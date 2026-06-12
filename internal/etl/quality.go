@@ -138,24 +138,6 @@ func httpConfidence(statusCode int, quality Quality) float64 {
 	}
 }
 
-func qualityPriority(base int, quality Quality) int {
-	switch quality.Layer {
-	case "critical":
-		if base < 100 {
-			return 100
-		}
-	case "interesting":
-		if base < 60 {
-			return 60
-		}
-	case "noise":
-		if base > 0 {
-			return 0
-		}
-	}
-	return base
-}
-
 func qualityStatus(quality Quality, fallback string) string {
 	if quality.Noise {
 		return "noise"

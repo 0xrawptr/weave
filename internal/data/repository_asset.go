@@ -48,7 +48,6 @@ func (r *Repository) SaveEvidence(ctx context.Context, evidence *AssetEvidence) 
 			RawData:     evidence.RawData,
 			Confidence:  evidence.Confidence,
 			Severity:    evidence.Severity,
-			Priority:    evidence.Priority,
 			Status:      evidence.Status,
 			SourceRunID: evidence.SourceRunID,
 		})
@@ -121,6 +120,68 @@ func (r *Repository) CountAssetsInCampaign(ctx context.Context, scanTarget, camp
 		return 0, err
 	}
 	return len(assets), nil
+}
+
+func (r *Repository) CountAssetEventsInCampaign(ctx context.Context, scanTarget, campaignID, eventType, source string) (int, error) {
+	events, err := r.GetAssetEventsInCampaign(ctx, scanTarget, campaignID, eventType, source, 100000, 0)
+	if err != nil {
+		return 0, err
+	}
+	return len(events), nil
+}
+
+func (r *Repository) GetAssetEventsInCampaign(ctx context.Context, scanTarget, campaignID, eventType, source string, limit, offset int) ([]AssetEvent, error) {
+	if r.Postgres == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	events, err := r.Postgres.QueryAssetEvents(ctx, "", campaignID, eventType, 100000, 0)
+	if err != nil {
+		return nil, err
+	}
+	targetIDs := make([]string, 0, len(events))
+	seenTargets := make(map[string]bool, len(events))
+	for _, event := range events {
+		if event.TargetID != "" && !seenTargets[event.TargetID] {
+			seenTargets[event.TargetID] = true
+			targetIDs = append(targetIDs, event.TargetID)
+		}
+	}
+	targets, err := r.Postgres.GetTargetsByIDs(ctx, targetIDs)
+	if err != nil {
+		return nil, err
+	}
+	matches := targetScopeMatcher(scanTarget)
+	out := make([]AssetEvent, 0, len(events))
+	for _, event := range events {
+		if source != "" && event.Source != source {
+			continue
+		}
+		if scanTarget == "" {
+			out = append(out, event)
+			continue
+		}
+		target, ok := targets[event.TargetID]
+		if !ok {
+			continue
+		}
+		if matches(target.Value) {
+			out = append(out, event)
+		}
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(out) {
+		return nil, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return append([]AssetEvent(nil), out[offset:end]...), nil
 }
 
 func plannerEvidenceType(value string) bool {
@@ -288,7 +349,6 @@ func (r *Repository) GetCVEAssetsInCampaign(ctx context.Context, scanTarget, cam
 				RawData:    value.RawData,
 				Confidence: value.Confidence,
 				Severity:   value.Severity,
-				Priority:   value.Priority,
 				Status:     value.Status,
 			})
 		}
@@ -330,7 +390,6 @@ func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTar
 				Source:     value.Source,
 				Confidence: value.Confidence,
 				Severity:   value.Severity,
-				Priority:   value.Priority,
 				Status:     value.Status,
 				Path:       []EvidencePathStep{{Type: value.Type, Value: value.Value}},
 			})
@@ -454,8 +513,8 @@ func dedupeEvidence(values []EvidenceRecord) []EvidenceRecord {
 		}
 		key := value.Type + "|" + value.Value
 		if i, ok := seen[key]; ok {
-			if value.Priority > out[i].Priority ||
-				(value.Priority == out[i].Priority && len(value.Path) > len(out[i].Path)) {
+			if severityRank(value.Severity) > severityRank(out[i].Severity) ||
+				(severityRank(value.Severity) == severityRank(out[i].Severity) && len(value.Path) > len(out[i].Path)) {
 				out[i] = value
 			}
 			continue
@@ -464,4 +523,21 @@ func dedupeEvidence(values []EvidenceRecord) []EvidenceRecord {
 		out = append(out, value)
 	}
 	return out
+}
+
+func severityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return 5
+	case "high":
+		return 4
+	case "medium":
+		return 3
+	case "low":
+		return 2
+	case "info", "informational":
+		return 1
+	default:
+		return 0
+	}
 }

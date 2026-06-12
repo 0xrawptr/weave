@@ -99,7 +99,6 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 			Source: "spray", RawData: candidate.raw,
 			Confidence: httpConfidence(candidate.item.StatusCode, quality),
 			Status:     qualityStatus(quality, "observed"),
-			Priority:   qualityPriority(sprayURLPriority(candidate.canonical), quality),
 			Quality:    &quality,
 			Reason:     qualityReason(quality),
 		}
@@ -169,21 +168,6 @@ func applySpraySDKQuality(quality *Quality, valid *bool, fuzzy bool, reason stri
 	}
 	if reason != "" {
 		quality.Reasons = append(quality.Reasons, "sdk_reason:"+reason)
-	}
-}
-
-func sprayURLPriority(rawURL string) int {
-	_, meta, _ := normalizeURL(rawURL)
-	p := meta.Path
-	switch {
-	case highRiskPath(p):
-		return 100
-	case interestingPath(p) && (containsAny(p, "/actuator", "/v3/api-docs", "/swagger", "/api-docs", "/openapi")):
-		return 80
-	case interestingPath(p):
-		return 60
-	default:
-		return 10
 	}
 }
 

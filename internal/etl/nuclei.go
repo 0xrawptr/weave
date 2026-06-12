@@ -80,7 +80,7 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				ID: templateID, Type: "template", Value: item.TemplateID,
 				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-				Priority: severityPriority(item.Severity), Status: nucleiFindingStatus(item.Severity), Tags: item.Tags,
+				Status: nucleiFindingStatus(item.Severity), Tags: item.Tags,
 			}
 			applyTarget(&templateEntity, target)
 			addEntity(result, entitySet, templateEntity)
@@ -94,7 +94,7 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				Value:  fmt.Sprintf("%s: %s", strings.ToLower(item.Severity), item.Info),
 				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-				Priority: severityPriority(item.Severity), Status: "confirmed",
+				Status: "confirmed",
 			}
 			applyTarget(&vulnEntity, target)
 			addEntity(result, entitySet, vulnEntity)
@@ -115,7 +115,7 @@ func (n *NucleiExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 				ID: cveID, Type: "cve", Value: cve,
 				Source: "nuclei", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-				Priority: severityPriority(item.Severity), Status: "confirmed",
+				Status: "confirmed",
 			}
 			applyTarget(&cveEntity, target)
 			addEntity(result, entitySet, cveEntity)
@@ -236,21 +236,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func severityPriority(severity string) int {
-	switch strings.ToLower(strings.TrimSpace(severity)) {
-	case "critical":
-		return 90
-	case "high":
-		return 70
-	case "medium":
-		return 50
-	case "low":
-		return 30
-	case "info":
-		return 10
-	default:
-		return 0
-	}
 }

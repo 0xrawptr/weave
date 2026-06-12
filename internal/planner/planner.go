@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
@@ -18,15 +17,25 @@ type Action struct {
 	Target     string                 `json:"target"`
 	Artifact   string                 `json:"artifact"`
 	Input      map[string]interface{} `json:"input"`
-	Priority   int                    `json:"priority"`
 	Reason     string                 `json:"reason"`
 	Status     string                 `json:"status"`
 	Evidence   []Evidence             `json:"evidence,omitempty"`
 	Risk       string                 `json:"risk,omitempty"`
 	Cost       int                    `json:"cost,omitempty"`
 	DedupKey   string                 `json:"dedup_key,omitempty"`
-	Score      int                    `json:"score,omitempty"`
+	Decision   Decision               `json:"decision"`
 }
+
+type Decision struct {
+	Suppressed bool   `json:"suppressed"`
+	Schedule   string `json:"schedule"` // now, batch
+	Reason     string `json:"reason,omitempty"`
+}
+
+const (
+	ScheduleNow   = "now"
+	ScheduleBatch = "batch"
+)
 
 type Planner struct {
 	repo *data.Repository
@@ -52,7 +61,6 @@ type Evidence struct {
 	Value      string             `json:"value"`
 	Confidence float64            `json:"confidence,omitempty"`
 	Severity   string             `json:"severity,omitempty"`
-	Priority   int                `json:"priority,omitempty"`
 	Status     string             `json:"status,omitempty"`
 	Path       []EvidencePathStep `json:"path,omitempty"`
 }
@@ -78,13 +86,12 @@ type DAGPlanNode struct {
 	Input      map[string]any    `json:"input,omitempty"`
 	DependsOn  []string          `json:"depends_on,omitempty"`
 	RunIf      *ConditionRequest `json:"run_if,omitempty"`
-	Priority   int               `json:"priority,omitempty"`
 	Reason     string            `json:"reason,omitempty"`
 	Risk       string            `json:"risk,omitempty"`
 	Cost       int               `json:"cost,omitempty"`
-	Score      int               `json:"score,omitempty"`
 	DedupKey   string            `json:"dedup_key,omitempty"`
 	Evidence   []Evidence        `json:"evidence,omitempty"`
+	Decision   Decision          `json:"decision"`
 }
 
 func New(repo *data.Repository) *Planner {
@@ -127,7 +134,7 @@ func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignI
 	var highValueURLs []string
 	for _, asset := range discoveredURLs {
 		sprayURLs = append(sprayURLs, asset.Value)
-		if asset.Priority >= 60 {
+		if isHighValueURLAsset(asset) {
 			highValueURLs = append(highValueURLs, asset.Value)
 		}
 	}
@@ -203,7 +210,6 @@ func PlanFromState(state State) []Action {
 			Target:     state.Target,
 			Artifact:   "gogo",
 			Input:      map[string]interface{}{"ip": state.Target, "ports": "top3"},
-			Priority:   40,
 			Reason:     "no web service URLs are available yet",
 			Status:     "candidate",
 			Evidence:   []Evidence{{Type: "target", Value: state.Target}},
@@ -226,10 +232,9 @@ func PlanFromState(state State) []Action {
 			Target:     state.Target,
 			Artifact:   "fingers",
 			Input:      map[string]interface{}{"mode": "http_match", "urls": fingerTargets},
-			Priority:   50,
 			Reason:     fingersReason(len(fingerprints), len(sprayURLs)),
 			Status:     "candidate",
-			Evidence:   stringEvidence("url", fingerTargets, 0),
+			Evidence:   stringEvidence("url", fingerTargets),
 			Risk:       "low",
 			Cost:       25,
 			DedupKey:   actionDedupKey(state.Target, "fingers", joinKey(fingerTargets)),
@@ -244,10 +249,9 @@ func PlanFromState(state State) []Action {
 			Target:     state.Target,
 			Artifact:   "spray",
 			Input:      map[string]interface{}{"base_urls": []string{baseURL}, "wordlist_mode": "full"},
-			Priority:   80,
 			Reason:     "expand attack surface with full path discovery",
 			Status:     "candidate",
-			Evidence:   stringEvidence("url", []string{baseURL}, 0),
+			Evidence:   stringEvidence("url", []string{baseURL}),
 			Risk:       "medium",
 			Cost:       45,
 			DedupKey:   actionDedupKey(state.Target, "spray", "full", baseURL),
@@ -264,10 +268,9 @@ func PlanFromState(state State) []Action {
 			Target:     state.Target,
 			Artifact:   "nuclei",
 			Input:      map[string]interface{}{"targets": nucleiTargets, "ids": templateIDs},
-			Priority:   maxPriority(80, cveAssetPriority(state.CVEs)),
 			Reason:     "enrichment produced precise nuclei template IDs",
 			Status:     "candidate",
-			Evidence:   append(stringEvidence("template", templateIDs, 70), cveEvidence...),
+			Evidence:   append(stringEvidence("template", templateIDs), cveEvidence...),
 			Risk:       "medium",
 			Cost:       35,
 			DedupKey:   actionDedupKey(state.Target, "nuclei", "ids", joinKey(templateIDs)),
@@ -283,10 +286,9 @@ func PlanFromState(state State) []Action {
 			Target:     state.Target,
 			Artifact:   "nuclei",
 			Input:      map[string]interface{}{"targets": nucleiTargets, "tags": filterTags},
-			Priority:   55,
 			Reason:     "no precise template IDs exist; using tags/fingerprints as a broader filter",
 			Status:     "candidate",
-			Evidence:   append(append(stringEvidence("tag", tags, 20), stringEvidence("fingerprint", fingerprints, 15)...), graphEvidence(state.Evidence)...),
+			Evidence:   append(append(stringEvidence("tag", tags), stringEvidence("fingerprint", fingerprints)...), graphEvidence(state.Evidence)...),
 			Risk:       "medium",
 			Cost:       60,
 			DedupKey:   actionDedupKey(state.Target, "nuclei", "tags", joinKey(filterTags)),
@@ -299,10 +301,9 @@ func PlanFromState(state State) []Action {
 			Target:     state.Target,
 			Artifact:   "nuclei",
 			Input:      map[string]interface{}{"targets": highValueURLs, "tags": fallbackTags},
-			Priority:   45,
 			Reason:     "spray discovered high-value URLs but no precise template evidence exists; using lightweight nuclei tag fallback",
 			Status:     "candidate",
-			Evidence:   stringEvidence("url", highValueURLs, 60),
+			Evidence:   stringEvidence("url", highValueURLs),
 			Risk:       "medium",
 			Cost:       55,
 			DedupKey:   actionDedupKey(state.Target, "nuclei", "high-value-url-fallback", joinKey(highValueURLs)),
@@ -314,28 +315,31 @@ func PlanFromState(state State) []Action {
 
 func finalizeActions(actions []Action, records []data.ActionRecord) []Action {
 	for i := range actions {
-		actions[i].Score = scoreAction(actions[i])
+		applyDecision(&actions[i])
 	}
 	sort.SliceStable(actions, func(i, j int) bool {
-		if actions[i].Score == actions[j].Score {
-			if actions[i].Priority == actions[j].Priority {
+		if actions[i].Decision.Schedule == actions[j].Decision.Schedule {
+			if dagStage(actions[i].Artifact) == dagStage(actions[j].Artifact) {
 				return actions[i].Artifact < actions[j].Artifact
 			}
-			return actions[i].Priority > actions[j].Priority
+			return dagStage(actions[i].Artifact) < dagStage(actions[j].Artifact)
 		}
-		return actions[i].Score > actions[j].Score
+		return scheduleRank(actions[i].Decision.Schedule) > scheduleRank(actions[j].Decision.Schedule)
 	})
 	return filterBlockedActions(actions, records)
 }
 
 func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
 	actions = append([]Action{}, actions...)
+	for i := range actions {
+		applyDecision(&actions[i])
+	}
 	sort.SliceStable(actions, func(i, j int) bool {
 		if dagStage(actions[i].Artifact) == dagStage(actions[j].Artifact) {
-			if actions[i].Score == actions[j].Score {
+			if actions[i].Decision.Schedule == actions[j].Decision.Schedule {
 				return actions[i].ID < actions[j].ID
 			}
-			return actions[i].Score > actions[j].Score
+			return scheduleRank(actions[i].Decision.Schedule) > scheduleRank(actions[j].Decision.Schedule)
 		}
 		return dagStage(actions[i].Artifact) < dagStage(actions[j].Artifact)
 	})
@@ -355,13 +359,12 @@ func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
 			Input:      action.Input,
 			DependsOn:  actionDependsOn(action, byArtifact),
 			RunIf:      actionRunIf(action),
-			Priority:   action.Priority,
 			Reason:     action.Reason,
 			Risk:       action.Risk,
 			Cost:       action.Cost,
-			Score:      action.Score,
 			DedupKey:   action.DedupKey,
 			Evidence:   action.Evidence,
+			Decision:   action.Decision,
 		}
 		nodes = append(nodes, node)
 		byArtifact[action.Artifact] = append(byArtifact[action.Artifact], nodeID)
@@ -463,144 +466,83 @@ func (a Action) PersistInput() map[string]interface{} {
 	}
 	out["_planner"] = map[string]interface{}{
 		"dedup_key": a.DedupKey,
-		"score":     a.Score,
-		"risk":      a.Risk,
-		"cost":      a.Cost,
+		"decision":  a.Decision,
 		"evidence":  a.Evidence,
 	}
 	return out
 }
 
-func scoreAction(action Action) int {
-	score := action.Priority - action.Cost
-	switch action.Risk {
-	case "low":
-		score += 10
-	case "medium":
-		score += 0
-	case "high":
-		score -= 20
+func applyDecision(action *Action) {
+	if action == nil {
+		return
 	}
-	for _, ev := range action.Evidence {
-		score += ev.Priority / 5
-		score += evidenceTypeBoost(ev.Type)
-		score += evidencePathBoost(ev.Path)
-		score += evidenceValueBoost(ev)
-		switch ev.Severity {
-		case "critical", "CRITICAL":
-			score += 20
-		case "high", "HIGH":
-			score += 12
-		case "medium", "MEDIUM":
-			score += 6
-		}
-		if ev.Status == "candidate" {
-			score += 2
-		}
+	if action.Decision.Schedule == "" && !action.Decision.Suppressed {
+		action.Decision = decisionForAction(*action)
 	}
-	return score
 }
 
-func evidenceTypeBoost(evidenceType string) int {
-	switch evidenceType {
-	case "intel":
-		return 18
-	case "cve":
-		return 16
-	case "template":
-		return 12
-	case "product":
-		return 8
-	case "cpe":
-		return 5
-	case "fingerprint":
-		return 4
+func decisionForAction(action Action) Decision {
+	if action.Artifact == "" {
+		return Decision{Suppressed: true, Reason: "missing artifact"}
+	}
+	switch action.Artifact {
+	case "nuclei", "neutron":
+		if hasPreciseEvidence(action.Evidence) {
+			return Decision{Schedule: ScheduleNow, Reason: "precise vulnerability evidence"}
+		}
+		if hasHighSeverityEvidence(action.Evidence) {
+			return Decision{Schedule: ScheduleNow, Reason: "high severity evidence"}
+		}
+		return Decision{Schedule: ScheduleBatch, Reason: "verification can run in batch"}
+	case "fingers":
+		return Decision{Schedule: ScheduleBatch, Reason: "fingerprint enrichment"}
+	case "gogo", "spray":
+		return Decision{Schedule: ScheduleBatch, Reason: "surface discovery"}
+	default:
+		return Decision{Schedule: ScheduleBatch, Reason: "default batch schedule"}
+	}
+}
+
+func scheduleRank(schedule string) int {
+	switch schedule {
+	case ScheduleNow:
+		return 1
+	case ScheduleBatch, "":
+		return 0
 	default:
 		return 0
 	}
 }
 
-func evidencePathBoost(path []EvidencePathStep) int {
-	if len(path) <= 1 {
-		return 0
-	}
-	score := len(path) * 2
-	seenTypes := make(map[string]bool, len(path))
-	for _, step := range path {
-		seenTypes[step.Type] = true
-	}
-	for _, evidenceType := range []string{"fingerprint", "product", "cve", "template", "intel"} {
-		if seenTypes[evidenceType] {
-			score += 3
+func hasPreciseEvidence(evidence []Evidence) bool {
+	for _, ev := range evidence {
+		switch ev.Type {
+		case "cve", "template", "intel":
+			if strings.TrimSpace(ev.Value) != "" {
+				return true
+			}
 		}
 	}
-	if seenTypes["fingerprint"] && seenTypes["product"] && seenTypes["cve"] && seenTypes["template"] && seenTypes["intel"] {
-		score += 30
-	} else if seenTypes["product"] && seenTypes["cve"] && seenTypes["template"] && seenTypes["intel"] {
-		score += 24
-	} else if seenTypes["cve"] && seenTypes["template"] {
-		score += 15
-	} else if seenTypes["product"] && seenTypes["cve"] {
-		score += 10
-	}
-	if score > 55 {
-		return 55
-	}
-	return score
+	return false
 }
 
-func evidenceValueBoost(ev Evidence) int {
-	value := strings.ToUpper(ev.Value)
-	score := 0
-	if ev.Type == "template" {
-		score += 6
-	}
-	if ev.Type == "tag" || ev.Type == "fingerprint" {
-		score -= 2
-	}
-	if strings.Contains(value, " KEV") || strings.Contains(value, "KEV ") {
-		score += 25
-	}
-	if strings.Contains(value, "CISA") {
-		score += 8
-	}
-	if epss, ok := numberAfterToken(value, "EPSS"); ok {
-		switch {
-		case epss >= 0.9:
-			score += 18
-		case epss >= 0.7:
-			score += 12
-		case epss >= 0.4:
-			score += 6
+func hasHighSeverityEvidence(evidence []Evidence) bool {
+	for _, ev := range evidence {
+		switch strings.ToLower(strings.TrimSpace(ev.Severity)) {
+		case "critical", "high":
+			return true
 		}
 	}
-	if cvss, ok := numberAfterToken(value, "CVSS"); ok {
-		switch {
-		case cvss >= 9:
-			score += 18
-		case cvss >= 7:
-			score += 12
-		case cvss >= 4:
-			score += 6
-		}
-	}
-	return score
+	return false
 }
 
-func numberAfterToken(value, token string) (float64, bool) {
-	fields := strings.Fields(value)
-	for i, field := range fields {
-		field = strings.Trim(field, ":=")
-		if field != token || i+1 >= len(fields) {
-			continue
-		}
-		raw := strings.Trim(fields[i+1], ",;()[]{}")
-		n, err := strconv.ParseFloat(raw, 64)
-		if err == nil {
-			return n, true
-		}
+func isHighValueURLAsset(asset data.Asset) bool {
+	switch asset.Status {
+	case "candidate", "interesting", "confirmed":
+		return true
+	default:
+		return false
 	}
-	return 0, false
 }
 
 func filterBlockedActions(actions []Action, records []data.ActionRecord) []Action {
@@ -761,7 +703,7 @@ func actionRecordFromWorkItem(item data.WorkItem) (data.ActionRecord, bool) {
 		Target:     item.Target,
 		Artifact:   item.Artifact,
 		Input:      raw,
-		Priority:   item.Priority,
+		Schedule:   item.Schedule,
 		Reason:     envelope.Reason,
 		Status:     item.Status,
 		Attempts:   item.Attempts,
@@ -781,11 +723,11 @@ func copyMap(input map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-func stringEvidence(kind string, values []string, priority int) []Evidence {
+func stringEvidence(kind string, values []string) []Evidence {
 	values = unique(values)
 	out := make([]Evidence, 0, len(values))
 	for _, value := range values {
-		out = append(out, Evidence{Type: kind, Value: value, Priority: priority, Status: "observed"})
+		out = append(out, Evidence{Type: kind, Value: value, Status: "observed"})
 	}
 	return out
 }
@@ -799,7 +741,6 @@ func cveEvidence(assets []data.Asset) []Evidence {
 			Value:      asset.Value,
 			Confidence: asset.Confidence,
 			Severity:   asset.Severity,
-			Priority:   asset.Priority,
 			Status:     asset.Status,
 		})
 	}
@@ -815,7 +756,6 @@ func graphEvidence(records []data.EvidenceRecord) []Evidence {
 			Value:      record.Value,
 			Confidence: record.Confidence,
 			Severity:   record.Severity,
-			Priority:   record.Priority,
 			Status:     record.Status,
 			Path:       evidencePathSteps(record.Path),
 		})
@@ -850,7 +790,7 @@ func uniqueEvidenceRecords(records []data.EvidenceRecord) []data.EvidenceRecord 
 		}
 		key := record.Type + "|" + record.Value
 		if i, ok := seen[key]; ok {
-			if record.Priority > out[i].Priority {
+			if len(record.Path) > len(out[i].Path) {
 				out[i] = record
 			}
 			continue
@@ -859,13 +799,10 @@ func uniqueEvidenceRecords(records []data.EvidenceRecord) []data.EvidenceRecord 
 		out = append(out, record)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Priority == out[j].Priority {
-			if out[i].Type == out[j].Type {
-				return out[i].Value < out[j].Value
-			}
-			return out[i].Type < out[j].Type
+		if out[i].Type == out[j].Type {
+			return out[i].Value < out[j].Value
 		}
-		return out[i].Priority > out[j].Priority
+		return out[i].Type < out[j].Type
 	})
 	return out
 }
@@ -878,7 +815,7 @@ func uniqueCVEAssets(assets []data.Asset) []data.Asset {
 			continue
 		}
 		if i, ok := seen[asset.Value]; ok {
-			if asset.Priority > out[i].Priority {
+			if severityRank(asset.Severity) > severityRank(out[i].Severity) {
 				out[i] = asset
 			}
 			continue
@@ -887,12 +824,29 @@ func uniqueCVEAssets(assets []data.Asset) []data.Asset {
 		out = append(out, asset)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Priority == out[j].Priority {
+		if severityRank(out[i].Severity) == severityRank(out[j].Severity) {
 			return out[i].Value < out[j].Value
 		}
-		return out[i].Priority > out[j].Priority
+		return severityRank(out[i].Severity) > severityRank(out[j].Severity)
 	})
 	return out
+}
+
+func severityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return 5
+	case "high":
+		return 4
+	case "medium":
+		return 3
+	case "low":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func actionDedupKey(parts ...string) string {
@@ -934,21 +888,4 @@ func joinKey(values []string) string {
 		out += "|" + value
 	}
 	return out
-}
-
-func cveAssetPriority(assets []data.Asset) int {
-	priority := 0
-	for _, asset := range assets {
-		if asset.Priority > priority {
-			priority = asset.Priority
-		}
-	}
-	return priority
-}
-
-func maxPriority(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

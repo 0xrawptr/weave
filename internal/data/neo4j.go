@@ -65,7 +65,6 @@ func (n *Neo4jStore) CreateAssetNode(ctx context.Context, asset *Asset) error {
 			 END,
 			 a.confidence = $confidence,
 			 a.severity = $severity,
-			 a.priority = $priority,
 			 a.status = $status`,
 		map[string]interface{}{
 			"id":         asset.ID,
@@ -76,7 +75,6 @@ func (n *Neo4jStore) CreateAssetNode(ctx context.Context, asset *Asset) error {
 			"campaignID": asset.CampaignID,
 			"confidence": asset.Confidence,
 			"severity":   asset.Severity,
-			"priority":   asset.Priority,
 			"status":     asset.Status,
 		})
 	return err
@@ -161,7 +159,6 @@ func (n *Neo4jStore) QueryKnowledgeEvidence(ctx context.Context, targetID, campa
 			 n.source AS source,
 			 n.confidence AS confidence,
 			 n.severity AS severity,
-			 n.priority AS priority,
 			 n.status AS status,
 			 [node IN nodes(p) | {type: node.type, value: node.value}] AS path_nodes,
 			 [rel IN relationships(p) | type(rel)] AS path_rels`,
@@ -179,7 +176,6 @@ func (n *Neo4jStore) QueryKnowledgeEvidence(ctx context.Context, targetID, campa
 			Source:     stringField(record["source"]),
 			Confidence: floatField(record["confidence"]),
 			Severity:   stringField(record["severity"]),
-			Priority:   intField(record["priority"]),
 			Status:     stringField(record["status"]),
 			Path:       evidencePath(record["path_nodes"], record["path_rels"]),
 		})

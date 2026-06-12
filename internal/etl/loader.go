@@ -39,7 +39,6 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				RawData:     entityRawData(e),
 				Confidence:  e.Confidence,
 				Severity:    e.Severity,
-				Priority:    e.Priority,
 				Status:      status,
 				SourceRunID: e.SourceRunID,
 			}
@@ -68,7 +67,6 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				TargetID:   e.TargetID,
 				Confidence: 0.6,
 				Status:     "candidate",
-				Priority:   e.Priority,
 			}
 			if err := l.repo.SaveEvidence(ctx, tplAsset); err != nil {
 				return fmt.Errorf("save template %s: %w", tid, err)
@@ -156,7 +154,6 @@ func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
 				RawData:    raw,
 				Confidence: 0.5,
 				Severity:   highestSeverity(e.CVEIntel, cve),
-				Priority:   cvePriority(e.CVEIntel, cve),
 				Status:     "candidate",
 			}
 			if err := l.repo.SaveEvidence(ctx, cveAsset); err != nil {
@@ -248,7 +245,6 @@ func (l *dbLoader) saveEvidenceEntity(ctx context.Context, e Entity, subjectID s
 		RawData:     entityRawData(e),
 		Confidence:  e.Confidence,
 		Severity:    e.Severity,
-		Priority:    e.Priority,
 		Status:      status,
 		Reason:      e.Reason,
 		SourceRunID: e.SourceRunID,
@@ -289,7 +285,6 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 		TargetID:   e.TargetID,
 		Confidence: e.Confidence,
 		Status:     defaultStatus(e.Status, "observed"),
-		Priority:   e.Priority,
 	}
 	if err := l.repo.SaveEvidence(ctx, product); err != nil {
 		return "", fmt.Errorf("save product %s: %w", productValue, err)
@@ -312,7 +307,6 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 		TargetID:   e.TargetID,
 		Confidence: e.Confidence,
 		Status:     defaultStatus(e.Status, "observed"),
-		Priority:   e.Priority,
 	}
 	if err := l.repo.SaveEvidence(ctx, version); err != nil {
 		return "", fmt.Errorf("save version %s: %w", e.Version, err)
@@ -345,7 +339,6 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 			TargetID:   e.TargetID,
 			Confidence: 0.5,
 			Status:     "candidate",
-			Priority:   cvePriority(e.CVEIntel, intel.ID),
 		}
 		if err := l.repo.SaveEvidence(ctx, product); err != nil {
 			return fmt.Errorf("save cve product %s: %w", productValue, err)
@@ -432,7 +425,6 @@ func (l *dbLoader) saveCVEIntel(ctx context.Context, e Entity, cveID string, int
 		RawData:    raw,
 		Confidence: 0.8,
 		Severity:   intel.CVSSSeverity,
-		Priority:   cvePriority(e.CVEIntel, intel.ID),
 		Status:     "candidate",
 	}
 	if err := l.repo.SaveEvidence(ctx, intelAsset); err != nil {
@@ -479,26 +471,4 @@ func highestSeverity(intel []CVEInfo, cve string) string {
 		}
 	}
 	return ""
-}
-
-func cvePriority(intel []CVEInfo, cve string) int {
-	for _, item := range intel {
-		if item.ID != cve {
-			continue
-		}
-		score := 0
-		if item.KEV {
-			score += 70
-		}
-		if item.EPSSPercentile >= 0.95 {
-			score += 20
-		} else if item.EPSSPercentile >= 0.8 {
-			score += 10
-		}
-		if item.CVSSScore >= 9 {
-			score += 10
-		}
-		return score
-	}
-	return 0
 }

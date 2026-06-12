@@ -23,7 +23,7 @@ type StartBatchRequest struct {
 	ChunkPrefix             int                     `json:"chunk_prefix,omitempty"`
 	MaxAttempts             int                     `json:"max_attempts,omitempty"`
 	RetryDelaySeconds       int                     `json:"retry_delay_seconds,omitempty"`
-	PriorityTargets         []string                `json:"priority_targets,omitempty"`
+	NowTargets              []string                `json:"now_targets,omitempty"`
 	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
 	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
 	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
@@ -53,7 +53,6 @@ type ResumeBatchSchedulerRequest struct {
 	NucleiGroupTargets      int                     `json:"nuclei_group_targets,omitempty"`
 	NucleiGroupTemplates    int                     `json:"nuclei_group_templates,omitempty"`
 	ContinueAfter           int                     `json:"continue_after,omitempty"`
-	IdleWaitSeconds         int                     `json:"idle_wait_seconds,omitempty"`
 	MaxContinueRuns         int                     `json:"max_continue_runs,omitempty"`
 }
 
@@ -116,7 +115,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
 	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
 		Targets:                 targets,
-		PriorityTargets:         cleanStringSlice(req.PriorityTargets),
+		NowTargets:              cleanStringSlice(req.NowTargets),
 		CampaignID:              strings.TrimSpace(req.CampaignID),
 		Ports:                   ports,
 		MaxConcurrency:          req.MaxConcurrency,
@@ -355,7 +354,6 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 		},
 		TotalChunks:     run.TotalChunks,
 		ContinueAfter:   req.ContinueAfter,
-		IdleWaitSeconds: req.IdleWaitSeconds,
 		MaxContinueRuns: req.MaxContinueRuns,
 	})
 	if err != nil {

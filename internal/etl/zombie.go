@@ -57,7 +57,7 @@ func (z *ZombieExtractor) Extract(ctx context.Context, scanTarget string, rawDat
 		credEntity := Entity{
 			ID: credID, Type: "credential", Value: credValue,
 			Source: "zombie", RawData: itemRaw,
-			Confidence: 1.0, Severity: "high", Priority: 80, Status: "confirmed",
+			Confidence: 1.0, Severity: "high", Status: "confirmed",
 		}
 		applyTarget(&credEntity, serviceTarget)
 		addEntity(result, entitySet, credEntity)

@@ -79,8 +79,8 @@ func (n *NeutronExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 				ID: templateID, Type: "template", Value: item.TemplateID,
 				Source: "neutron", RawData: itemRaw,
 				Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-				Priority: severityPriority(item.Severity), Status: "confirmed",
-				Tags: splitCSV(item.Tags),
+				Status: "confirmed",
+				Tags:   splitCSV(item.Tags),
 			}
 			applyTarget(&templateEntity, target)
 			addEntity(result, entitySet, templateEntity)
@@ -96,7 +96,7 @@ func (n *NeutronExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 			ID: vulnID, Type: "vulnerability", Value: value,
 			Source: "neutron", RawData: itemRaw,
 			Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-			Priority: severityPriority(item.Severity), Status: "confirmed",
+			Status: "confirmed",
 		}
 		applyTarget(&vulnEntity, target)
 		addEntity(result, entitySet, vulnEntity)
@@ -115,7 +115,7 @@ func (n *NeutronExtractor) Extract(ctx context.Context, scanTarget string, rawDa
 					ID: cveID, Type: "cve", Value: cve,
 					Source: "neutron", RawData: itemRaw,
 					Confidence: 1.0, Severity: strings.ToLower(item.Severity),
-					Priority: severityPriority(item.Severity), Status: "confirmed",
+					Status: "confirmed",
 					CVEIntel: []CVEInfo{{
 						ID:             cve,
 						EPSS:           item.Classification.EPSSScore,

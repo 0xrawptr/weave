@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -156,7 +155,7 @@ func upsertStreamingGogoFollowUp(ctx context.Context, repo *data.Repository, wor
 		Artifact:    "planned_dag",
 		Queue:       "planner",
 		Input:       mustMarshalRuntime(map[string]interface{}{"target": parent.Target, "iteration": iteration}),
-		Priority:    streamingGogoFollowUpPriority(result),
+			Schedule:    streamingGogoFollowUpSchedule(result),
 		Status:      data.WorkItemStatusPending,
 		MaxAttempts: 1,
 	})
@@ -187,7 +186,7 @@ func upsertStreamingSprayFollowUp(ctx context.Context, repo *data.Repository, wo
 		Artifact:    "planned_dag",
 		Queue:       "planner",
 		Input:       mustMarshalRuntime(map[string]interface{}{"target": parent.Target, "iteration": iteration}),
-		Priority:    streamingSprayFollowUpPriority(result),
+			Schedule:    streamingSprayFollowUpSchedule(result),
 		Status:      data.WorkItemStatusPending,
 		MaxAttempts: 1,
 	})
@@ -211,32 +210,21 @@ func shouldPlanFromStreamingSpray(result artifact.SprayResultItem) bool {
 	return statusCode >= 200 && statusCode < 500
 }
 
-func streamingGogoFollowUpPriority(result *sdktypes.GOGOResult) int {
+func streamingGogoFollowUpSchedule(result *sdktypes.GOGOResult) string {
 	if result == nil {
-		return 40
+		return data.ScheduleBatch
 	}
 	if len(result.Frameworks) > 0 {
-		return 70
+		return data.ScheduleNow
 	}
-	statusCode, _ := strconv.Atoi(result.Status)
-	switch {
-	case statusCode >= 200 && statusCode < 400:
-		return 50
-	default:
-		return 40
-	}
+	return data.ScheduleBatch
 }
 
-func streamingSprayFollowUpPriority(result artifact.SprayResultItem) int {
+func streamingSprayFollowUpSchedule(result artifact.SprayResultItem) string {
 	if len(result.Frameworks) > 0 || len(result.Extracts) > 0 {
-		return 75
+		return data.ScheduleNow
 	}
-	switch {
-	case result.StatusCode >= 200 && result.StatusCode < 400:
-		return 55
-	default:
-		return 45
-	}
+	return data.ScheduleBatch
 }
 
 func mustMarshalRuntime(v interface{}) []byte {
@@ -370,6 +358,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledDNSPreflightWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)

@@ -13,7 +13,7 @@ import (
 
 type BatchPortScanInput struct {
 	Targets                []string       `json:"targets"`
-	PriorityTargets        []string       `json:"priority_targets,omitempty"`
+	NowTargets             []string       `json:"now_targets,omitempty"`
 	CampaignID             string         `json:"campaign_id,omitempty"`
 	Ports                  string         `json:"ports"`
 	MaxConcurrency         int            `json:"max_concurrency,omitempty"`
@@ -42,21 +42,21 @@ type ResourceLimits struct {
 }
 
 type BatchPortScanResult struct {
-	Targets         []string `json:"targets"`
-	PriorityTargets []string `json:"priority_targets,omitempty"`
-	Ports           string   `json:"ports"`
-	MaxConcurrency  int      `json:"max_concurrency"`
-	ChunkPrefix     int      `json:"chunk_prefix"`
-	MaxAttempts     int      `json:"max_attempts"`
-	RetryDelay      int      `json:"retry_delay_seconds,omitempty"`
-	RunPlannedDAG   bool     `json:"run_planned_dag,omitempty"`
-	TotalChunks     int      `json:"total_chunks"`
-	Completed       int      `json:"completed"`
-	Failed          int      `json:"failed"`
-	FollowUpTotal   int      `json:"follow_up_total,omitempty"`
-	FollowUpFailed  int      `json:"follow_up_failed,omitempty"`
-	ActionTotal     int      `json:"action_total,omitempty"`
-	ActionFailed    int      `json:"action_failed,omitempty"`
+	Targets        []string `json:"targets"`
+	NowTargets     []string `json:"now_targets,omitempty"`
+	Ports          string   `json:"ports"`
+	MaxConcurrency int      `json:"max_concurrency"`
+	ChunkPrefix    int      `json:"chunk_prefix"`
+	MaxAttempts    int      `json:"max_attempts"`
+	RetryDelay     int      `json:"retry_delay_seconds,omitempty"`
+	RunPlannedDAG  bool     `json:"run_planned_dag,omitempty"`
+	TotalChunks    int      `json:"total_chunks"`
+	Completed      int      `json:"completed"`
+	Failed         int      `json:"failed"`
+	FollowUpTotal  int      `json:"follow_up_total,omitempty"`
+	FollowUpFailed int      `json:"follow_up_failed,omitempty"`
+	ActionTotal    int      `json:"action_total,omitempty"`
+	ActionFailed   int      `json:"action_failed,omitempty"`
 }
 
 type batchPortScanChunk struct {
@@ -72,17 +72,17 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 	input = normalizeBatchPortScanInput(input)
 
 	chunks := buildPortScanChunks(input.Targets, input.ChunkPrefix)
-	chunks = prioritizePortScanChunks(chunks, input.PriorityTargets, input.ChunkPrefix)
+	chunks = schedulePortScanChunks(chunks, input.NowTargets, input.ChunkPrefix)
 	result := &BatchPortScanResult{
-		Targets:         input.Targets,
-		PriorityTargets: input.PriorityTargets,
-		Ports:           input.Ports,
-		MaxConcurrency:  input.MaxConcurrency,
-		ChunkPrefix:     input.ChunkPrefix,
-		MaxAttempts:     input.MaxAttempts,
-		RetryDelay:      input.RetryDelaySeconds,
-		RunPlannedDAG:   input.RunPlannedDAG,
-		TotalChunks:     len(chunks),
+		Targets:        input.Targets,
+		NowTargets:     input.NowTargets,
+		Ports:          input.Ports,
+		MaxConcurrency: input.MaxConcurrency,
+		ChunkPrefix:    input.ChunkPrefix,
+		MaxAttempts:    input.MaxAttempts,
+		RetryDelay:     input.RetryDelaySeconds,
+		RunPlannedDAG:  input.RunPlannedDAG,
+		TotalChunks:    len(chunks),
 	}
 	parentID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	if len(chunks) == 0 {
@@ -108,7 +108,12 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 		if err := upsertPortScanBatchChunk(stateCtx, parentID, chunk, "", "pending", ""); err != nil {
 			return result, err
 		}
-		workItems = append(workItems, portScanChunkWorkItem(parentID, input, chunk, "", "pending", "", chunkPriority(chunk, input.PriorityTargets, input.ChunkPrefix)))
+		schedule := chunkSchedule(chunk, input.NowTargets, input.ChunkPrefix)
+		if shouldRunDNSPreflight(chunk) {
+			workItems = append(workItems, dnsPreflightWorkItem(parentID, input, chunk, "", "pending", "", schedule))
+			continue
+		}
+		workItems = append(workItems, portScanChunkWorkItem(parentID, input, chunk, "", "pending", "", schedule))
 	}
 	if err := upsertBatchWorkItems(stateCtx, workItems); err != nil {
 		return result, err
@@ -221,7 +226,7 @@ func campaignPaused(ctx workflow.Context, campaignID string) (bool, error) {
 	return status == "paused", nil
 }
 
-func portScanChunkWorkItem(batchID string, input BatchPortScanInput, chunk batchPortScanChunk, workflowID, status, errorMessage string, priority int) data.WorkItem {
+func portScanChunkWorkItem(batchID string, input BatchPortScanInput, chunk batchPortScanChunk, workflowID, status, errorMessage string, schedule string) data.WorkItem {
 	return data.WorkItem{
 		ID:          portScanChunkWorkItemID(batchID, chunk.Chunk),
 		CampaignID:  input.CampaignID,
@@ -231,7 +236,25 @@ func portScanChunkWorkItem(batchID string, input BatchPortScanInput, chunk batch
 		Artifact:    "gogo",
 		Queue:       "portscan",
 		Input:       mustMarshal(map[string]interface{}{"ip": chunk.Chunk, "ports": input.Ports, "source_target": chunk.Target}),
-		Priority:    priority,
+		Schedule:    data.NormalizeSchedule(schedule),
+		Status:      status,
+		MaxAttempts: input.MaxAttempts,
+		WorkflowID:  workflowID,
+		Error:       errorMessage,
+	}
+}
+
+func dnsPreflightWorkItem(batchID string, input BatchPortScanInput, chunk batchPortScanChunk, workflowID, status, errorMessage string, schedule string) data.WorkItem {
+	return data.WorkItem{
+		ID:          dnsPreflightWorkItemID(batchID, chunk.Chunk),
+		CampaignID:  input.CampaignID,
+		BatchID:     batchID,
+		Type:        "dns_preflight",
+		Target:      chunk.Chunk,
+		Artifact:    "dns_preflight",
+		Queue:       "dns",
+		Input:       mustMarshal(map[string]interface{}{"target": chunk.Chunk, "source_target": chunk.Target}),
+		Schedule:    data.NormalizeSchedule(schedule),
 		Status:      status,
 		MaxAttempts: input.MaxAttempts,
 		WorkflowID:  workflowID,
@@ -243,6 +266,10 @@ func portScanChunkWorkItemID(batchID, chunk string) string {
 	return data.GenerateID("work_item", batchID, "portscan_chunk", chunk)
 }
 
+func dnsPreflightWorkItemID(batchID, chunk string) string {
+	return data.GenerateID("work_item", batchID, "dns_preflight", chunk)
+}
+
 func plannedDAGFollowUpWorkItemID(batchID, chunk string, iteration int) string {
 	if iteration <= 0 {
 		iteration = 1
@@ -250,25 +277,29 @@ func plannedDAGFollowUpWorkItemID(batchID, chunk string, iteration int) string {
 	return data.GenerateID("work_item", batchID, "planned_dag_followup", chunk, fmt.Sprintf("%d", iteration))
 }
 
-func chunkPriority(chunk batchPortScanChunk, priorityTargets []string, chunkPrefix int) int {
-	if len(priorityTargets) == 0 {
-		return 0
+func shouldRunDNSPreflight(chunk batchPortScanChunk) bool {
+	return !workflowTargetIsCIDR(chunk.Chunk)
+}
+
+func chunkSchedule(chunk batchPortScanChunk, nowTargets []string, chunkPrefix int) string {
+	if len(nowTargets) == 0 {
+		return data.ScheduleBatch
 	}
-	for _, target := range priorityTargets {
+	for _, target := range nowTargets {
 		target = strings.TrimSpace(target)
 		if target == "" {
 			continue
 		}
 		if target == chunk.Target || target == chunk.Chunk {
-			return 100
+			return data.ScheduleNow
 		}
-		for _, priorityChunk := range splitCIDRToPrefix(target, chunkPrefix) {
-			if priorityChunk == chunk.Chunk {
-				return 100
+		for _, nowChunk := range splitCIDRToPrefix(target, chunkPrefix) {
+			if nowChunk == chunk.Chunk {
+				return data.ScheduleNow
 			}
 		}
 	}
-	return 0
+	return data.ScheduleBatch
 }
 
 func buildPortScanChunks(targets []string, chunkPrefix int) []batchPortScanChunk {
@@ -290,32 +321,32 @@ func buildPortScanChunks(targets []string, chunkPrefix int) []batchPortScanChunk
 	return chunks
 }
 
-func prioritizePortScanChunks(chunks []batchPortScanChunk, priorityTargets []string, chunkPrefix int) []batchPortScanChunk {
-	if len(chunks) == 0 || len(priorityTargets) == 0 {
+func schedulePortScanChunks(chunks []batchPortScanChunk, nowTargets []string, chunkPrefix int) []batchPortScanChunk {
+	if len(chunks) == 0 || len(nowTargets) == 0 {
 		return chunks
 	}
-	priority := make(map[string]bool)
-	for _, target := range priorityTargets {
+	now := make(map[string]bool)
+	for _, target := range nowTargets {
 		target = strings.TrimSpace(target)
 		if target == "" {
 			continue
 		}
-		priority[target] = true
+		now[target] = true
 		for _, chunk := range splitCIDRToPrefix(target, chunkPrefix) {
-			priority[chunk] = true
+			now[chunk] = true
 		}
 	}
-	if len(priority) == 0 {
+	if len(now) == 0 {
 		return chunks
 	}
 	out := make([]batchPortScanChunk, 0, len(chunks))
 	for _, chunk := range chunks {
-		if priority[chunk.Chunk] || priority[chunk.Target] {
+		if now[chunk.Chunk] || now[chunk.Target] {
 			out = append(out, chunk)
 		}
 	}
 	for _, chunk := range chunks {
-		if priority[chunk.Chunk] || priority[chunk.Target] {
+		if now[chunk.Chunk] || now[chunk.Target] {
 			continue
 		}
 		out = append(out, chunk)

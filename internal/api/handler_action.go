@@ -24,7 +24,6 @@ type ActionRecordResponse struct {
 	Target      string          `json:"target"`
 	Artifact    string          `json:"artifact"`
 	Input       json.RawMessage `json:"input"`
-	Priority    int             `json:"priority"`
 	Reason      string          `json:"reason"`
 	Status      string          `json:"status"`
 	Attempts    int             `json:"attempts"`
@@ -55,7 +54,6 @@ func (s *Server) ListActions(c *gin.Context) {
 			Target:      record.Target,
 			Artifact:    record.Artifact,
 			Input:       inputJSONResponse(record.Input, rawInput),
-			Priority:    record.Priority,
 			Reason:      record.Reason,
 			Status:      record.Status,
 			Attempts:    record.Attempts,

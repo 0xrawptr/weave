@@ -35,3 +35,12 @@ func splitCIDRToPrefix(target string, prefix int) []string {
 	}
 	return out
 }
+
+func workflowTargetIsCIDR(target string) bool {
+	_, _, err := net.ParseCIDR(target)
+	return err == nil
+}
+
+func workflowTargetIsIP(target string) bool {
+	return net.ParseIP(target) != nil
+}

@@ -47,20 +47,51 @@ func TestBuildPortScanChunksDeduplicates(t *testing.T) {
 	}
 }
 
-func TestPrioritizePortScanChunks(t *testing.T) {
+func TestShouldRunDNSPreflight(t *testing.T) {
+	tests := []struct {
+		name  string
+		chunk batchPortScanChunk
+		want  bool
+	}{
+		{name: "domain", chunk: batchPortScanChunk{Target: "example.com", Chunk: "example.com"}, want: true},
+		{name: "single ip", chunk: batchPortScanChunk{Target: "10.0.0.1", Chunk: "10.0.0.1"}, want: true},
+		{name: "cidr", chunk: batchPortScanChunk{Target: "10.0.0.0/24", Chunk: "10.0.0.0/24"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRunDNSPreflight(tt.chunk); got != tt.want {
+				t.Fatalf("shouldRunDNSPreflight(%#v) = %v, want %v", tt.chunk, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDNSPreflightWorkItem(t *testing.T) {
+	input := BatchPortScanInput{CampaignID: "camp-1", MaxAttempts: 2}
+	chunk := batchPortScanChunk{Target: "example.com", Chunk: "example.com"}
+	item := dnsPreflightWorkItem("batch-1", input, chunk, "", "pending", "", data.ScheduleNow)
+	if item.Type != "dns_preflight" || item.Artifact != "dns_preflight" || item.Queue != "dns" {
+		t.Fatalf("unexpected preflight item: %#v", item)
+	}
+	if item.Target != "example.com" || item.Schedule != data.ScheduleNow || item.MaxAttempts != 2 {
+		t.Fatalf("unexpected preflight metadata: %#v", item)
+	}
+}
+
+func TestSchedulePortScanChunks(t *testing.T) {
 	chunks := buildPortScanChunks([]string{
 		"10.0.0.0/23",
 		"10.0.2.0/24",
 	}, 24)
-	got := prioritizePortScanChunks(chunks, []string{"10.0.1.0/24"}, 24)
+	got := schedulePortScanChunks(chunks, []string{"10.0.1.0/24"}, 24)
 	if len(got) != 3 {
 		t.Fatalf("len(got) = %d, want 3: %#v", len(got), got)
 	}
 	if got[0].Chunk != "10.0.1.0/24" {
-		t.Fatalf("priority chunk was not first: %#v", got)
+		t.Fatalf("scheduled chunk was not first: %#v", got)
 	}
 	if got[1].Chunk != "10.0.0.0/24" || got[2].Chunk != "10.0.2.0/24" {
-		t.Fatalf("non-priority order changed unexpectedly: %#v", got)
+		t.Fatalf("batch order changed unexpectedly: %#v", got)
 	}
 }
 
@@ -73,13 +104,13 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 			PlannedDAGMaxIterations: 3,
 		},
 	}
-	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Schedule: data.ScheduleBatch}
 	node := planner.DAGPlanNode{
 		ID:       "node-spray",
 		Artifact: "spray",
 		Target:   "10.0.0.0/24",
 		Input:    map[string]any{"base_urls": []string{"http://10.0.0.1:8080"}, "wordlist_mode": "full"},
-		Priority: 90,
+		Decision: planner.Decision{Schedule: data.ScheduleNow},
 		Reason:   "expand attack surface",
 		DedupKey: "dedup-spray-full",
 	}
@@ -88,7 +119,7 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 	if item.Type != "spray_shard" || item.Artifact != "spray" || item.Queue != "spray" {
 		t.Fatalf("unexpected work item mapping: %#v", item)
 	}
-	if item.ParentID != parent.ID || item.Priority != 90 || item.MaxAttempts != 2 {
+	if item.ParentID != parent.ID || item.Schedule != data.ScheduleNow || item.MaxAttempts != 2 {
 		t.Fatalf("unexpected work item metadata: %#v", item)
 	}
 
@@ -113,7 +144,7 @@ func TestActionWorkItemFromDAGNode(t *testing.T) {
 	}
 }
 
-func TestActionWorkItemInheritsParentPriority(t *testing.T) {
+func TestActionWorkItemUsesNowScheduleFromParentOrNode(t *testing.T) {
 	input := SchedulerWorkflowInput{
 		BatchID: "batch-1",
 		BatchInput: BatchPortScanInput{
@@ -121,21 +152,21 @@ func TestActionWorkItemInheritsParentPriority(t *testing.T) {
 			MaxAttempts: 1,
 		},
 	}
-	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Schedule: data.ScheduleNow}
 	node := planner.DAGPlanNode{
 		ID:       "node-fingers",
 		Artifact: "fingers",
 		Target:   "10.0.0.0/24",
-		Priority: 50,
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
 	}
 
 	item := actionWorkItemFromDAGNode(input, parent, node, 1, 2)
-	if item.Priority != 80 {
-		t.Fatalf("priority = %d, want inherited parent priority 80", item.Priority)
+	if item.Schedule != data.ScheduleNow {
+		t.Fatalf("schedule = %q, want now", item.Schedule)
 	}
 }
 
-func TestPlannedDAGFollowUpWorkItemUsesSignalPriority(t *testing.T) {
+func TestPlannedDAGFollowUpWorkItemUsesSignalSchedule(t *testing.T) {
 	input := SchedulerWorkflowInput{
 		BatchID: "batch-1",
 		BatchInput: BatchPortScanInput{
@@ -143,26 +174,32 @@ func TestPlannedDAGFollowUpWorkItemUsesSignalPriority(t *testing.T) {
 			PlannedDAGMaxIterations: 2,
 		},
 	}
-	parent := data.WorkItem{ID: "chunk-1", Target: "10.0.0.0/24", Priority: 0}
+	parent := data.WorkItem{ID: "chunk-1", Target: "10.0.0.0/24", Schedule: data.ScheduleBatch}
 
-	item := plannedDAGFollowUpWorkItemFromScheduler(input, parent, 70)
-	if item.Priority != 70 {
-		t.Fatalf("priority = %d, want 70", item.Priority)
+	item := plannedDAGFollowUpWorkItemFromScheduler(input, parent, data.ScheduleNow)
+	if item.Schedule != data.ScheduleNow {
+		t.Fatalf("schedule = %q, want now", item.Schedule)
 	}
 	if item.ParentID != parent.ID || item.Target != parent.Target {
 		t.Fatalf("unexpected follow-up item: %#v", item)
 	}
 }
 
-func TestPlannerSignalPriority(t *testing.T) {
-	if got := plannerSignalPriority(planner.AssetCondition{Type: "service", Status: "observed"}); got >= schedulerHighValuePriority {
-		t.Fatalf("observed service priority = %d, should stay below high-value threshold %d", got, schedulerHighValuePriority)
+func TestPlannerSignalSchedule(t *testing.T) {
+	if got := plannerSignalSchedule(planner.AssetCondition{EventType: "changed"}); got != data.ScheduleNow {
+		t.Fatalf("changed event schedule = %q, want now", got)
 	}
-	if got := plannerSignalPriority(planner.AssetCondition{Type: "fingerprint", Status: "observed"}); got < schedulerHighValuePriority {
-		t.Fatalf("observed fingerprint priority = %d, want high-value threshold %d or above", got, schedulerHighValuePriority)
+	if got := plannerSignalSchedule(planner.AssetCondition{EventType: "new"}); got != data.ScheduleNow {
+		t.Fatalf("new event schedule = %q, want now", got)
 	}
-	if got := plannerSignalPriority(planner.AssetCondition{Type: "service", Status: "confirmed"}); got < schedulerHighValuePriority {
-		t.Fatalf("confirmed service priority = %d, want high-value threshold %d or above", got, schedulerHighValuePriority)
+	if got := plannerSignalSchedule(planner.AssetCondition{Type: "service", Status: "observed"}); got != data.ScheduleBatch {
+		t.Fatalf("observed service schedule = %q, want batch", got)
+	}
+	if got := plannerSignalSchedule(planner.AssetCondition{Type: "fingerprint", Status: "observed"}); got != data.ScheduleNow {
+		t.Fatalf("observed fingerprint schedule = %q, want now", got)
+	}
+	if got := plannerSignalSchedule(planner.AssetCondition{Type: "service", Status: "confirmed"}); got != data.ScheduleNow {
+		t.Fatalf("confirmed service schedule = %q, want now", got)
 	}
 }
 
@@ -208,7 +245,7 @@ func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 			SprayShardWords:    2,
 		},
 	}
-	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Schedule: data.ScheduleBatch}
 	node := planner.DAGPlanNode{
 		ID:       "node-spray",
 		Artifact: "spray",
@@ -217,7 +254,7 @@ func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 			"base_urls": []string{"http://10.0.0.1:8080", "http://10.0.0.2:8080"},
 			"wordlist":  []string{"a", "b", "c"},
 		},
-		Priority: 90,
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
 	}
 
 	items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3)
@@ -253,7 +290,7 @@ func TestFullSprayShardWorkItemsUseWordlistRanges(t *testing.T) {
 			SprayShardWords:    500,
 		},
 	}
-	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Schedule: data.ScheduleBatch}
 	node := planner.DAGPlanNode{
 		ID:       "node-spray",
 		Artifact: "spray",
@@ -262,7 +299,7 @@ func TestFullSprayShardWorkItemsUseWordlistRanges(t *testing.T) {
 			"base_urls":     []string{"http://10.0.0.1:8080"},
 			"wordlist_mode": "full",
 		},
-		Priority: 90,
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
 	}
 
 	items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3)
@@ -292,7 +329,7 @@ func TestFullSprayShardWorkItemsUseSingleBaseURLChunks(t *testing.T) {
 			SprayShardWords:    500,
 		},
 	}
-	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Schedule: data.ScheduleBatch}
 	node := planner.DAGPlanNode{
 		ID:       "node-spray",
 		Artifact: "spray",
@@ -301,7 +338,7 @@ func TestFullSprayShardWorkItemsUseSingleBaseURLChunks(t *testing.T) {
 			"base_urls":     []string{"http://10.0.0.1:8080", "http://10.0.0.2:8080"},
 			"wordlist_mode": "full",
 		},
-		Priority: 90,
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
 	}
 
 	items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3)
@@ -363,7 +400,7 @@ func TestNucleiGroupWorkItemsFromDAGNode(t *testing.T) {
 			NucleiGroupTemplates: 2,
 		},
 	}
-	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Priority: 80}
+	parent := data.WorkItem{ID: "parent-1", Target: "10.0.0.0/24", Schedule: data.ScheduleBatch}
 	node := planner.DAGPlanNode{
 		ID:       "node-nuclei",
 		Artifact: "nuclei",
@@ -372,7 +409,7 @@ func TestNucleiGroupWorkItemsFromDAGNode(t *testing.T) {
 			"targets": []string{"http://a", "http://b", "http://c"},
 			"ids":     []string{"tpl-1", "tpl-2", "tpl-3"},
 		},
-		Priority: 95,
+		Decision: planner.Decision{Schedule: data.ScheduleNow},
 	}
 
 	items := nucleiGroupWorkItemsFromDAGNode(input, parent, node, 1, 3)

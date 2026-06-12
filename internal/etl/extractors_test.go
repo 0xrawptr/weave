@@ -25,8 +25,8 @@ func TestSprayExtractor(t *testing.T) {
 		t.Fatalf("expected url entity, got %#v", result.Entities)
 	}
 	admin := findEntity(result.Entities, "url", "https://example.com/admin")
-	if admin == nil || admin.Priority < 60 {
-		t.Fatalf("expected high-value admin URL priority, got %#v", admin)
+	if admin == nil || admin.Quality == nil || admin.Quality.Layer != "interesting" {
+		t.Fatalf("expected interesting admin URL quality, got %#v", admin)
 	}
 	if admin.Status != "candidate" {
 		t.Fatalf("expected admin URL candidate status, got %#v", admin)

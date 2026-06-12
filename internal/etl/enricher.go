@@ -114,9 +114,6 @@ func (k *KnowledgeEnricher) Enrich(ctx context.Context, result *ExtractResult) (
 		result.Entities[i].CVEIntel = mergeCVEInfo(result.Entities[i].CVEIntel, convertCVEIntel(enriched.CVEIntel)...)
 		if len(enriched.TemplateIDs) > 0 || len(enriched.CVEs) > 0 {
 			result.Entities[i].Reason = "fingerprint matched local knowledge candidates"
-			if result.Entities[i].Priority < enrichedPriority(result.Entities[i].CVEIntel) {
-				result.Entities[i].Priority = enrichedPriority(result.Entities[i].CVEIntel)
-			}
 		}
 	}
 	return result, nil
@@ -156,28 +153,6 @@ func mergeKnowledgeCVEIntel(values []knowledge.CVEIntel, additions ...knowledge.
 		values = append(values, addition)
 	}
 	return values
-}
-
-func enrichedPriority(intel []CVEInfo) int {
-	priority := 0
-	for _, item := range intel {
-		score := 0
-		if item.KEV {
-			score += 70
-		}
-		if item.EPSSPercentile >= 0.95 {
-			score += 20
-		} else if item.EPSSPercentile >= 0.8 {
-			score += 10
-		}
-		if item.CVSSScore >= 9 {
-			score += 10
-		}
-		if score > priority {
-			priority = score
-		}
-	}
-	return priority
 }
 
 func convertCVEIntel(values []knowledge.CVEIntel) []CVEInfo {

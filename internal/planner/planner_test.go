@@ -23,20 +23,17 @@ func TestPlanFromStateUsesPreciseNucleiIDs(t *testing.T) {
 		URLs:         []string{"https://example.com"},
 		Fingerprints: []string{"weblogic"},
 		TemplateIDs:  []string{"CVE-2020-14882"},
-		CVEs:         []data.Asset{{Value: "CVE-2020-14882", Priority: 95}},
+		CVEs:         []data.Asset{{Value: "CVE-2020-14882"}},
 	})
 	nuclei := findAction(actions, "nuclei")
 	if nuclei == nil {
 		t.Fatalf("missing nuclei action: %#v", actions)
 	}
-	if nuclei.Priority != 95 {
-		t.Fatalf("expected cve priority to win, got %d", nuclei.Priority)
+	if nuclei.Decision.Schedule != ScheduleNow || nuclei.Decision.Suppressed {
+		t.Fatalf("expected precise nuclei to run now, got %#v", nuclei.Decision)
 	}
 	if nuclei.DedupKey == "" {
 		t.Fatalf("expected dedup key")
-	}
-	if nuclei.Score <= 0 {
-		t.Fatalf("expected positive score, got %d", nuclei.Score)
 	}
 	if !hasEvidence(nuclei.Evidence, "cve", "CVE-2020-14882") {
 		t.Fatalf("expected CVE evidence, got %#v", nuclei.Evidence)
@@ -244,7 +241,7 @@ func TestWorkItemsCoverPendingSprayBaseURLs(t *testing.T) {
 		Target:     "example.com",
 		Artifact:   "spray",
 		Input:      raw,
-		Priority:   80,
+		Schedule:   data.ScheduleBatch,
 		Status:     data.WorkItemStatusPending,
 	}})
 
@@ -320,7 +317,7 @@ func TestPlanFromStateUsesHighValueURLNucleiFallback(t *testing.T) {
 	}
 }
 
-func TestPlanFromStateScoresPreciseTemplateAboveBroadTags(t *testing.T) {
+func TestPlanFromStateSchedulesPreciseTemplateBeforeBroadTags(t *testing.T) {
 	precise := PlanFromState(State{
 		Target:       "example.com",
 		URLs:         []string{"https://example.com"},
@@ -328,7 +325,6 @@ func TestPlanFromStateScoresPreciseTemplateAboveBroadTags(t *testing.T) {
 		TemplateIDs:  []string{"CVE-2020-14882"},
 		CVEs: []data.Asset{{
 			Value:    "CVE-2020-14882",
-			Priority: 100,
 			Severity: "critical",
 			Status:   "candidate",
 		}},
@@ -344,31 +340,28 @@ func TestPlanFromStateScoresPreciseTemplateAboveBroadTags(t *testing.T) {
 	if preciseNuclei == nil || broadNuclei == nil {
 		t.Fatalf("missing nuclei actions: precise=%#v broad=%#v", precise, broad)
 	}
-	if preciseNuclei.Score <= broadNuclei.Score {
-		t.Fatalf("expected precise score > broad score, got precise=%d broad=%d", preciseNuclei.Score, broadNuclei.Score)
+	if preciseNuclei.Decision.Schedule != ScheduleNow {
+		t.Fatalf("expected precise nuclei to run now, got %#v", preciseNuclei.Decision)
+	}
+	if broadNuclei.Decision.Schedule != ScheduleBatch {
+		t.Fatalf("expected broad nuclei to run in batch, got %#v", broadNuclei.Decision)
 	}
 }
 
-func TestPlanFromStateUsesGraphEvidenceForScoring(t *testing.T) {
+func TestPlanFromStatePreservesGraphEvidenceInDecision(t *testing.T) {
 	base := State{
 		Target:       "example.com",
 		URLs:         []string{"https://example.com"},
 		Fingerprints: []string{"weblogic"},
 		TemplateIDs:  []string{"CVE-2020-14882"},
 	}
-	withoutEvidence := findAction(PlanFromState(base), "nuclei")
-	if withoutEvidence == nil {
-		t.Fatalf("missing nuclei action")
-	}
-
 	base.Evidence = []data.EvidenceRecord{
-		{Type: "product", Value: "Oracle WebLogic Server", Priority: 20, Status: "candidate"},
-		{Type: "cve", Value: "CVE-2020-14882", Priority: 100, Severity: "critical", Status: "candidate"},
-		{Type: "template", Value: "CVE-2020-14882", Priority: 70, Status: "candidate"},
+		{Type: "product", Value: "Oracle WebLogic Server", Status: "candidate"},
+		{Type: "cve", Value: "CVE-2020-14882", Severity: "critical", Status: "candidate"},
+		{Type: "template", Value: "CVE-2020-14882", Status: "candidate"},
 		{
 			Type:     "intel",
 			Value:    "CVE-2020-14882 KEV EPSS 0.99 CVSS 9.8",
-			Priority: 100,
 			Severity: "CRITICAL",
 			Status:   "candidate",
 			Path: []data.EvidencePathStep{
@@ -383,8 +376,8 @@ func TestPlanFromStateUsesGraphEvidenceForScoring(t *testing.T) {
 	if withEvidence == nil {
 		t.Fatalf("missing nuclei action with evidence")
 	}
-	if withEvidence.Score <= withoutEvidence.Score {
-		t.Fatalf("expected graph evidence to improve score, without=%d with=%d", withoutEvidence.Score, withEvidence.Score)
+	if withEvidence.Decision.Schedule != ScheduleNow {
+		t.Fatalf("expected graph evidence to schedule now, got %#v", withEvidence.Decision)
 	}
 	if !hasEvidence(withEvidence.Evidence, "intel", "CVE-2020-14882 KEV EPSS 0.99 CVSS 9.8") {
 		t.Fatalf("missing intel evidence: %#v", withEvidence.Evidence)
@@ -395,31 +388,26 @@ func TestPlanFromStateUsesGraphEvidenceForScoring(t *testing.T) {
 	}
 }
 
-func TestScoreActionRewardsCompleteEvidenceChain(t *testing.T) {
-	shallow := Action{
+func TestDecisionForActionUsesPreciseEvidence(t *testing.T) {
+	action := Action{
 		Artifact: "nuclei",
-		Priority: 70,
-		Cost:     35,
-		Risk:     "medium",
-		Evidence: []Evidence{{Type: "product", Value: "Spring Boot", Priority: 40}},
+		Evidence: []Evidence{{
+			Type:     "intel",
+			Value:    "CVE-2021-44228 KEV EPSS 0.97 CVSS 10",
+			Severity: "critical",
+			Status:   "candidate",
+			Path: []EvidencePathStep{
+				{Type: "fingerprint", Value: "log4j"},
+				{Relation: "identifies_product", Type: "product", Value: "Apache Log4j"},
+				{Relation: "affected_by", Type: "cve", Value: "CVE-2021-44228"},
+				{Relation: "has_template", Type: "template", Value: "CVE-2021-44228"},
+				{Relation: "has_intel", Type: "intel", Value: "CVE-2021-44228 KEV EPSS 0.97 CVSS 10"},
+			},
+		}},
 	}
-	complete := shallow
-	complete.Evidence = []Evidence{{
-		Type:     "intel",
-		Value:    "CVE-2021-44228 KEV EPSS 0.97 CVSS 10",
-		Priority: 100,
-		Severity: "critical",
-		Status:   "candidate",
-		Path: []EvidencePathStep{
-			{Type: "fingerprint", Value: "log4j"},
-			{Relation: "identifies_product", Type: "product", Value: "Apache Log4j"},
-			{Relation: "affected_by", Type: "cve", Value: "CVE-2021-44228"},
-			{Relation: "has_template", Type: "template", Value: "CVE-2021-44228"},
-			{Relation: "has_intel", Type: "intel", Value: "CVE-2021-44228 KEV EPSS 0.97 CVSS 10"},
-		},
-	}}
-	if scoreAction(complete) <= scoreAction(shallow) {
-		t.Fatalf("expected complete evidence chain to score higher, shallow=%d complete=%d", scoreAction(shallow), scoreAction(complete))
+	decision := decisionForAction(action)
+	if decision.Schedule != ScheduleNow || decision.Suppressed {
+		t.Fatalf("expected precise evidence to schedule now, got %#v", decision)
 	}
 }
 
@@ -430,8 +418,6 @@ func TestPlanDAGFromActionsOrdersAndLinksStages(t *testing.T) {
 			Target:   "example.com",
 			Artifact: "nuclei",
 			Input:    map[string]interface{}{"targets": []string{"https://example.com"}, "ids": []string{"CVE-2020-14882"}},
-			Priority: 80,
-			Score:    100,
 			DedupKey: "nuclei-key",
 		},
 		{
@@ -439,8 +425,6 @@ func TestPlanDAGFromActionsOrdersAndLinksStages(t *testing.T) {
 			Target:   "example.com",
 			Artifact: "spray",
 			Input:    map[string]interface{}{"base_urls": []string{"https://example.com"}, "wordlist_mode": "full"},
-			Priority: 80,
-			Score:    60,
 			DedupKey: "spray-key",
 		},
 		{
@@ -448,8 +432,6 @@ func TestPlanDAGFromActionsOrdersAndLinksStages(t *testing.T) {
 			Target:   "example.com",
 			Artifact: "fingers",
 			Input:    map[string]interface{}{"mode": "http_match", "urls": []string{"https://example.com"}},
-			Priority: 50,
-			Score:    50,
 			DedupKey: "fingers-key",
 		},
 	}

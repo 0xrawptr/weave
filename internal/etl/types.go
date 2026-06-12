@@ -14,7 +14,6 @@ type Entity struct {
 	Version     string    `json:"version,omitempty"`
 	Confidence  float64   `json:"confidence,omitempty"`
 	Severity    string    `json:"severity,omitempty"`
-	Priority    int       `json:"priority,omitempty"`
 	Status      string    `json:"status,omitempty"` // observed, candidate, confirmed
 	Reason      string    `json:"reason,omitempty"` // human-readable explanation for enrichment/planning
 	SourceRunID string    `json:"source_run_id,omitempty"`
