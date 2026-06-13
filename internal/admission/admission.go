@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
@@ -72,10 +73,11 @@ func (p Policy) Decide(item data.WorkItem, seen map[string]bool) Decision {
 		return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "work item already planned"}
 	}
 	envelope := parseEnvelope(item)
-	if envelope.ShardIndex <= 0 {
-		if key := actionKey(item, envelope); key != "" && seen[key] {
-			return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "action already planned"}
-		}
+	if key := actionBaseKey(item, envelope); key != "" && seen[key] {
+		return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "action already planned"}
+	}
+	if key := actionPreciseKey(item, envelope); key != "" && seen[key] {
+		return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "action shard already planned"}
 	}
 	if requiresApproval(item, envelope) {
 		return Decision{ItemID: item.ID, Status: StatusApprovalRequired, Reason: "action requires manual approval"}
@@ -109,7 +111,7 @@ func blockingKeys(items []data.WorkItem) map[string]bool {
 		if !blocks(item.Status) {
 			continue
 		}
-		rememberBlockingKeys(seen, item)
+		rememberExistingBlockingKeys(seen, item)
 	}
 	return seen
 }
@@ -117,10 +119,16 @@ func blockingKeys(items []data.WorkItem) map[string]bool {
 func rememberBlockingKeys(seen map[string]bool, item data.WorkItem) {
 	seen[itemIDKey(item)] = true
 	envelope := parseEnvelope(item)
-	if envelope.ShardIndex <= 0 {
-		if key := actionKey(item, envelope); key != "" {
-			seen[key] = true
-		}
+	if key := actionPreciseKey(item, envelope); key != "" {
+		seen[key] = true
+	}
+}
+
+func rememberExistingBlockingKeys(seen map[string]bool, item data.WorkItem) {
+	rememberBlockingKeys(seen, item)
+	envelope := parseEnvelope(item)
+	if key := actionBaseKey(item, envelope); key != "" {
+		seen[key] = true
 	}
 }
 
@@ -128,11 +136,19 @@ func itemIDKey(item data.WorkItem) string {
 	return "id:" + item.ID
 }
 
-func actionKey(item data.WorkItem, envelope workItemEnvelope) string {
+func actionBaseKey(item data.WorkItem, envelope workItemEnvelope) string {
 	if envelope.DedupKey == "" {
 		return ""
 	}
 	return strings.Join([]string{"action", item.CampaignID, item.BatchID, item.Target, item.Type, item.Artifact, envelope.DedupKey}, "\x00")
+}
+
+func actionPreciseKey(item data.WorkItem, envelope workItemEnvelope) string {
+	base := actionBaseKey(item, envelope)
+	if base == "" || envelope.ShardIndex <= 0 {
+		return base
+	}
+	return strings.Join([]string{base, "shard", strconv.Itoa(envelope.ShardIndex)}, "\x00")
 }
 
 func blocks(status string) bool {

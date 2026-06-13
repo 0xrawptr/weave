@@ -56,6 +56,9 @@ type WorkItemResponse struct {
 	LeaseExpiresAt time.Time       `json:"lease_expires_at,omitempty"`
 	StartedAt      time.Time       `json:"started_at,omitempty"`
 	CompletedAt    time.Time       `json:"completed_at,omitempty"`
+	Tail           bool            `json:"tail"`
+	TailAt         *time.Time      `json:"tail_at,omitempty"`
+	TailReason     string          `json:"tail_reason,omitempty"`
 	IsStale        bool            `json:"is_stale,omitempty"`
 	HeartbeatStale bool            `json:"heartbeat_stale,omitempty"`
 	RunningSeconds int64           `json:"running_seconds,omitempty"`
@@ -133,6 +136,11 @@ func workItemResponse(item data.WorkItem, rawInput bool) WorkItemResponse {
 		LeaseExpiresAt: item.LeaseExpiresAt,
 		StartedAt:      item.StartedAt,
 		CompletedAt:    item.CompletedAt,
+		Tail:           item.Tail,
+		TailReason:     item.TailReason,
+	}
+	if item.Tail && !item.TailAt.IsZero() {
+		resp.TailAt = &item.TailAt
 	}
 	if item.Status == data.WorkItemStatusStarting || item.Status == data.WorkItemStatusRunning {
 		if !item.StartedAt.IsZero() {

@@ -217,6 +217,9 @@ type WorkItem struct {
 	LeaseExpiresAt time.Time `json:"lease_expires_at"`
 	StartedAt      time.Time `json:"started_at"`
 	CompletedAt    time.Time `json:"completed_at"`
+	Tail           bool      `json:"tail,omitempty"`
+	TailAt         time.Time `json:"tail_at,omitempty"`
+	TailReason     string    `json:"tail_reason,omitempty"`
 }
 
 type WorkItemClaimRequest struct {
@@ -235,6 +238,7 @@ type WorkItemClaimRequest struct {
 type SchedulerCapacity struct {
 	CampaignID          string    `json:"campaign_id,omitempty"`
 	BatchID             string    `json:"batch_id,omitempty"`
+	SnapshotKind        string    `json:"snapshot_kind"`
 	Queue               string    `json:"queue"`
 	Artifact            string    `json:"artifact,omitempty"`
 	MinCapacity         int       `json:"min_capacity"`
@@ -253,9 +257,10 @@ type SchedulerCapacity struct {
 	StatRequests        int64     `json:"stat_requests,omitempty"`
 	StatResults         int64     `json:"stat_results,omitempty"`
 	StatErrors          int64     `json:"stat_errors,omitempty"`
-	ErrorRatePercent    int       `json:"error_rate_percent,omitempty"`
+	ErrorRatePercent    float64   `json:"error_rate_percent,omitempty"`
 	LastDecision        string    `json:"last_decision,omitempty"`
 	DecisionReason      string    `json:"decision_reason,omitempty"`
+	SnapshotNote        string    `json:"snapshot_note,omitempty"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
@@ -302,6 +307,14 @@ type WorkItemBulkResult struct {
 	Batches []WorkItemBulkBatch `json:"batches,omitempty"`
 }
 
+type WorkItemTailPolicyRequest struct {
+	Filter                 WorkItemFilter `json:"filter"`
+	Limit                  int            `json:"limit,omitempty"`
+	SprayAfterSeconds      int            `json:"spray_after_seconds,omitempty"`
+	PortscanAfterSeconds   int            `json:"portscan_after_seconds,omitempty"`
+	PortscanMinDonePercent int            `json:"portscan_min_done_percent,omitempty"`
+}
+
 type WorkItemBulkBatch struct {
 	CampaignID string `json:"campaign_id,omitempty"`
 	BatchID    string `json:"batch_id,omitempty"`
@@ -315,6 +328,7 @@ type WorkItemGroupSummary struct {
 	Running                int    `json:"running"`
 	StaleRunning           int    `json:"stale_running,omitempty"`
 	HeartbeatStaleRunning  int    `json:"heartbeat_stale_running,omitempty"`
+	TailRunning            int    `json:"tail_running,omitempty"`
 	Completed              int    `json:"completed"`
 	Failed                 int    `json:"failed"`
 	RetryWaiting           int    `json:"retry_waiting"`
@@ -357,11 +371,12 @@ type CampaignRuntimeView struct {
 	CurrentBottleneck   *RuntimeBottleneck      `json:"current_bottleneck,omitempty"`
 	ExecutionPlan       []RuntimePlanItem       `json:"execution_plan,omitempty"`
 	OpenPhaseWork       []WorkItemGroupSummary  `json:"open_phase_work,omitempty"`
+	RuntimeQueues       []QueueRuntimeState     `json:"runtime_queues,omitempty"`
 	BlockedQueues       []QueueRuntimeState     `json:"blocked_queues,omitempty"`
 	SlowTargets         []TargetRuntimeState    `json:"slow_targets,omitempty"`
 	ArtifactHealth      []ArtifactRuntimeHealth `json:"artifact_health,omitempty"`
 	ProblemArtifacts    []ArtifactRuntimeHealth `json:"problem_artifacts,omitempty"`
-	Capacity            []SchedulerCapacity     `json:"capacity,omitempty"`
+	CapacityDecisions   []SchedulerCapacity     `json:"capacity_decisions,omitempty"`
 	RuntimeWarnings     []string                `json:"runtime_warnings,omitempty"`
 	ETA                 ETARuntimeState         `json:"eta"`
 	Summary             WorkItemProgressSummary `json:"summary"`
@@ -386,6 +401,7 @@ type RuntimeBottleneck struct {
 	Failed       int    `json:"failed,omitempty"`
 	Dead         int    `json:"dead,omitempty"`
 	StaleRunning int    `json:"stale_running,omitempty"`
+	TailRunning  int    `json:"tail_running,omitempty"`
 	ETASeconds   int64  `json:"eta_seconds,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 }
@@ -407,6 +423,7 @@ type RuntimePlanItem struct {
 	RetryWaiting    int    `json:"retry_waiting,omitempty"`
 	Paused          int    `json:"paused,omitempty"`
 	StaleRunning    int    `json:"stale_running,omitempty"`
+	TailRunning     int    `json:"tail_running,omitempty"`
 	ProgressPercent int    `json:"progress_percent,omitempty"`
 	ETASeconds      int64  `json:"eta_seconds,omitempty"`
 	LastError       string `json:"last_error,omitempty"`
@@ -422,6 +439,7 @@ type QueueRuntimeState struct {
 	RetryWaiting int    `json:"retry_waiting,omitempty"`
 	Paused       int    `json:"paused,omitempty"`
 	StaleRunning int    `json:"stale_running,omitempty"`
+	TailRunning  int    `json:"tail_running,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 	Reason       string `json:"reason"`
 }
@@ -431,6 +449,7 @@ type TargetRuntimeState struct {
 	Total                  int    `json:"total"`
 	Queued                 int    `json:"queued"`
 	Running                int    `json:"running"`
+	TailRunning            int    `json:"tail_running,omitempty"`
 	Failed                 int    `json:"failed"`
 	Dead                   int    `json:"dead"`
 	ETASeconds             int64  `json:"eta_seconds,omitempty"`
@@ -440,14 +459,14 @@ type TargetRuntimeState struct {
 }
 
 type ArtifactRuntimeHealth struct {
-	Artifact         string `json:"artifact"`
-	TotalRuns        int    `json:"total_runs"`
-	Requests         int64  `json:"requests,omitempty"`
-	Results          int64  `json:"results,omitempty"`
-	Errors           int64  `json:"errors,omitempty"`
-	ErrorRatePercent int    `json:"error_rate_percent,omitempty"`
-	ThroughputPerMin int64  `json:"throughput_per_min,omitempty"`
-	Reason           string `json:"reason,omitempty"`
+	Artifact         string  `json:"artifact"`
+	TotalRuns        int     `json:"total_runs"`
+	Requests         int64   `json:"requests,omitempty"`
+	Results          int64   `json:"results,omitempty"`
+	Errors           int64   `json:"errors,omitempty"`
+	ErrorRatePercent float64 `json:"error_rate_percent,omitempty"`
+	ThroughputPerMin int64   `json:"throughput_per_min,omitempty"`
+	Reason           string  `json:"reason,omitempty"`
 }
 
 type ETARuntimeState struct {
@@ -457,19 +476,19 @@ type ETARuntimeState struct {
 }
 
 type ArtifactStatSummary struct {
-	Artifact                string `json:"artifact"`
-	TotalRuns               int    `json:"total_runs"`
-	Targets                 int64  `json:"targets,omitempty"`
-	Tasks                   int64  `json:"tasks,omitempty"`
-	Requests                int64  `json:"requests,omitempty"`
-	Results                 int64  `json:"results,omitempty"`
-	Errors                  int64  `json:"errors,omitempty"`
-	ErrorScope              string `json:"error_scope,omitempty"`
-	DurationMs              int64  `json:"duration_ms,omitempty"`
-	AvgDurationMs           int64  `json:"avg_duration_ms,omitempty"`
-	ErrorRatePercent        int    `json:"error_rate_percent,omitempty"`
-	RequestErrorRatePercent int    `json:"request_error_rate_percent,omitempty"`
-	ThroughputPerMin        int64  `json:"throughput_per_min,omitempty"`
+	Artifact                string  `json:"artifact"`
+	TotalRuns               int     `json:"total_runs"`
+	Targets                 int64   `json:"targets,omitempty"`
+	Tasks                   int64   `json:"tasks,omitempty"`
+	Requests                int64   `json:"requests,omitempty"`
+	Results                 int64   `json:"results,omitempty"`
+	Errors                  int64   `json:"errors,omitempty"`
+	ErrorScope              string  `json:"error_scope,omitempty"`
+	DurationMs              int64   `json:"duration_ms,omitempty"`
+	AvgDurationMs           int64   `json:"avg_duration_ms,omitempty"`
+	ErrorRatePercent        float64 `json:"error_rate_percent"`
+	RequestErrorRatePercent float64 `json:"request_error_rate_percent"`
+	ThroughputPerMin        int64   `json:"throughput_per_min,omitempty"`
 }
 
 // RawEvent stores artifact output exactly as produced, before any transformation.

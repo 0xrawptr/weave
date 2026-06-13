@@ -79,11 +79,6 @@ type ScheduledWorkItemWorkflowInput struct {
 	WorkflowID     string                 `json:"workflow_id"`
 }
 
-type portScanItemExecutionResult struct {
-	ItemID string `json:"item_id"`
-	Error  string `json:"error,omitempty"`
-}
-
 const schedulerMaxDispatchPerRun = 10
 const schedulerWakeupSignalName = "scheduler.wakeup"
 const schedulerRunningLeaseSeconds = 90
@@ -113,6 +108,9 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 		return result, err
 	}
 	if err := requeueRetryWaitingScheduledWorkItems(stateCtx, input); err != nil {
+		return result, err
+	}
+	if err := markTailScheduledWorkItems(stateCtx, input); err != nil {
 		return result, err
 	}
 
@@ -185,11 +183,11 @@ func schedulerPhasePlanFor(phase string) schedulerPhasePlan {
 	case CampaignPhaseBootstrap:
 		return schedulerPhasePlan{Phase: CampaignPhaseBootstrap, ItemTypes: []string{"dns_preflight"}}
 	case CampaignPhaseDiscovery:
-		return schedulerPhasePlan{Phase: CampaignPhaseDiscovery, ItemTypes: []string{"portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard"}}
+		return schedulerPhasePlan{Phase: CampaignPhaseDiscovery, ItemTypes: []string{"portscan_chunk", "planned_dag_followup", "fingers_action"}}
 	case CampaignPhaseExpansion:
 		return schedulerPhasePlan{Phase: CampaignPhaseExpansion, ItemTypes: []string{"spray_shard", "fingers_action"}}
 	case CampaignPhaseVerification:
-		return schedulerPhasePlan{Phase: CampaignPhaseVerification, ItemTypes: []string{"nuclei_group"}}
+		return schedulerPhasePlan{Phase: CampaignPhaseVerification, ItemTypes: []string{"nuclei_group", "spray_shard"}}
 	case CampaignPhaseSteady:
 		return schedulerPhasePlan{Phase: CampaignPhaseSteady, ItemTypes: []string{"dns_preflight", "portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard", "nuclei_group"}, NowOnly: true}
 	default:
@@ -294,7 +292,7 @@ func dispatchPhaseWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkf
 	case "dns_preflight":
 		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, "dns", remaining), startScheduledDNSPreflightWorkItem)
 	case "portscan_chunk":
-		return dispatchScheduledPortScanWorkItems(ctx, stateCtx, input, schedule, schedulerPipelineBurst(capacity, "portscan", remaining))
+		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, "portscan", remaining), startScheduledPortScanWorkItem)
 	case "planned_dag_followup":
 		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, "planner", remaining), startScheduledPlannedDAGWorkItem)
 	case "fingers_action", "spray_shard", "nuclei_group":
@@ -380,11 +378,11 @@ func deriveSchedulerCampaignPhaseFromSnapshot(snapshot data.WorkItemProgressSumm
 	sprayOpen := openWorkItems(spray)
 	fingersOpen := openWorkItems(fingers)
 	nucleiOpen := openWorkItems(nuclei)
-	if sprayOpen > 0 && sprayOpen >= nucleiOpen {
-		return CampaignPhaseExpansion
-	}
 	if nucleiOpen > 0 {
 		return CampaignPhaseVerification
+	}
+	if sprayOpen > 0 {
+		return CampaignPhaseExpansion
 	}
 	if fingersOpen > 0 {
 		return CampaignPhaseDiscovery
@@ -435,9 +433,17 @@ func updateCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput, pha
 func openWorkItems(summary planner.WorkItemSummary) int {
 	return summary.ByStatus["pending"] +
 		summary.ByStatus["starting"] +
-		summary.ByStatus["running"] +
+		nonTailRunning(summary.ByStatus) +
 		summary.ByStatus["retry_waiting"] +
 		summary.ByStatus["paused"]
+}
+
+func nonTailRunning(status map[string]int) int {
+	running := status["running"] - status["tail_running"]
+	if running < 0 {
+		return 0
+	}
+	return running
 }
 
 func NormalizeCampaignPhase(phase string) string {
@@ -465,30 +471,6 @@ func dispatchScheduledWorkItems(ctx, stateCtx workflow.Context, input SchedulerW
 	return started, nil
 }
 
-func dispatchScheduledPortScanWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, schedule string, maxStarts int) (int, error) {
-	if maxStarts <= 0 {
-		return 0, nil
-	}
-	items := make([]data.WorkItem, 0, maxStarts)
-	for len(items) < maxStarts {
-		item, err := claimScheduledWorkItem(stateCtx, input, "portscan_chunk", schedule, maxStarts)
-		if err != nil {
-			return len(items), err
-		}
-		if item.ID == "" {
-			break
-		}
-		items = append(items, item)
-	}
-	if len(items) == 0 {
-		return 0, nil
-	}
-	if err := startScheduledPortScanWorkItems(ctx, stateCtx, input, items); err != nil {
-		return 0, err
-	}
-	return len(items), nil
-}
-
 func schedulerPipelineBurst(capacity schedulerCapacityMap, queue string, remaining int) int {
 	if remaining <= 0 {
 		return 0
@@ -503,43 +485,9 @@ func schedulerPipelineBurst(capacity schedulerCapacityMap, queue string, remaini
 	return limit
 }
 
-func startScheduledPortScanWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, items []data.WorkItem) error {
-	if len(items) == 0 {
-		return nil
-	}
-	workflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
-	for _, item := range items {
-		if err := setBatchWorkItemStatusWithLease(stateCtx, item.ID, data.WorkItemStatusRunning, workflowID, "", false, schedulerRunningLeaseSeconds); err != nil {
-			return err
-		}
-	}
-	doneCh := workflow.NewBufferedChannel(ctx, len(items))
-	for _, item := range items {
-		item := item
-		workflow.Go(ctx, func(ctx workflow.Context) {
-			itemStateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-				StartToCloseTimeout: defaultStateActivityTimeout,
-				RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
-			})
-			result := portScanItemExecutionResult{ItemID: item.ID}
-			if err := runScheduledPortScanWorkItem(ctx, itemStateCtx, input, item, workflowID); err != nil {
-				result.Error = err.Error()
-			}
-			doneCh.Send(ctx, result)
-		})
-	}
-	var firstError string
-	for range items {
-		var result portScanItemExecutionResult
-		doneCh.Receive(ctx, &result)
-		if firstError == "" && result.Error != "" {
-			firstError = fmt.Sprintf("portscan item %s failed: %s", result.ItemID, result.Error)
-		}
-	}
-	if firstError != "" {
-		return temporal.NewApplicationError(firstError, "portscan_batch_failed")
-	}
-	return nil
+func startScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
+	childID := fmt.Sprintf("%s-portscan-%s-%d%s", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts, childIDRunSuffix(schedulerChildWorkflowRunToken(ctx)))
+	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledPortScanWorkItemWorkflow)
 }
 
 func startScheduledDNSPreflightWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
@@ -661,6 +609,22 @@ func runScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, schedulerInput
 		return nil
 	}
 	return upsertBatchWorkItem(stateCtx, plannedDAGFollowUpWorkItemFromScheduler(schedulerInput, item, signal.Schedule))
+}
+
+func ScheduledPortScanWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
+	schedulerInput := input.SchedulerInput
+	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
+	defer signalSchedulerWakeup(ctx, schedulerInput, "portscan_done")
+	item := input.Item
+	workflowID := input.WorkflowID
+	if workflowID == "" {
+		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
+	}
+	stateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: defaultStateActivityTimeout,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	return runScheduledPortScanWorkItem(ctx, stateCtx, schedulerInput, item, workflowID)
 }
 
 func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
@@ -1181,6 +1145,7 @@ func workItemSummaryFromGroup(group data.WorkItemGroupSummary) planner.WorkItemS
 			data.WorkItemStatusPending:      group.Pending,
 			data.WorkItemStatusStarting:     group.Starting,
 			data.WorkItemStatusRunning:      group.Running,
+			"tail_running":                  group.TailRunning,
 			data.WorkItemStatusCompleted:    group.Completed,
 			data.WorkItemStatusFailed:       group.Failed,
 			data.WorkItemStatusRetryWaiting: group.RetryWaiting,
@@ -1293,7 +1258,7 @@ func schedulerHasOpenWorkItems(ctx workflow.Context, input SchedulerWorkflowInpu
 	}
 	return summary.ByStatus["pending"] > 0 ||
 		summary.ByStatus["starting"] > 0 ||
-		summary.ByStatus["running"] > 0 ||
+		nonTailRunning(summary.ByStatus) > 0 ||
 		summary.ByStatus["retry_waiting"] > 0 ||
 		summary.ByStatus["paused"] > 0, nil
 }
@@ -1318,6 +1283,20 @@ func requeueRetryWaitingScheduledWorkItems(ctx workflow.Context, input Scheduler
 		},
 		MinAgeSeconds: input.BatchInput.RetryDelaySeconds,
 		Limit:         1000,
+	}).Get(ctx, &result)
+}
+
+func markTailScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
+	var result data.WorkItemBulkResult
+	return workflow.ExecuteActivity(ctx, planner.MarkTailWorkItemsActivityName, data.WorkItemTailPolicyRequest{
+		Filter: data.WorkItemFilter{
+			CampaignID: input.BatchInput.CampaignID,
+			BatchID:    input.BatchID,
+		},
+		Limit:                  1000,
+		SprayAfterSeconds:      10 * 60,
+		PortscanAfterSeconds:   20 * 60,
+		PortscanMinDonePercent: 90,
 	}).Get(ctx, &result)
 }
 

@@ -357,6 +357,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	w.RegisterActivityWithOptions(planActivity.UpdateSchedulerCapacity, activity.RegisterOptions{Name: planner.UpdateSchedulerCapacityActivityName})
 	w.RegisterActivityWithOptions(planActivity.RecoverStaleWorkItems, activity.RegisterOptions{Name: planner.RecoverStaleWorkItemsActivityName})
 	w.RegisterActivityWithOptions(planActivity.RequeueRetryWaitingWorkItems, activity.RegisterOptions{Name: planner.RequeueRetryWaitingWorkItemsActivityName})
+	w.RegisterActivityWithOptions(planActivity.MarkTailWorkItems, activity.RegisterOptions{Name: planner.MarkTailWorkItemsActivityName})
 	log.Printf("registered activity: %s", planner.PlanTargetActivityName)
 	log.Printf("registered activity: %s", planner.PlanDAGTargetActivityName)
 	log.Printf("registered activity: %s", planner.ClaimActionActivityName)
@@ -377,16 +378,18 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	log.Printf("registered activity: %s", planner.UpdateSchedulerCapacityActivityName)
 	log.Printf("registered activity: %s", planner.RecoverStaleWorkItemsActivityName)
 	log.Printf("registered activity: %s", planner.RequeueRetryWaitingWorkItemsActivityName)
+	log.Printf("registered activity: %s", planner.MarkTailWorkItemsActivityName)
 }
 
 func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledDNSPreflightWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)
-	log.Println("registered workflows: batch_portscan, scheduler, scheduled_dns_preflight, scheduled_planned_dag, scheduled_artifact_action, action")
+	log.Println("registered workflows: batch_portscan, scheduler, scheduled_portscan, scheduled_dns_preflight, scheduled_planned_dag, scheduled_artifact_action, action")
 }
 
 func targetType(raw string) string {

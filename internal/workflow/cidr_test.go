@@ -210,9 +210,9 @@ func TestSchedulerPhasePlansGateWorkItemTypes(t *testing.T) {
 		now   bool
 	}{
 		{phase: CampaignPhaseBootstrap, want: []string{"dns_preflight"}},
-		{phase: CampaignPhaseDiscovery, want: []string{"portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard"}},
+		{phase: CampaignPhaseDiscovery, want: []string{"portscan_chunk", "planned_dag_followup", "fingers_action"}},
 		{phase: CampaignPhaseExpansion, want: []string{"spray_shard", "fingers_action"}},
-		{phase: CampaignPhaseVerification, want: []string{"nuclei_group"}},
+		{phase: CampaignPhaseVerification, want: []string{"nuclei_group", "spray_shard"}},
 		{phase: CampaignPhaseSteady, want: []string{"dns_preflight", "portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard", "nuclei_group"}, now: true},
 	}
 	for _, tt := range tests {
@@ -230,6 +230,29 @@ func TestSchedulerPhasePlansGateWorkItemTypes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSchedulerPhasePrefersVerificationOverSprayTail(t *testing.T) {
+	snapshot := data.WorkItemProgressSummary{
+		ByType: []data.WorkItemGroupSummary{
+			{Key: "spray_shard", Running: 3},
+			{Key: "nuclei_group", Pending: 21},
+		},
+	}
+	if got := deriveSchedulerCampaignPhaseFromSnapshot(snapshot); got != CampaignPhaseVerification {
+		t.Fatalf("phase = %q, want verification", got)
+	}
+}
+
+func TestSchedulerPhaseIgnoresBackgroundTailWork(t *testing.T) {
+	snapshot := data.WorkItemProgressSummary{
+		ByType: []data.WorkItemGroupSummary{
+			{Key: "spray_shard", Running: 3, TailRunning: 3},
+		},
+	}
+	if got := deriveSchedulerCampaignPhaseFromSnapshot(snapshot); got != CampaignPhaseSteady {
+		t.Fatalf("phase = %q, want steady", got)
 	}
 }
 

@@ -180,11 +180,11 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 	}
 	current = clampInt(current, policy.Min, policy.Max)
 	stale := group.StaleRunning + group.HeartbeatStaleRunning
-	statErrorRate := percentInt64(stat.Errors, stat.Requests)
+	statErrorRate := percentage(stat.Errors, stat.Requests)
 	workErrors := group.Failed + group.Dead
 	workDone := group.Completed + group.Failed + group.Dead
-	workErrorRate := percentInt(workErrors, workDone)
-	errorRate := maxInt(workErrorRate, statErrorRate)
+	workErrorRate := percentageInt(workErrors, workDone)
+	errorRate := maxFloat64(workErrorRate, statErrorRate)
 
 	next := current
 	decision := "hold"
@@ -194,7 +194,7 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
 		reason = "stale running work detected"
-	case errorRate >= policy.ErrorLimit && errorRate > 0:
+	case errorRate >= float64(policy.ErrorLimit) && errorRate > 0:
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
 		reason = "recent error rate above policy"
@@ -247,6 +247,7 @@ func defaultSchedulerCapacities(request SchedulerCapacityUpdateRequest) []Schedu
 		out = append(out, SchedulerCapacity{
 			CampaignID:          request.CampaignID,
 			BatchID:             request.BatchID,
+			SnapshotKind:        "capacity_controller_decision",
 			Queue:               policy.Queue,
 			Artifact:            policy.Artifact,
 			MinCapacity:         policy.Min,
@@ -255,6 +256,7 @@ func defaultSchedulerCapacities(request SchedulerCapacityUpdateRequest) []Schedu
 			RecommendedCapacity: policy.Initial,
 			LastDecision:        "initial",
 			DecisionReason:      "default capacity policy",
+			SnapshotNote:        "last scheduler capacity controller decision; runtime_queues is the live work_items state",
 			UpdatedAt:           time.Now(),
 		})
 	}
@@ -287,16 +289,23 @@ func minInt(a, b int) int {
 	return b
 }
 
-func percentInt(numerator, denominator int) int {
+func percentageInt(numerator, denominator int) float64 {
 	if denominator <= 0 || numerator <= 0 {
 		return 0
 	}
-	return numerator * 100 / denominator
+	return float64(numerator) * 100 / float64(denominator)
 }
 
-func percentInt64(numerator, denominator int64) int {
+func percentage(numerator, denominator int64) float64 {
 	if denominator <= 0 || numerator <= 0 {
 		return 0
 	}
-	return int(numerator * 100 / denominator)
+	return float64(numerator) * 100 / float64(denominator)
+}
+
+func maxFloat64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }

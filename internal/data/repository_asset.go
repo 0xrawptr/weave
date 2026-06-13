@@ -399,7 +399,11 @@ func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTar
 }
 
 func (r *Repository) assetsInScope(ctx context.Context, scanTarget, campaignID, assetType, source, status string) ([]Asset, error) {
-	assets, err := r.Postgres.QueryAssetsFiltered(ctx, "", assetType, campaignID, status, 100000, 0)
+	assets, err := r.Postgres.QueryAssetsFiltered(ctx, AssetQueryFilter{
+		Type:       assetType,
+		CampaignID: campaignID,
+		Status:     status,
+	}, 100000, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -115,6 +115,34 @@ func TestPlanFromStatePlansFullSprayPerBaseURL(t *testing.T) {
 	}
 }
 
+func TestPlanFromStateDoesNotSprayDiscoveredURLs(t *testing.T) {
+	actions := PlanFromState(State{
+		Target:        "example.com",
+		URLs:          []string{"https://example.com", "https://example.com/auth/admin"},
+		SprayURLs:     []string{"https://example.com/auth/admin"},
+		HighValueURLs: []string{"https://example.com/auth/admin"},
+	})
+	if findAction(actions, "spray") != nil {
+		t.Fatalf("spray-discovered URLs must not trigger recursive full spray: %#v", actions)
+	}
+	fingers := findAction(actions, "fingers")
+	if fingers == nil {
+		t.Fatalf("expected fingers action for discovered URL: %#v", actions)
+	}
+	urls, ok := fingers.Input["urls"].([]string)
+	if !ok || !contains(urls, "https://example.com/auth/admin") {
+		t.Fatalf("expected discovered URL fingerprint target, got %#v", fingers.Input)
+	}
+	nuclei := findAction(actions, "nuclei")
+	if nuclei == nil {
+		t.Fatalf("expected nuclei fallback for high-value discovered URL: %#v", actions)
+	}
+	targets, ok := nuclei.Input["targets"].([]string)
+	if !ok || len(targets) != 1 || targets[0] != "https://example.com/auth/admin" {
+		t.Fatalf("expected high-value discovered URL nuclei target, got %#v", nuclei.Input)
+	}
+}
+
 func TestPlanFromStateKeepsNonHTTPServicesForNucleiOnly(t *testing.T) {
 	actions := PlanFromState(State{
 		Target:       "127.0.0.1",

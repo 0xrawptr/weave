@@ -2,17 +2,21 @@ package data
 
 import "testing"
 
-func TestBlockedRuntimeQueuesDetectsQueuedWithoutWorker(t *testing.T) {
+func TestRuntimeQueuesSeparateLiveStateFromCapacitySnapshot(t *testing.T) {
 	groups := []WorkItemGroupSummary{
 		{Key: "spray", Pending: 12, Queued: 12},
 		{Key: "nuclei", Pending: 2, Running: 1, Queued: 2},
 	}
-	got := blockedRuntimeQueues(groups)
-	if len(got) != 1 {
-		t.Fatalf("len(blocked queues) = %d, want 1: %#v", len(got), got)
+	runtimeQueues := runtimeQueuesForPlan(groups, nil)
+	if len(runtimeQueues) != 2 {
+		t.Fatalf("len(runtime queues) = %d, want 2: %#v", len(runtimeQueues), runtimeQueues)
 	}
-	if got[0].Queue != "spray" || got[0].Reason != "eligible work is waiting for scheduler or capacity" {
-		t.Fatalf("unexpected blocked queue: %#v", got[0])
+	blocked := blockedRuntimeQueues(runtimeQueues)
+	if len(blocked) != 1 {
+		t.Fatalf("len(blocked queues) = %d, want 1: %#v", len(blocked), blocked)
+	}
+	if blocked[0].Queue != "spray" || blocked[0].Reason != "eligible work is waiting for scheduler admission" {
+		t.Fatalf("unexpected blocked queue: %#v", blocked[0])
 	}
 }
 
@@ -56,8 +60,8 @@ func TestOpenRuntimePhaseWorkUsesCurrentPhaseTypes(t *testing.T) {
 		{Key: "spray_shard", Pending: 10, Queued: 10},
 	}}
 	got := openRuntimePhaseWork(CampaignPhaseDiscovery, summary)
-	if len(got) != 2 || got[0].Key != "portscan_chunk" || got[1].Key != "spray_shard" {
-		t.Fatalf("phase work = %#v, want portscan_chunk and spray_shard", got)
+	if len(got) != 1 || got[0].Key != "portscan_chunk" {
+		t.Fatalf("phase work = %#v, want only portscan_chunk", got)
 	}
 }
 
@@ -66,7 +70,7 @@ func TestRuntimeExecutionPlanExplainsAllowedAndWaitingPhase(t *testing.T) {
 		{Key: "spray_shard", Pending: 4, Queued: 4},
 		{Key: "nuclei_group", Pending: 2, Queued: 2},
 	}}
-	plan := runtimeExecutionPlan(CampaignPhaseDiscovery, summary)
+	plan := runtimeExecutionPlan(CampaignPhaseVerification, summary)
 	byType := map[string]RuntimePlanItem{}
 	for _, item := range plan {
 		byType[item.Type] = item
@@ -74,8 +78,8 @@ func TestRuntimeExecutionPlanExplainsAllowedAndWaitingPhase(t *testing.T) {
 	if !byType["spray_shard"].Allowed || byType["spray_shard"].State != "queued" {
 		t.Fatalf("spray plan = %#v, want allowed queued", byType["spray_shard"])
 	}
-	if byType["nuclei_group"].Allowed || byType["nuclei_group"].State != "waiting_phase" {
-		t.Fatalf("nuclei plan = %#v, want waiting_phase", byType["nuclei_group"])
+	if !byType["nuclei_group"].Allowed || byType["nuclei_group"].State != "queued" {
+		t.Fatalf("nuclei plan = %#v, want allowed queued", byType["nuclei_group"])
 	}
 }
 
@@ -88,7 +92,7 @@ func TestBlockedRuntimeQueuesIgnoresQueuesWaitingForPhase(t *testing.T) {
 		{Queue: "spray", Allowed: true},
 		{Queue: "nuclei", Allowed: false},
 	}
-	got := blockedRuntimeQueuesForPlan(groups, plan)
+	got := blockedRuntimeQueues(runtimeQueuesForPlan(groups, plan))
 	if len(got) != 1 || got[0].Queue != "spray" {
 		t.Fatalf("blocked queues = %#v, want only spray", got)
 	}
@@ -110,12 +114,34 @@ func TestRuntimeCurrentBottleneckPrefersStaleWork(t *testing.T) {
 func TestRuntimeCurrentBottleneckFallsBackToBlockedQueue(t *testing.T) {
 	view := CampaignRuntimeView{
 		BlockedQueues: []QueueRuntimeState{
-			{Queue: "spray", Pending: 12, Reason: "eligible work is waiting for scheduler or capacity"},
+			{Queue: "spray", Pending: 12, Reason: "eligible work is waiting for scheduler admission"},
 		},
 	}
 	got := runtimeCurrentBottleneck(view)
 	if got == nil || got.Kind != "queue" || got.Queue != "spray" {
 		t.Fatalf("bottleneck = %#v, want blocked spray queue", got)
+	}
+}
+
+func TestRuntimeTailWorkIsVisibleButNotBlocking(t *testing.T) {
+	summary := WorkItemProgressSummary{ByType: []WorkItemGroupSummary{
+		{Key: "spray_shard", Running: 3, TailRunning: 3},
+	}}
+	plan := runtimeExecutionPlan(CampaignPhaseSteady, summary)
+	byType := map[string]RuntimePlanItem{}
+	for _, item := range plan {
+		byType[item.Type] = item
+	}
+	if byType["spray_shard"].State != "tail" || byType["spray_shard"].TailRunning != 3 {
+		t.Fatalf("spray plan = %#v, want tail state", byType["spray_shard"])
+	}
+	view := CampaignRuntimeView{ExecutionPlan: plan}
+	if got := runtimeCurrentBottleneck(view); got != nil {
+		t.Fatalf("bottleneck = %#v, want nil for tail-only work", got)
+	}
+	queues := runtimeQueuesForPlan([]WorkItemGroupSummary{{Key: "spray", Running: 3, TailRunning: 3}}, plan)
+	if len(queues) != 1 || queues[0].TailRunning != 3 || queues[0].Reason != "running only background tail work" {
+		t.Fatalf("queues = %#v, want visible tail queue", queues)
 	}
 }
 

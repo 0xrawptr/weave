@@ -29,6 +29,7 @@ const SchedulerSnapshotActivityName = "scheduler_snapshot"
 const UpdateSchedulerCapacityActivityName = "update_scheduler_capacity"
 const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
 const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_items"
+const MarkTailWorkItemsActivityName = "mark_tail_work_items"
 
 type Activity struct {
 	planner *Planner
@@ -383,4 +384,11 @@ func (a *Activity) RequeueRetryWaitingWorkItems(ctx context.Context, request Req
 		return data.WorkItemBulkResult{}, nil
 	}
 	return a.planner.repo.RequeueRetryWaitingWorkItems(ctx, request.Filter, request.MinAgeSeconds, request.Limit)
+}
+
+func (a *Activity) MarkTailWorkItems(ctx context.Context, request data.WorkItemTailPolicyRequest) (data.WorkItemBulkResult, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return data.WorkItemBulkResult{}, nil
+	}
+	return a.planner.repo.MarkTailWorkItems(ctx, request)
 }

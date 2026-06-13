@@ -161,7 +161,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 		"ports":           ports,
 		"campaign_phase":  workflow.NormalizeCampaignPhase(req.CampaignPhase),
 		"run_planned_dag": runPlannedDAG,
-		"summary":         fmt.Sprintf("/api/v1/work-items/summary?campaign_id=%s", req.CampaignID),
+		"summary":         fmt.Sprintf("/api/v1/work-items/summary?campaign_id=%s", campaignID),
 	})
 }
 

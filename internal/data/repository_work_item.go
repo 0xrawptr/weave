@@ -110,3 +110,10 @@ func (r *Repository) RequeueRetryWaitingWorkItems(ctx context.Context, filter Wo
 	}
 	return r.Postgres.RequeueRetryWaitingWorkItems(ctx, filter, minAgeSeconds, limit)
 }
+
+func (r *Repository) MarkTailWorkItems(ctx context.Context, request WorkItemTailPolicyRequest) (WorkItemBulkResult, error) {
+	if r == nil || r.Postgres == nil {
+		return WorkItemBulkResult{}, nil
+	}
+	return r.Postgres.MarkTailWorkItems(ctx, request)
+}

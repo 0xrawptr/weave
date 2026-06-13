@@ -100,7 +100,6 @@ func cleanupOpenSchedulerWorkflows(ctx context.Context, runtimeApp *app.App, tem
 	}
 	workflowTypes := []string{
 		"SchedulerWorkflow",
-		"ScheduledPortScanWorkItemsWorkflow",
 	}
 	terminated := 0
 	terminatedWorkflowIDs := []string{}

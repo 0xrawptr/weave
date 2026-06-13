@@ -18,6 +18,7 @@ func (s *Server) ListResults(c *gin.Context) {
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	targetID := c.Query("target_id")
 	assetType := c.Query("type")
+	source := c.Query("source")
 	status := c.Query("status")
 	campaignID := c.Query("campaign_id")
 
@@ -26,13 +27,19 @@ func (s *Server) ListResults(c *gin.Context) {
 		return
 	}
 
-	assets, err := s.repo.Postgres.QueryAssetsFiltered(c.Request.Context(), targetID, assetType, campaignID, status, limit, offset)
+	assets, err := s.repo.Postgres.QueryAssetsFiltered(c.Request.Context(), data.AssetQueryFilter{
+		TargetID:   targetID,
+		Type:       assetType,
+		Source:     source,
+		Status:     status,
+		CampaignID: campaignID,
+	}, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	total, _ := s.repo.Postgres.CountAssetsFilteredByCampaign(c.Request.Context(), targetID, assetType, "", status, campaignID)
+	total, _ := s.repo.Postgres.CountAssetsFilteredByCampaign(c.Request.Context(), targetID, assetType, source, status, campaignID)
 	c.JSON(http.StatusOK, gin.H{
 		"results": assets,
 		"total":   total,

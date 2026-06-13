@@ -53,6 +53,35 @@ func TestAdmitDoesNotDedupShardsBySharedDedupKey(t *testing.T) {
 	}
 }
 
+func TestAdmitSkipsDuplicateShardInSameRequest(t *testing.T) {
+	first := testWorkItem("shard-1", "spray", map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}})
+	first.Input = testEnvelope(map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}}, "same-action", 1)
+	second := testWorkItem("shard-duplicate", "spray", map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}})
+	second.Input = testEnvelope(map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}}, "same-action", 1)
+	result := Admit(Request{ScopeTargets: []string{"10.0.0.0/24"}, Items: []data.WorkItem{first, second}})
+	if len(result.Admitted) != 1 {
+		t.Fatalf("duplicate shard should be skipped: %#v", result.Decisions)
+	}
+	if result.Decisions[1].Status != StatusSkipped || result.Decisions[1].Reason != "action shard already planned" {
+		t.Fatalf("duplicate shard decision = %#v", result.Decisions[1])
+	}
+}
+
+func TestAdmitSkipsActionWhenExistingShardCoversBaseAction(t *testing.T) {
+	existing := testWorkItem("existing-shard-1", "spray", map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}})
+	existing.Input = testEnvelope(map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}}, "same-action", 1)
+	existing.Status = data.WorkItemStatusPending
+	next := testWorkItem("new-shard-2", "spray", map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}})
+	next.Input = testEnvelope(map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}}, "same-action", 2)
+	result := Admit(Request{ScopeTargets: []string{"10.0.0.0/24"}, Items: []data.WorkItem{next}, Existing: []data.WorkItem{existing}})
+	if len(result.Admitted) != 0 {
+		t.Fatalf("existing shard should cover full action and skip new shards")
+	}
+	if result.Decisions[0].Status != StatusSkipped || result.Decisions[0].Reason != "action already planned" {
+		t.Fatalf("duplicate action decision = %#v", result.Decisions[0])
+	}
+}
+
 func TestAdmitSkipsExistingPendingItem(t *testing.T) {
 	item := testWorkItem("same-id", "fingers", map[string]interface{}{"urls": []string{"http://10.0.0.1:8080"}})
 	existing := item

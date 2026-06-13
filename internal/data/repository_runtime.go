@@ -43,11 +43,12 @@ func (r *Repository) GetCampaignRuntimeView(ctx context.Context, campaignID, bat
 	view.OpenPhaseWork = openRuntimePhaseWork(view.Phase, summary)
 	view.PhaseBlockingReason = runtimePhaseBlockingReason(view.Phase, view.OpenPhaseWork, summary)
 	view.ExecutionPlan = runtimeExecutionPlan(view.Phase, summary)
-	view.BlockedQueues = blockedRuntimeQueuesForPlan(summary.ByQueue, view.ExecutionPlan)
+	view.RuntimeQueues = runtimeQueuesForPlan(summary.ByQueue, view.ExecutionPlan)
+	view.BlockedQueues = blockedRuntimeQueues(view.RuntimeQueues)
 	view.SlowTargets = slowRuntimeTargets(summary.ByTarget)
 	view.ArtifactHealth = artifactRuntimeHealth(artifactStats)
 	view.ProblemArtifacts = problemRuntimeArtifacts(view.ArtifactHealth)
-	view.Capacity = capacity
+	view.CapacityDecisions = capacityDecisionSnapshots(capacity)
 	view.ETA = runtimeETA(summary)
 	view.CurrentBottleneck = runtimeCurrentBottleneck(view)
 	view.RuntimeWarnings = runtimeWarnings(view)
@@ -61,11 +62,11 @@ func inferRuntimePhase(summary WorkItemProgressSummary) string {
 	if hasOpenType(summary, "portscan_chunk") || hasOpenType(summary, "planned_dag_followup") || hasOpenType(summary, "fingers_action") {
 		return CampaignPhaseDiscovery
 	}
-	if hasOpenType(summary, "spray_shard") {
-		return CampaignPhaseExpansion
-	}
 	if hasOpenType(summary, "nuclei_group") {
 		return CampaignPhaseVerification
+	}
+	if hasOpenType(summary, "spray_shard") {
+		return CampaignPhaseExpansion
 	}
 	return CampaignPhaseSteady
 }
@@ -88,12 +89,12 @@ func openRuntimePhaseWork(phase string, summary WorkItemProgressSummary) []WorkI
 		allowed["portscan_chunk"] = true
 		allowed["planned_dag_followup"] = true
 		allowed["fingers_action"] = true
-		allowed["spray_shard"] = true
 	case CampaignPhaseExpansion:
 		allowed["spray_shard"] = true
 		allowed["fingers_action"] = true
 	case CampaignPhaseVerification:
 		allowed["nuclei_group"] = true
+		allowed["spray_shard"] = true
 	case CampaignPhaseSteady:
 		for _, group := range summary.ByType {
 			if openWorkItemGroup(group) > 0 {
@@ -123,7 +124,7 @@ func runtimePlanDefinitions() []runtimePlanDefinition {
 		{Type: "portscan_chunk", Queue: "portscan", Artifact: "gogo", Phase: CampaignPhaseDiscovery},
 		{Type: "planned_dag_followup", Queue: "planner", Artifact: "planned_dag", Phase: CampaignPhaseDiscovery},
 		{Type: "fingers_action", Queue: "http", Artifact: "fingers", Phase: CampaignPhaseDiscovery},
-		{Type: "spray_shard", Queue: "spray", Artifact: "spray", Phase: CampaignPhaseDiscovery},
+		{Type: "spray_shard", Queue: "spray", Artifact: "spray", Phase: CampaignPhaseExpansion},
 		{Type: "nuclei_group", Queue: "nuclei", Artifact: "nuclei", Phase: CampaignPhaseVerification},
 	}
 }
@@ -147,6 +148,7 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 			Pending:         group.Pending,
 			Starting:        group.Starting,
 			Running:         group.Running,
+			TailRunning:     group.TailRunning,
 			Completed:       group.Completed,
 			Failed:          group.Failed,
 			Dead:            group.Dead,
@@ -173,7 +175,7 @@ func runtimeTypeAllowedInPhase(phase, itemType string) bool {
 		return itemType == "dns_preflight"
 	case CampaignPhaseDiscovery:
 		switch itemType {
-		case "portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard":
+		case "portscan_chunk", "planned_dag_followup", "fingers_action":
 			return true
 		}
 	case CampaignPhaseExpansion:
@@ -182,7 +184,7 @@ func runtimeTypeAllowedInPhase(phase, itemType string) bool {
 			return true
 		}
 	case CampaignPhaseVerification:
-		return itemType == "nuclei_group"
+		return itemType == "nuclei_group" || itemType == "spray_shard"
 	case CampaignPhaseSteady:
 		return true
 	}
@@ -201,10 +203,13 @@ func runtimePlanState(item RuntimePlanItem, group WorkItemGroupSummary, phase st
 		return "idle", "no work created for this phase"
 	}
 	if group.Running+group.Starting > 0 {
+		if group.TailRunning > 0 && group.Running == group.TailRunning && group.Starting == 0 {
+			return "tail", "running in background tail lane"
+		}
 		return "running", "actively executing"
 	}
 	if group.Pending > 0 {
-		return "queued", "eligible and waiting for capacity"
+		return "queued", "eligible and waiting for scheduler admission"
 	}
 	if group.RetryWaiting > 0 {
 		return "retry_waiting", "waiting for retry delay"
@@ -238,7 +243,7 @@ func runtimePhaseBlockingReason(phase string, open []WorkItemGroupSummary, summa
 	}
 	for _, group := range open {
 		if group.Running == 0 && group.Starting == 0 && group.Queued > 0 {
-			return group.Key + " is eligible and waiting for scheduler or capacity"
+			return group.Key + " is eligible and waiting for scheduler admission"
 		}
 	}
 	for _, group := range open {
@@ -249,11 +254,7 @@ func runtimePhaseBlockingReason(phase string, open []WorkItemGroupSummary, summa
 	return NormalizeCampaignPhase(phase) + " phase still has open work"
 }
 
-func blockedRuntimeQueues(groups []WorkItemGroupSummary) []QueueRuntimeState {
-	return blockedRuntimeQueuesForPlan(groups, nil)
-}
-
-func blockedRuntimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePlanItem) []QueueRuntimeState {
+func runtimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePlanItem) []QueueRuntimeState {
 	allowedQueues := map[string]bool{}
 	if len(plan) > 0 {
 		for _, item := range plan {
@@ -268,7 +269,7 @@ func blockedRuntimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePl
 			continue
 		}
 		open := openWorkItemGroup(group)
-		if open == 0 {
+		if open == 0 && group.TailRunning == 0 {
 			continue
 		}
 		state := QueueRuntimeState{
@@ -276,6 +277,7 @@ func blockedRuntimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePl
 			Pending:      group.Pending,
 			Starting:     group.Starting,
 			Running:      group.Running,
+			TailRunning:  group.TailRunning,
 			RetryWaiting: group.RetryWaiting,
 			Paused:       group.Paused,
 			StaleRunning: group.StaleRunning + group.HeartbeatStaleRunning,
@@ -289,11 +291,46 @@ func blockedRuntimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePl
 		case group.RetryWaiting > 0 && group.Pending == 0 && group.Running == 0 && group.Starting == 0:
 			state.Reason = "all open work is waiting for retry"
 		case group.Queued > 0 && group.Running == 0 && group.Starting == 0:
-			state.Reason = "eligible work is waiting for scheduler or capacity"
+			state.Reason = "eligible work is waiting for scheduler admission"
+		case group.Running+group.Starting > 0:
+			if group.TailRunning > 0 && group.Running == group.TailRunning && group.Starting == 0 {
+				state.Reason = "running only background tail work"
+			} else {
+				state.Reason = "actively executing"
+			}
+		case group.Queued > 0:
+			state.Reason = "queued backlog"
 		default:
-			continue
+			state.Reason = "open work exists"
 		}
 		out = append(out, state)
+	}
+	return out
+}
+
+func blockedRuntimeQueues(queues []QueueRuntimeState) []QueueRuntimeState {
+	out := make([]QueueRuntimeState, 0, len(queues))
+	for _, queue := range queues {
+		switch {
+		case queue.StaleRunning > 0:
+			out = append(out, queue)
+		case queue.Paused > 0:
+			out = append(out, queue)
+		case queue.RetryWaiting > 0 && queue.Pending == 0 && queue.Running == 0 && queue.Starting == 0:
+			out = append(out, queue)
+		case queue.Pending > 0 && queue.Running == 0 && queue.Starting == 0:
+			out = append(out, queue)
+		}
+	}
+	return out
+}
+
+func capacityDecisionSnapshots(capacities []SchedulerCapacity) []SchedulerCapacity {
+	out := make([]SchedulerCapacity, 0, len(capacities))
+	for _, capacity := range capacities {
+		capacity.SnapshotKind = "capacity_controller_decision"
+		capacity.SnapshotNote = "last scheduler capacity controller decision; runtime_queues is the live work_items state"
+		out = append(out, capacity)
 	}
 	return out
 }
@@ -327,6 +364,7 @@ func slowRuntimeTargets(groups []WorkItemGroupSummary) []TargetRuntimeState {
 			Total:                  group.Total,
 			Queued:                 group.Queued,
 			Running:                group.Running + group.Starting,
+			TailRunning:            group.TailRunning,
 			Failed:                 group.Failed,
 			Dead:                   group.Dead,
 			ETASeconds:             group.ETASeconds,
@@ -337,7 +375,11 @@ func slowRuntimeTargets(groups []WorkItemGroupSummary) []TargetRuntimeState {
 		case group.StaleRunning > 0 || group.HeartbeatStaleRunning > 0:
 			state.Reason = "stale running work"
 		case state.Running > 0:
-			state.Reason = "currently running"
+			if state.TailRunning > 0 && state.Running == state.TailRunning {
+				state.Reason = "background tail running"
+			} else {
+				state.Reason = "currently running"
+			}
 		case state.Queued > 0:
 			state.Reason = "queued backlog"
 		case state.Failed+state.Dead > 0:
@@ -420,6 +462,7 @@ func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
 				Pending:      queue.Pending,
 				Starting:     queue.Starting,
 				Running:      queue.Running,
+				TailRunning:  queue.TailRunning,
 				RetryWaiting: queue.RetryWaiting,
 				Paused:       queue.Paused,
 				StaleRunning: queue.StaleRunning,
@@ -436,6 +479,7 @@ func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
 			Pending:      queue.Pending,
 			Starting:     queue.Starting,
 			Running:      queue.Running,
+			TailRunning:  queue.TailRunning,
 			RetryWaiting: queue.RetryWaiting,
 			Paused:       queue.Paused,
 			StaleRunning: queue.StaleRunning,
@@ -443,23 +487,24 @@ func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
 		}
 	}
 	for _, item := range view.ExecutionPlan {
-		if item.Allowed && item.Pending+item.Starting+item.Running+item.RetryWaiting+item.Paused > 0 {
+		if item.Allowed && openRuntimePlanItem(item) > 0 {
 			return bottleneckFromPlan("phase_work", item, item.Reason)
 		}
 	}
 	for _, target := range view.SlowTargets {
 		if target.Running+target.Queued+target.Failed+target.Dead > 0 {
 			return &RuntimeBottleneck{
-				Kind:       "target",
-				Key:        target.Target,
-				Target:     target.Target,
-				Reason:     target.Reason,
-				Pending:    target.Queued,
-				Running:    target.Running,
-				Failed:     target.Failed,
-				Dead:       target.Dead,
-				ETASeconds: target.ETASeconds,
-				LastError:  target.LastError,
+				Kind:        "target",
+				Key:         target.Target,
+				Target:      target.Target,
+				Reason:      target.Reason,
+				Pending:     target.Queued,
+				Running:     target.Running,
+				TailRunning: target.TailRunning,
+				Failed:      target.Failed,
+				Dead:        target.Dead,
+				ETASeconds:  target.ETASeconds,
+				LastError:   target.LastError,
 			}
 		}
 	}
@@ -478,6 +523,7 @@ func bottleneckFromPlan(kind string, item RuntimePlanItem, reason string) *Runti
 		Pending:      item.Pending,
 		Starting:     item.Starting,
 		Running:      item.Running,
+		TailRunning:  item.TailRunning,
 		RetryWaiting: item.RetryWaiting,
 		Paused:       item.Paused,
 		Failed:       item.Failed,
@@ -486,6 +532,14 @@ func bottleneckFromPlan(kind string, item RuntimePlanItem, reason string) *Runti
 		ETASeconds:   item.ETASeconds,
 		LastError:    item.LastError,
 	}
+}
+
+func openRuntimePlanItem(item RuntimePlanItem) int {
+	nonTailRunning := item.Running - item.TailRunning
+	if nonTailRunning < 0 {
+		nonTailRunning = 0
+	}
+	return item.Pending + item.Starting + nonTailRunning + item.RetryWaiting + item.Paused
 }
 
 func runtimeWarnings(view CampaignRuntimeView) []string {
@@ -525,5 +579,9 @@ func runtimeETA(summary WorkItemProgressSummary) ETARuntimeState {
 }
 
 func openWorkItemGroup(group WorkItemGroupSummary) int {
-	return group.Pending + group.Starting + group.Running + group.RetryWaiting + group.Paused
+	nonTailRunning := group.Running - group.TailRunning
+	if nonTailRunning < 0 {
+		nonTailRunning = 0
+	}
+	return group.Pending + group.Starting + nonTailRunning + group.RetryWaiting + group.Paused
 }

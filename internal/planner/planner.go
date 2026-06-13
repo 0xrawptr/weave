@@ -186,10 +186,10 @@ func (p *Planner) PlanDAGForTarget(ctx context.Context, target, campaignID strin
 func PlanFromState(state State) []Action {
 	targets := unique(state.URLs)
 	httpURLs := uniqueHTTP(state.URLs)
+	// BaseURLs are authoritative spray seeds, currently sourced from gogo
+	// service roots. Do not derive spray seeds from state.URLs: those include
+	// spray-discovered paths and must not recursively trigger full spray.
 	baseURLs := uniqueHTTP(state.BaseURLs)
-	if len(baseURLs) == 0 {
-		baseURLs = serviceBaseURLs(httpURLs)
-	}
 	sprayURLs := uniqueHTTP(state.SprayURLs)
 	highValueURLs := uniqueHTTP(state.HighValueURLs)
 	if len(targets) == 0 {
@@ -584,10 +584,6 @@ func verificationTargets(urls, highValueURLs []string) []string {
 		return highValueURLs
 	}
 	return unique(urls)
-}
-
-func serviceBaseURLs(urls []string) []string {
-	return uniqueHTTP(urls)
 }
 
 func withoutCoveredValues(values []string, records []data.ActionRecord, artifact, field string) []string {
