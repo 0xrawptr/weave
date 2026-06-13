@@ -97,6 +97,13 @@ func (r *Repository) RecoverStaleWorkItems(ctx context.Context, filter WorkItemF
 	return r.Postgres.RecoverStaleWorkItems(ctx, filter, limit)
 }
 
+func (r *Repository) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
+	if r == nil || r.Postgres == nil || len(workflowIDs) == 0 {
+		return WorkItemBulkResult{}, nil
+	}
+	return r.Postgres.RecoverWorkItemsByWorkflowIDs(ctx, workflowIDs)
+}
+
 func (r *Repository) RequeueRetryWaitingWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {
 	if r == nil || r.Postgres == nil {
 		return WorkItemBulkResult{}, nil

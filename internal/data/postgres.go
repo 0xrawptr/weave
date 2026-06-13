@@ -261,6 +261,34 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		completed_at TIMESTAMPTZ
 	);
 
+	CREATE TABLE IF NOT EXISTS scheduler_capacity (
+		campaign_id TEXT NOT NULL DEFAULT '',
+		batch_id TEXT NOT NULL DEFAULT '',
+		queue TEXT NOT NULL,
+		artifact TEXT NOT NULL DEFAULT '',
+		min_capacity INTEGER NOT NULL DEFAULT 1,
+		max_capacity INTEGER NOT NULL DEFAULT 1,
+		effective_capacity INTEGER NOT NULL DEFAULT 1,
+		recommended_capacity INTEGER NOT NULL DEFAULT 1,
+		running INTEGER NOT NULL DEFAULT 0,
+		pending INTEGER NOT NULL DEFAULT 0,
+		retry_waiting INTEGER NOT NULL DEFAULT 0,
+		stale_running INTEGER NOT NULL DEFAULT 0,
+		completed INTEGER NOT NULL DEFAULT 0,
+		failed INTEGER NOT NULL DEFAULT 0,
+		dead INTEGER NOT NULL DEFAULT 0,
+		avg_duration_ms BIGINT NOT NULL DEFAULT 0,
+		throughput_per_min INTEGER NOT NULL DEFAULT 0,
+		stat_requests BIGINT NOT NULL DEFAULT 0,
+		stat_results BIGINT NOT NULL DEFAULT 0,
+		stat_errors BIGINT NOT NULL DEFAULT 0,
+		error_rate_percent INTEGER NOT NULL DEFAULT 0,
+		last_decision TEXT NOT NULL DEFAULT '',
+		decision_reason TEXT NOT NULL DEFAULT '',
+		updated_at TIMESTAMPTZ DEFAULT NOW(),
+		PRIMARY KEY (campaign_id, batch_id, queue)
+	);
+
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION DEFAULT 1.0;
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS campaign_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE assets ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT '';
@@ -333,6 +361,9 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_work_items_artifact ON work_items(artifact);
 	CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(queue);
 	CREATE INDEX IF NOT EXISTS idx_work_items_schedule ON work_items(schedule);
+	CREATE INDEX IF NOT EXISTS idx_scheduler_capacity_campaign ON scheduler_capacity(campaign_id);
+	CREATE INDEX IF NOT EXISTS idx_scheduler_capacity_batch ON scheduler_capacity(batch_id);
+	CREATE INDEX IF NOT EXISTS idx_scheduler_capacity_queue ON scheduler_capacity(queue);
 	`
 
 	_, err := p.pool.Exec(ctx, schema)
@@ -1249,21 +1280,6 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		args = append(args, request.MaxRunning)
 		argIdx++
 	}
-	if request.MaxRunningPerArtifact > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.artifact = wi.artifact) < $%d", argIdx)
-		args = append(args, request.MaxRunningPerArtifact)
-		argIdx++
-	}
-	if request.MaxRunningPerCampaign > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.campaign_id = wi.campaign_id) < $%d", argIdx)
-		args = append(args, request.MaxRunningPerCampaign)
-		argIdx++
-	}
-	if request.MaxRunningPerTarget > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.target = wi.target) < $%d", argIdx)
-		args = append(args, request.MaxRunningPerTarget)
-		argIdx++
-	}
 	query += fmt.Sprintf(` ORDER BY CASE wi.schedule WHEN 'now' THEN 0 ELSE 1 END, wi.created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
@@ -1304,11 +1320,23 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 	}
 
 	var current string
+	var currentWorkflowID string
 	var attempts int
 	var maxAttempts int
-	err := p.pool.QueryRow(ctx, `SELECT status, attempts, max_attempts FROM work_items WHERE id = $1`, id).Scan(&current, &attempts, &maxAttempts)
+	err := p.pool.QueryRow(ctx, `SELECT status, COALESCE(workflow_id, ''), attempts, max_attempts FROM work_items WHERE id = $1`, id).Scan(&current, &currentWorkflowID, &attempts, &maxAttempts)
 	if err != nil {
 		return err
+	}
+	if workflowID != "" && currentWorkflowID == "" {
+		return nil
+	}
+	if workflowID != "" && currentWorkflowID != "" && currentWorkflowID != workflowID && !canTransferWorkItemLease(current, status) {
+		return nil
+	}
+	recoverableExecutionFailure := recoverableWorkItemExecutionError(errorMessage) &&
+		(status == WorkItemStatusFailed || status == WorkItemStatusRetryWaiting || status == WorkItemStatusDead)
+	if recoverableExecutionFailure {
+		status = WorkItemStatusRetryWaiting
 	}
 	if status == WorkItemStatusFailed && attempts >= maxAttempts {
 		status = WorkItemStatusDead
@@ -1320,12 +1348,12 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 		return fmt.Errorf("invalid work item status transition: %s -> %s", current, status)
 	}
 
-	_, err = p.pool.Exec(ctx,
+	tag, err := p.pool.Exec(ctx,
 		`UPDATE work_items SET
 			status = $2,
 			workflow_id = CASE WHEN $3 <> '' THEN $3 ELSE workflow_id END,
 			error = $4,
-			attempts = attempts + CASE WHEN $5 THEN 1 ELSE 0 END,
+			attempts = GREATEST(attempts + CASE WHEN $5 THEN 1 ELSE 0 END - CASE WHEN $8 THEN 1 ELSE 0 END, 0),
 			started_at = CASE WHEN $2 = 'running' THEN NOW() ELSE started_at END,
 			heartbeat_at = CASE WHEN $2 IN ('starting', 'running') THEN NOW() ELSE heartbeat_at END,
 			lease_expires_at = CASE
@@ -1335,9 +1363,31 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 			END,
 			completed_at = CASE WHEN $2 IN ('completed', 'cancelled', 'skipped', 'dead') THEN NOW() ELSE completed_at END,
 			updated_at = NOW()
-		 WHERE id = $1`,
-		id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds)
+		 WHERE id = $1
+		   AND status = $7
+		   AND ($3 = '' OR workflow_id = $3 OR (status = 'starting' AND $2 = 'running'))`,
+		id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds, current, recoverableExecutionFailure)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
 	return err
+}
+
+func canTransferWorkItemLease(from, to string) bool {
+	return from == WorkItemStatusStarting && to == WorkItemStatusRunning
+}
+
+func recoverableWorkItemExecutionError(message string) bool {
+	value := strings.ToLower(message)
+	return strings.Contains(value, "heartbeat timeout") ||
+		strings.Contains(value, "context canceled") ||
+		strings.Contains(value, "worker shutdown") ||
+		strings.Contains(value, "activity canceled") ||
+		strings.Contains(value, "child workflow execution already started") ||
+		strings.Contains(value, "workflow execution already started")
 }
 
 func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemHeartbeatRequest) error {
@@ -1599,8 +1649,38 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 		COALESCE(TO_CHAR(MIN(started_at) FILTER (WHERE status IN ('starting', 'running') AND started_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_started_at,
 		COALESCE(TO_CHAR(MIN(heartbeat_at) FILTER (WHERE status IN ('starting', 'running') AND heartbeat_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_heartbeat_at,
 		COALESCE(TO_CHAR(MIN(lease_expires_at) FILTER (WHERE status IN ('starting', 'running') AND lease_expires_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS next_lease_expires_at,
-		COALESCE((ARRAY_AGG(error ORDER BY updated_at DESC) FILTER (WHERE error <> ''))[1], '') AS last_error,
-		COALESCE(TO_CHAR(MAX(updated_at) FILTER (WHERE error <> ''), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS last_error_updated_at
+		COALESCE((ARRAY_AGG(error ORDER BY updated_at DESC) FILTER (
+			WHERE error <> ''
+			  AND (
+				status IN ('failed', 'dead', 'retry_waiting')
+				OR (
+				  status IN ('starting', 'running')
+				  AND lease_expires_at IS NOT NULL
+				  AND lease_expires_at < NOW()
+				)
+				OR (
+				  status IN ('starting', 'running')
+				  AND heartbeat_at IS NOT NULL
+				  AND heartbeat_at < NOW() - INTERVAL '10 minutes'
+				)
+			  )
+		))[1], '') AS last_error,
+		COALESCE(TO_CHAR(MAX(updated_at) FILTER (
+			WHERE error <> ''
+			  AND (
+				status IN ('failed', 'dead', 'retry_waiting')
+				OR (
+				  status IN ('starting', 'running')
+				  AND lease_expires_at IS NOT NULL
+				  AND lease_expires_at < NOW()
+				)
+				OR (
+				  status IN ('starting', 'running')
+				  AND heartbeat_at IS NOT NULL
+				  AND heartbeat_at < NOW() - INTERVAL '10 minutes'
+				)
+			  )
+		), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS last_error_updated_at
 	FROM work_items
 	WHERE 1=1`, groupExpr)
 	args := []interface{}{}
@@ -1797,26 +1877,39 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 	}
 	query := `WITH stale AS (
 		SELECT id FROM work_items
-		WHERE status IN ('starting', 'running')
-		  AND lease_expires_at IS NOT NULL
-		  AND lease_expires_at < NOW()`
+		WHERE (
+			(status IN ('starting', 'running')
+			  AND lease_expires_at IS NOT NULL
+			  AND lease_expires_at < NOW())
+			OR
+			(status IN ('failed', 'dead')
+			  AND (
+				LOWER(error) LIKE '%heartbeat timeout%' OR
+				LOWER(error) LIKE '%context canceled%' OR
+				LOWER(error) LIKE '%worker shutdown%' OR
+				LOWER(error) LIKE '%activity canceled%' OR
+				LOWER(error) LIKE '%child workflow execution already started%' OR
+				LOWER(error) LIKE '%workflow execution already started%'
+			  ))
+		)`
 	args := []interface{}{}
 	argIdx := 1
 	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
 	query += fmt.Sprintf(` ORDER BY lease_expires_at ASC LIMIT $%d
 	)
 	UPDATE work_items SET
-		status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'retry_waiting' END,
-		error = CASE WHEN attempts >= max_attempts THEN 'stale running item exceeded max attempts' ELSE 'stale running item recovered' END,
+		status = 'pending',
+		error = 'lease expired; work item reclaimed',
 		workflow_id = '',
+		attempts = GREATEST(attempts - 1, 0),
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
 		started_at = NULL,
-		completed_at = CASE WHEN attempts >= max_attempts THEN NOW() ELSE completed_at END,
+		completed_at = NULL,
 		updated_at = NOW()
 	FROM stale
 	WHERE work_items.id = stale.id
-	RETURNING work_items.id`, argIdx)
+	RETURNING work_items.id, work_items.campaign_id, work_items.batch_id`, argIdx)
 	args = append(args, limit)
 
 	rows, err := p.pool.Query(ctx, query, args...)
@@ -1826,14 +1919,73 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 	defer rows.Close()
 
 	updated := 0
+	batches := map[string]WorkItemBulkBatch{}
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var campaignID string
+		var batchID string
+		if err := rows.Scan(&id, &campaignID, &batchID); err != nil {
 			return WorkItemBulkResult{}, err
+		}
+		if batchID != "" {
+			batches[batchID] = WorkItemBulkBatch{CampaignID: campaignID, BatchID: batchID}
 		}
 		updated++
 	}
-	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+	if err := rows.Err(); err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	affected := make([]WorkItemBulkBatch, 0, len(batches))
+	for _, batch := range batches {
+		affected = append(affected, batch)
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
+}
+
+func (p *PostgresStore) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
+	if len(workflowIDs) == 0 {
+		return WorkItemBulkResult{}, nil
+	}
+	rows, err := p.pool.Query(ctx, `UPDATE work_items SET
+		status = 'pending',
+		error = 'scheduler workflow terminated; work item reclaimed',
+		workflow_id = '',
+		attempts = GREATEST(attempts - 1, 0),
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		started_at = NULL,
+		completed_at = NULL,
+		updated_at = NOW()
+	WHERE workflow_id = ANY($1)
+	  AND status IN ('starting', 'running')
+	RETURNING id, campaign_id, batch_id`, workflowIDs)
+	if err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	defer rows.Close()
+
+	updated := 0
+	batches := map[string]WorkItemBulkBatch{}
+	for rows.Next() {
+		var id string
+		var campaignID string
+		var batchID string
+		if err := rows.Scan(&id, &campaignID, &batchID); err != nil {
+			return WorkItemBulkResult{}, err
+		}
+		if batchID != "" {
+			batches[batchID] = WorkItemBulkBatch{CampaignID: campaignID, BatchID: batchID}
+		}
+		updated++
+	}
+	if err := rows.Err(); err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	affected := make([]WorkItemBulkBatch, 0, len(batches))
+	for _, batch := range batches {
+		affected = append(affected, batch)
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
 }
 
 func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {

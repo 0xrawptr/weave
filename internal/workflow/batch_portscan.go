@@ -12,18 +12,15 @@ import (
 )
 
 type BatchPortScanInput struct {
-	Targets                []string       `json:"targets"`
-	NowTargets             []string       `json:"now_targets,omitempty"`
-	CampaignID             string         `json:"campaign_id,omitempty"`
-	Ports                  string         `json:"ports"`
-	MaxConcurrency         int            `json:"max_concurrency,omitempty"`
-	ChunkPrefix            int            `json:"chunk_prefix,omitempty"`
-	MaxAttempts            int            `json:"max_attempts,omitempty"`
-	RetryDelaySeconds      int            `json:"retry_delay_seconds,omitempty"`
-	ActivityTimeoutSeconds int            `json:"activity_timeout_seconds,omitempty"`
-	QueueLimits            map[string]int `json:"queue_limits,omitempty"`
-	ResourceLimits         ResourceLimits `json:"resource_limits,omitempty"`
-	CampaignPhase          string         `json:"campaign_phase,omitempty"`
+	Targets                []string `json:"targets"`
+	NowTargets             []string `json:"now_targets,omitempty"`
+	CampaignID             string   `json:"campaign_id,omitempty"`
+	Ports                  string   `json:"ports"`
+	ChunkPrefix            int      `json:"chunk_prefix,omitempty"`
+	MaxAttempts            int      `json:"max_attempts,omitempty"`
+	RetryDelaySeconds      int      `json:"retry_delay_seconds,omitempty"`
+	ActivityTimeoutSeconds int      `json:"activity_timeout_seconds,omitempty"`
+	CampaignPhase          string   `json:"campaign_phase,omitempty"`
 
 	RunPlannedDAG           bool `json:"run_planned_dag,omitempty"`
 	PlannedDAGConcurrency   int  `json:"planned_dag_concurrency,omitempty"`
@@ -35,18 +32,10 @@ type BatchPortScanInput struct {
 	NucleiGroupTemplates    int  `json:"nuclei_group_templates,omitempty"`
 }
 
-type ResourceLimits struct {
-	Queue              map[string]int `json:"queue,omitempty"`
-	Artifact           map[string]int `json:"artifact,omitempty"`
-	MaxRunningCampaign int            `json:"max_running_campaign,omitempty"`
-	MaxRunningTarget   int            `json:"max_running_target,omitempty"`
-}
-
 type BatchPortScanResult struct {
 	Targets        []string `json:"targets"`
 	NowTargets     []string `json:"now_targets,omitempty"`
 	Ports          string   `json:"ports"`
-	MaxConcurrency int      `json:"max_concurrency"`
 	ChunkPrefix    int      `json:"chunk_prefix"`
 	MaxAttempts    int      `json:"max_attempts"`
 	RetryDelay     int      `json:"retry_delay_seconds,omitempty"`
@@ -76,16 +65,15 @@ func BatchPortScanWorkflow(ctx workflow.Context, input BatchPortScanInput) (*Bat
 	chunks := buildPortScanChunks(input.Targets, input.ChunkPrefix)
 	chunks = schedulePortScanChunks(chunks, input.NowTargets, input.ChunkPrefix)
 	result := &BatchPortScanResult{
-		Targets:        input.Targets,
-		NowTargets:     input.NowTargets,
-		Ports:          input.Ports,
-		MaxConcurrency: input.MaxConcurrency,
-		ChunkPrefix:    input.ChunkPrefix,
-		MaxAttempts:    input.MaxAttempts,
-		RetryDelay:     input.RetryDelaySeconds,
-		CampaignPhase:  input.CampaignPhase,
-		RunPlannedDAG:  input.RunPlannedDAG,
-		TotalChunks:    len(chunks),
+		Targets:       input.Targets,
+		NowTargets:    input.NowTargets,
+		Ports:         input.Ports,
+		ChunkPrefix:   input.ChunkPrefix,
+		MaxAttempts:   input.MaxAttempts,
+		RetryDelay:    input.RetryDelaySeconds,
+		CampaignPhase: input.CampaignPhase,
+		RunPlannedDAG: input.RunPlannedDAG,
+		TotalChunks:   len(chunks),
 	}
 	parentID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	if len(chunks) == 0 {

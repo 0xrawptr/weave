@@ -93,3 +93,38 @@ func TestBlockedRuntimeQueuesIgnoresQueuesWaitingForPhase(t *testing.T) {
 		t.Fatalf("blocked queues = %#v, want only spray", got)
 	}
 }
+
+func TestRuntimeCurrentBottleneckPrefersStaleWork(t *testing.T) {
+	view := CampaignRuntimeView{
+		ExecutionPlan: []RuntimePlanItem{
+			{Type: "spray_shard", Queue: "spray", Artifact: "spray", Pending: 20, StaleRunning: 1, LastError: "lease expired"},
+			{Type: "nuclei_group", Queue: "nuclei", Artifact: "nuclei", Failed: 2, LastError: "template error"},
+		},
+	}
+	got := runtimeCurrentBottleneck(view)
+	if got == nil || got.Kind != "stale_work" || got.Type != "spray_shard" || got.LastError != "lease expired" {
+		t.Fatalf("bottleneck = %#v, want stale spray work", got)
+	}
+}
+
+func TestRuntimeCurrentBottleneckFallsBackToBlockedQueue(t *testing.T) {
+	view := CampaignRuntimeView{
+		BlockedQueues: []QueueRuntimeState{
+			{Queue: "spray", Pending: 12, Reason: "eligible work is waiting for scheduler or capacity"},
+		},
+	}
+	got := runtimeCurrentBottleneck(view)
+	if got == nil || got.Kind != "queue" || got.Queue != "spray" {
+		t.Fatalf("bottleneck = %#v, want blocked spray queue", got)
+	}
+}
+
+func TestProblemRuntimeArtifactsFiltersHealthyArtifacts(t *testing.T) {
+	got := problemRuntimeArtifacts([]ArtifactRuntimeHealth{
+		{Artifact: "gogo", TotalRuns: 10, Reason: "healthy"},
+		{Artifact: "spray", TotalRuns: 5, Errors: 1, ErrorRatePercent: 20, Reason: "errors observed"},
+	})
+	if len(got) != 1 || got[0].Artifact != "spray" {
+		t.Fatalf("problem artifacts = %#v, want only spray", got)
+	}
+}

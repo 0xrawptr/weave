@@ -16,6 +16,10 @@ func (r *Repository) GetCampaignRuntimeView(ctx context.Context, campaignID, bat
 	if err != nil {
 		return CampaignRuntimeView{}, err
 	}
+	capacity, err := r.GetSchedulerCapacities(ctx, campaignID, batchID)
+	if err != nil {
+		return CampaignRuntimeView{}, err
+	}
 	var campaign *Campaign
 	if campaignID != "" {
 		campaign, _ = r.GetCampaign(ctx, campaignID)
@@ -42,7 +46,11 @@ func (r *Repository) GetCampaignRuntimeView(ctx context.Context, campaignID, bat
 	view.BlockedQueues = blockedRuntimeQueuesForPlan(summary.ByQueue, view.ExecutionPlan)
 	view.SlowTargets = slowRuntimeTargets(summary.ByTarget)
 	view.ArtifactHealth = artifactRuntimeHealth(artifactStats)
+	view.ProblemArtifacts = problemRuntimeArtifacts(view.ArtifactHealth)
+	view.Capacity = capacity
 	view.ETA = runtimeETA(summary)
+	view.CurrentBottleneck = runtimeCurrentBottleneck(view)
+	view.RuntimeWarnings = runtimeWarnings(view)
 	return view, nil
 }
 
@@ -131,20 +139,23 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 		group := groups[def.Type]
 		allowed := runtimeTypeAllowedInPhase(phase, def.Type)
 		item := RuntimePlanItem{
-			Type:         def.Type,
-			Queue:        def.Queue,
-			Artifact:     def.Artifact,
-			Phase:        def.Phase,
-			Allowed:      allowed,
-			Pending:      group.Pending,
-			Starting:     group.Starting,
-			Running:      group.Running,
-			Completed:    group.Completed,
-			Failed:       group.Failed,
-			Dead:         group.Dead,
-			RetryWaiting: group.RetryWaiting,
-			Paused:       group.Paused,
-			StaleRunning: group.StaleRunning + group.HeartbeatStaleRunning,
+			Type:            def.Type,
+			Queue:           def.Queue,
+			Artifact:        def.Artifact,
+			Phase:           def.Phase,
+			Allowed:         allowed,
+			Pending:         group.Pending,
+			Starting:        group.Starting,
+			Running:         group.Running,
+			Completed:       group.Completed,
+			Failed:          group.Failed,
+			Dead:            group.Dead,
+			RetryWaiting:    group.RetryWaiting,
+			Paused:          group.Paused,
+			StaleRunning:    group.StaleRunning + group.HeartbeatStaleRunning,
+			ProgressPercent: group.ProgressPercent,
+			ETASeconds:      group.ETASeconds,
+			LastError:       group.LastError,
 		}
 		item.State, item.Reason = runtimePlanState(item, group, phase)
 		if !allowed && openWorkItemGroup(group) > 0 {
@@ -373,6 +384,128 @@ func artifactRuntimeHealth(stats []ArtifactStatSummary) []ArtifactRuntimeHealth 
 		return out[i].TotalRuns > out[j].TotalRuns
 	})
 	return out
+}
+
+func problemRuntimeArtifacts(health []ArtifactRuntimeHealth) []ArtifactRuntimeHealth {
+	out := make([]ArtifactRuntimeHealth, 0, len(health))
+	for _, item := range health {
+		if item.Errors > 0 || item.ErrorRatePercent > 0 {
+			out = append(out, item)
+		}
+	}
+	if len(out) > 10 {
+		return out[:10]
+	}
+	return out
+}
+
+func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
+	for _, item := range view.ExecutionPlan {
+		if item.StaleRunning > 0 {
+			return bottleneckFromPlan("stale_work", item, "running work is stale")
+		}
+	}
+	for _, item := range view.ExecutionPlan {
+		if item.Failed+item.Dead > 0 {
+			return bottleneckFromPlan("work_error", item, "failed or dead work remains")
+		}
+	}
+	for _, queue := range view.BlockedQueues {
+		if queue.StaleRunning > 0 {
+			return &RuntimeBottleneck{
+				Kind:         "queue",
+				Key:          queue.Queue,
+				Queue:        queue.Queue,
+				Reason:       queue.Reason,
+				Pending:      queue.Pending,
+				Starting:     queue.Starting,
+				Running:      queue.Running,
+				RetryWaiting: queue.RetryWaiting,
+				Paused:       queue.Paused,
+				StaleRunning: queue.StaleRunning,
+				LastError:    queue.LastError,
+			}
+		}
+	}
+	for _, queue := range view.BlockedQueues {
+		return &RuntimeBottleneck{
+			Kind:         "queue",
+			Key:          queue.Queue,
+			Queue:        queue.Queue,
+			Reason:       queue.Reason,
+			Pending:      queue.Pending,
+			Starting:     queue.Starting,
+			Running:      queue.Running,
+			RetryWaiting: queue.RetryWaiting,
+			Paused:       queue.Paused,
+			StaleRunning: queue.StaleRunning,
+			LastError:    queue.LastError,
+		}
+	}
+	for _, item := range view.ExecutionPlan {
+		if item.Allowed && item.Pending+item.Starting+item.Running+item.RetryWaiting+item.Paused > 0 {
+			return bottleneckFromPlan("phase_work", item, item.Reason)
+		}
+	}
+	for _, target := range view.SlowTargets {
+		if target.Running+target.Queued+target.Failed+target.Dead > 0 {
+			return &RuntimeBottleneck{
+				Kind:       "target",
+				Key:        target.Target,
+				Target:     target.Target,
+				Reason:     target.Reason,
+				Pending:    target.Queued,
+				Running:    target.Running,
+				Failed:     target.Failed,
+				Dead:       target.Dead,
+				ETASeconds: target.ETASeconds,
+				LastError:  target.LastError,
+			}
+		}
+	}
+	return nil
+}
+
+func bottleneckFromPlan(kind string, item RuntimePlanItem, reason string) *RuntimeBottleneck {
+	return &RuntimeBottleneck{
+		Kind:         kind,
+		Key:          item.Type,
+		Phase:        item.Phase,
+		Queue:        item.Queue,
+		Type:         item.Type,
+		Artifact:     item.Artifact,
+		Reason:       reason,
+		Pending:      item.Pending,
+		Starting:     item.Starting,
+		Running:      item.Running,
+		RetryWaiting: item.RetryWaiting,
+		Paused:       item.Paused,
+		Failed:       item.Failed,
+		Dead:         item.Dead,
+		StaleRunning: item.StaleRunning,
+		ETASeconds:   item.ETASeconds,
+		LastError:    item.LastError,
+	}
+}
+
+func runtimeWarnings(view CampaignRuntimeView) []string {
+	var warnings []string
+	if view.Summary.Overall.StaleRunning+view.Summary.Overall.HeartbeatStaleRunning > 0 {
+		warnings = append(warnings, "stale running work exists")
+	}
+	if view.Summary.Overall.Failed+view.Summary.Overall.Dead > 0 {
+		warnings = append(warnings, "failed or dead work items exist")
+	}
+	if len(view.BlockedQueues) > 0 {
+		warnings = append(warnings, "one or more eligible queues are blocked")
+	}
+	if len(view.ProblemArtifacts) > 0 {
+		warnings = append(warnings, "artifact errors observed")
+	}
+	if view.ETA.Confidence == "none" && view.Summary.Overall.Queued+view.Summary.Overall.Running+view.Summary.Overall.Starting > 0 {
+		warnings = append(warnings, "ETA is unavailable for open work")
+	}
+	return warnings
 }
 
 func runtimeETA(summary WorkItemProgressSummary) ETARuntimeState {

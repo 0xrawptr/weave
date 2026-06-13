@@ -15,47 +15,41 @@ import (
 )
 
 type StartBatchRequest struct {
-	Targets                 []string                `json:"targets"`
-	Target                  string                  `json:"target,omitempty"`
-	CampaignID              string                  `json:"campaign_id,omitempty"`
-	Ports                   string                  `json:"ports,omitempty"`
-	MaxConcurrency          int                     `json:"max_concurrency,omitempty"`
-	ChunkPrefix             int                     `json:"chunk_prefix,omitempty"`
-	MaxAttempts             int                     `json:"max_attempts,omitempty"`
-	RetryDelaySeconds       int                     `json:"retry_delay_seconds,omitempty"`
-	NowTargets              []string                `json:"now_targets,omitempty"`
-	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
-	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
-	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
-	CampaignPhase           string                  `json:"campaign_phase,omitempty"`
-	RunPlannedDAG           *bool                   `json:"run_planned_dag,omitempty"`
-	PlannedDAGConcurrency   int                     `json:"planned_dag_concurrency,omitempty"`
-	PlannedDAGMaxIterations int                     `json:"planned_dag_max_iterations,omitempty"`
-	PlannedDAGContinue      bool                    `json:"planned_dag_continue_on_failure,omitempty"`
-	SprayShardBaseURLs      int                     `json:"spray_shard_base_urls,omitempty"`
-	SprayShardWords         int                     `json:"spray_shard_words,omitempty"`
-	NucleiGroupTargets      int                     `json:"nuclei_group_targets,omitempty"`
-	NucleiGroupTemplates    int                     `json:"nuclei_group_templates,omitempty"`
+	Targets                 []string `json:"targets"`
+	Target                  string   `json:"target,omitempty"`
+	CampaignID              string   `json:"campaign_id,omitempty"`
+	Ports                   string   `json:"ports,omitempty"`
+	ChunkPrefix             int      `json:"chunk_prefix,omitempty"`
+	MaxAttempts             int      `json:"max_attempts,omitempty"`
+	RetryDelaySeconds       int      `json:"retry_delay_seconds,omitempty"`
+	NowTargets              []string `json:"now_targets,omitempty"`
+	ActivityTimeoutSeconds  int      `json:"activity_timeout_seconds,omitempty"`
+	CampaignPhase           string   `json:"campaign_phase,omitempty"`
+	RunPlannedDAG           *bool    `json:"run_planned_dag,omitempty"`
+	PlannedDAGConcurrency   int      `json:"planned_dag_concurrency,omitempty"`
+	PlannedDAGMaxIterations int      `json:"planned_dag_max_iterations,omitempty"`
+	PlannedDAGContinue      bool     `json:"planned_dag_continue_on_failure,omitempty"`
+	SprayShardBaseURLs      int      `json:"spray_shard_base_urls,omitempty"`
+	SprayShardWords         int      `json:"spray_shard_words,omitempty"`
+	NucleiGroupTargets      int      `json:"nuclei_group_targets,omitempty"`
+	NucleiGroupTemplates    int      `json:"nuclei_group_templates,omitempty"`
 }
 
 type ResumeBatchSchedulerRequest struct {
-	MaxConcurrency          int                     `json:"max_concurrency,omitempty"`
-	MaxAttempts             int                     `json:"max_attempts,omitempty"`
-	RetryDelaySeconds       int                     `json:"retry_delay_seconds,omitempty"`
-	ActivityTimeoutSeconds  int                     `json:"activity_timeout_seconds,omitempty"`
-	QueueLimits             map[string]int          `json:"queue_limits,omitempty"`
-	ResourceLimits          workflow.ResourceLimits `json:"resource_limits,omitempty"`
-	CampaignPhase           string                  `json:"campaign_phase,omitempty"`
-	RunPlannedDAG           *bool                   `json:"run_planned_dag,omitempty"`
-	PlannedDAGConcurrency   int                     `json:"planned_dag_concurrency,omitempty"`
-	PlannedDAGMaxIterations int                     `json:"planned_dag_max_iterations,omitempty"`
-	PlannedDAGContinue      bool                    `json:"planned_dag_continue_on_failure,omitempty"`
-	SprayShardBaseURLs      int                     `json:"spray_shard_base_urls,omitempty"`
-	SprayShardWords         int                     `json:"spray_shard_words,omitempty"`
-	NucleiGroupTargets      int                     `json:"nuclei_group_targets,omitempty"`
-	NucleiGroupTemplates    int                     `json:"nuclei_group_templates,omitempty"`
-	ContinueAfter           int                     `json:"continue_after,omitempty"`
-	MaxContinueRuns         int                     `json:"max_continue_runs,omitempty"`
+	MaxAttempts             int    `json:"max_attempts,omitempty"`
+	RetryDelaySeconds       int    `json:"retry_delay_seconds,omitempty"`
+	ActivityTimeoutSeconds  int    `json:"activity_timeout_seconds,omitempty"`
+	CampaignPhase           string `json:"campaign_phase,omitempty"`
+	RunPlannedDAG           *bool  `json:"run_planned_dag,omitempty"`
+	PlannedDAGConcurrency   int    `json:"planned_dag_concurrency,omitempty"`
+	PlannedDAGMaxIterations int    `json:"planned_dag_max_iterations,omitempty"`
+	PlannedDAGContinue      bool   `json:"planned_dag_continue_on_failure,omitempty"`
+	SprayShardBaseURLs      int    `json:"spray_shard_base_urls,omitempty"`
+	SprayShardWords         int    `json:"spray_shard_words,omitempty"`
+	NucleiGroupTargets      int    `json:"nuclei_group_targets,omitempty"`
+	NucleiGroupTemplates    int    `json:"nuclei_group_templates,omitempty"`
+	ContinueAfter           int    `json:"continue_after,omitempty"`
+	MaxContinueRuns         int    `json:"max_continue_runs,omitempty"`
 }
 
 type BatchRunResponse struct {
@@ -141,13 +135,10 @@ func (s *Server) StartBatch(c *gin.Context) {
 		NowTargets:              cleanStringSlice(req.NowTargets),
 		CampaignID:              campaignID,
 		Ports:                   ports,
-		MaxConcurrency:          req.MaxConcurrency,
 		ChunkPrefix:             req.ChunkPrefix,
 		MaxAttempts:             req.MaxAttempts,
 		RetryDelaySeconds:       req.RetryDelaySeconds,
 		ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
-		QueueLimits:             req.QueueLimits,
-		ResourceLimits:          req.ResourceLimits,
 		CampaignPhase:           req.CampaignPhase,
 		RunPlannedDAG:           runPlannedDAG,
 		PlannedDAGConcurrency:   req.PlannedDAGConcurrency,
@@ -362,12 +353,9 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 			Targets:                 splitBatchRunTargets(run.Target),
 			CampaignID:              run.CampaignID,
 			Ports:                   ports,
-			MaxConcurrency:          req.MaxConcurrency,
 			MaxAttempts:             req.MaxAttempts,
 			RetryDelaySeconds:       req.RetryDelaySeconds,
 			ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
-			QueueLimits:             req.QueueLimits,
-			ResourceLimits:          req.ResourceLimits,
 			CampaignPhase:           req.CampaignPhase,
 			RunPlannedDAG:           runPlannedDAG,
 			PlannedDAGConcurrency:   req.PlannedDAGConcurrency,

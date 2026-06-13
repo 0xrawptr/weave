@@ -354,6 +354,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	w.RegisterActivityWithOptions(planActivity.GetCampaignStatus, activity.RegisterOptions{Name: planner.GetCampaignStatusActivityName})
 	w.RegisterActivityWithOptions(planActivity.WorkItemSummary, activity.RegisterOptions{Name: planner.WorkItemSummaryActivityName})
 	w.RegisterActivityWithOptions(planActivity.SchedulerSnapshot, activity.RegisterOptions{Name: planner.SchedulerSnapshotActivityName})
+	w.RegisterActivityWithOptions(planActivity.UpdateSchedulerCapacity, activity.RegisterOptions{Name: planner.UpdateSchedulerCapacityActivityName})
 	w.RegisterActivityWithOptions(planActivity.RecoverStaleWorkItems, activity.RegisterOptions{Name: planner.RecoverStaleWorkItemsActivityName})
 	w.RegisterActivityWithOptions(planActivity.RequeueRetryWaitingWorkItems, activity.RegisterOptions{Name: planner.RequeueRetryWaitingWorkItemsActivityName})
 	log.Printf("registered activity: %s", planner.PlanTargetActivityName)
@@ -373,6 +374,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 	log.Printf("registered activity: %s", planner.GetCampaignStatusActivityName)
 	log.Printf("registered activity: %s", planner.WorkItemSummaryActivityName)
 	log.Printf("registered activity: %s", planner.SchedulerSnapshotActivityName)
+	log.Printf("registered activity: %s", planner.UpdateSchedulerCapacityActivityName)
 	log.Printf("registered activity: %s", planner.RecoverStaleWorkItemsActivityName)
 	log.Printf("registered activity: %s", planner.RequeueRetryWaitingWorkItemsActivityName)
 }
@@ -381,11 +383,10 @@ func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledDNSPreflightWorkItemWorkflow)
-	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemsWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)
-	log.Println("registered workflows: batch_portscan, scheduler, scheduled_work_items, action")
+	log.Println("registered workflows: batch_portscan, scheduler, scheduled_dns_preflight, scheduled_planned_dag, scheduled_artifact_action, action")
 }
 
 func targetType(raw string) string {

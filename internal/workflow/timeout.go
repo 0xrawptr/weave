@@ -10,7 +10,7 @@ import (
 const (
 	defaultLongActivityTimeout  = 2 * time.Hour
 	maxLongActivityTimeout      = 6 * time.Hour
-	defaultHeartbeatTimeout     = 90 * time.Second
+	defaultHeartbeatTimeout     = 60 * time.Second
 	defaultStateActivityTimeout = 30 * time.Second
 	ControlWorkflowTaskTimeout  = time.Minute
 )

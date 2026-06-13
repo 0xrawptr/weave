@@ -42,3 +42,33 @@ func TestValidWorkItemStatus(t *testing.T) {
 		t.Fatalf("unknown status should be invalid")
 	}
 }
+
+func TestCanTransferWorkItemLease(t *testing.T) {
+	if !canTransferWorkItemLease(WorkItemStatusStarting, WorkItemStatusRunning) {
+		t.Fatalf("starting -> running should allow workflow ownership transfer")
+	}
+	if canTransferWorkItemLease(WorkItemStatusRunning, WorkItemStatusCompleted) {
+		t.Fatalf("running -> completed should not allow workflow ownership transfer")
+	}
+	if canTransferWorkItemLease(WorkItemStatusPending, WorkItemStatusRunning) {
+		t.Fatalf("pending -> running should not allow workflow ownership transfer")
+	}
+}
+
+func TestRecoverableWorkItemExecutionError(t *testing.T) {
+	for _, message := range []string{
+		"activity heartbeat timeout",
+		"context canceled",
+		"worker shutdown requested",
+		"activity canceled by worker drain",
+		"child workflow execution already started",
+		"workflow execution already started",
+	} {
+		if !recoverableWorkItemExecutionError(message) {
+			t.Fatalf("expected recoverable execution error for %q", message)
+		}
+	}
+	if recoverableWorkItemExecutionError("gogo scan failed: invalid ports") {
+		t.Fatalf("business execution errors should not be treated as recoverable infrastructure failures")
+	}
+}

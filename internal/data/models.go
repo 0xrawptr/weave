@@ -220,19 +220,58 @@ type WorkItem struct {
 }
 
 type WorkItemClaimRequest struct {
-	CampaignID            string `json:"campaign_id,omitempty"`
-	BatchID               string `json:"batch_id,omitempty"`
-	Type                  string `json:"type,omitempty"`
-	Artifact              string `json:"artifact,omitempty"`
-	Queue                 string `json:"queue,omitempty"`
-	Target                string `json:"target,omitempty"`
-	WorkflowID            string `json:"workflow_id,omitempty"`
-	LeaseSeconds          int    `json:"lease_seconds,omitempty"`
-	Schedule              string `json:"schedule,omitempty"`
-	MaxRunning            int    `json:"max_running,omitempty"`
-	MaxRunningPerArtifact int    `json:"max_running_per_artifact,omitempty"`
-	MaxRunningPerCampaign int    `json:"max_running_per_campaign,omitempty"`
-	MaxRunningPerTarget   int    `json:"max_running_per_target,omitempty"`
+	CampaignID   string `json:"campaign_id,omitempty"`
+	BatchID      string `json:"batch_id,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Artifact     string `json:"artifact,omitempty"`
+	Queue        string `json:"queue,omitempty"`
+	Target       string `json:"target,omitempty"`
+	WorkflowID   string `json:"workflow_id,omitempty"`
+	LeaseSeconds int    `json:"lease_seconds,omitempty"`
+	Schedule     string `json:"schedule,omitempty"`
+	MaxRunning   int    `json:"max_running,omitempty"`
+}
+
+type SchedulerCapacity struct {
+	CampaignID          string    `json:"campaign_id,omitempty"`
+	BatchID             string    `json:"batch_id,omitempty"`
+	Queue               string    `json:"queue"`
+	Artifact            string    `json:"artifact,omitempty"`
+	MinCapacity         int       `json:"min_capacity"`
+	MaxCapacity         int       `json:"max_capacity"`
+	EffectiveCapacity   int       `json:"effective_capacity"`
+	RecommendedCapacity int       `json:"recommended_capacity"`
+	Running             int       `json:"running"`
+	Pending             int       `json:"pending"`
+	RetryWaiting        int       `json:"retry_waiting"`
+	StaleRunning        int       `json:"stale_running"`
+	Completed           int       `json:"completed"`
+	Failed              int       `json:"failed"`
+	Dead                int       `json:"dead"`
+	AvgDurationMs       int64     `json:"avg_duration_ms,omitempty"`
+	ThroughputPerMin    int       `json:"throughput_per_min,omitempty"`
+	StatRequests        int64     `json:"stat_requests,omitempty"`
+	StatResults         int64     `json:"stat_results,omitempty"`
+	StatErrors          int64     `json:"stat_errors,omitempty"`
+	ErrorRatePercent    int       `json:"error_rate_percent,omitempty"`
+	LastDecision        string    `json:"last_decision,omitempty"`
+	DecisionReason      string    `json:"decision_reason,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type SchedulerCapacityPolicy struct {
+	Queue      string `json:"queue"`
+	Artifact   string `json:"artifact,omitempty"`
+	Min        int    `json:"min"`
+	Initial    int    `json:"initial"`
+	Max        int    `json:"max"`
+	SlowMs     int64  `json:"slow_ms,omitempty"`
+	ErrorLimit int    `json:"error_limit_percent,omitempty"`
+}
+
+type SchedulerCapacityUpdateRequest struct {
+	CampaignID string `json:"campaign_id,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
 }
 
 type WorkItemHeartbeatRequest struct {
@@ -258,8 +297,14 @@ type WorkItemRetryRequest struct {
 }
 
 type WorkItemBulkResult struct {
-	Matched int `json:"matched"`
-	Updated int `json:"updated"`
+	Matched int                 `json:"matched"`
+	Updated int                 `json:"updated"`
+	Batches []WorkItemBulkBatch `json:"batches,omitempty"`
+}
+
+type WorkItemBulkBatch struct {
+	CampaignID string `json:"campaign_id,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
 }
 
 type WorkItemGroupSummary struct {
@@ -309,36 +354,64 @@ type CampaignRuntimeView struct {
 	Phase               string                  `json:"phase"`
 	PhaseReason         string                  `json:"phase_reason,omitempty"`
 	PhaseBlockingReason string                  `json:"phase_blocking_reason,omitempty"`
+	CurrentBottleneck   *RuntimeBottleneck      `json:"current_bottleneck,omitempty"`
 	ExecutionPlan       []RuntimePlanItem       `json:"execution_plan,omitempty"`
 	OpenPhaseWork       []WorkItemGroupSummary  `json:"open_phase_work,omitempty"`
 	BlockedQueues       []QueueRuntimeState     `json:"blocked_queues,omitempty"`
 	SlowTargets         []TargetRuntimeState    `json:"slow_targets,omitempty"`
 	ArtifactHealth      []ArtifactRuntimeHealth `json:"artifact_health,omitempty"`
+	ProblemArtifacts    []ArtifactRuntimeHealth `json:"problem_artifacts,omitempty"`
+	Capacity            []SchedulerCapacity     `json:"capacity,omitempty"`
+	RuntimeWarnings     []string                `json:"runtime_warnings,omitempty"`
 	ETA                 ETARuntimeState         `json:"eta"`
 	Summary             WorkItemProgressSummary `json:"summary"`
 	RecentPhaseEvents   []CampaignPhaseEvent    `json:"recent_phase_events,omitempty"`
 	GeneratedAt         time.Time               `json:"generated_at"`
 }
 
+type RuntimeBottleneck struct {
+	Kind         string `json:"kind"`
+	Key          string `json:"key"`
+	Reason       string `json:"reason"`
+	Phase        string `json:"phase,omitempty"`
+	Queue        string `json:"queue,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Artifact     string `json:"artifact,omitempty"`
+	Target       string `json:"target,omitempty"`
+	Pending      int    `json:"pending,omitempty"`
+	Starting     int    `json:"starting,omitempty"`
+	Running      int    `json:"running,omitempty"`
+	RetryWaiting int    `json:"retry_waiting,omitempty"`
+	Paused       int    `json:"paused,omitempty"`
+	Failed       int    `json:"failed,omitempty"`
+	Dead         int    `json:"dead,omitempty"`
+	StaleRunning int    `json:"stale_running,omitempty"`
+	ETASeconds   int64  `json:"eta_seconds,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+}
+
 type RuntimePlanItem struct {
-	Type           string `json:"type"`
-	Queue          string `json:"queue"`
-	Artifact       string `json:"artifact"`
-	Phase          string `json:"phase"`
-	Allowed        bool   `json:"allowed"`
-	State          string `json:"state"`
-	Reason         string `json:"reason"`
-	Pending        int    `json:"pending"`
-	Starting       int    `json:"starting,omitempty"`
-	Running        int    `json:"running"`
-	Completed      int    `json:"completed"`
-	Failed         int    `json:"failed"`
-	Dead           int    `json:"dead"`
-	RetryWaiting   int    `json:"retry_waiting,omitempty"`
-	Paused         int    `json:"paused,omitempty"`
-	StaleRunning   int    `json:"stale_running,omitempty"`
-	NextPhase      string `json:"next_phase,omitempty"`
-	BlockingReason string `json:"blocking_reason,omitempty"`
+	Type            string `json:"type"`
+	Queue           string `json:"queue"`
+	Artifact        string `json:"artifact"`
+	Phase           string `json:"phase"`
+	Allowed         bool   `json:"allowed"`
+	State           string `json:"state"`
+	Reason          string `json:"reason"`
+	Pending         int    `json:"pending"`
+	Starting        int    `json:"starting,omitempty"`
+	Running         int    `json:"running"`
+	Completed       int    `json:"completed"`
+	Failed          int    `json:"failed"`
+	Dead            int    `json:"dead"`
+	RetryWaiting    int    `json:"retry_waiting,omitempty"`
+	Paused          int    `json:"paused,omitempty"`
+	StaleRunning    int    `json:"stale_running,omitempty"`
+	ProgressPercent int    `json:"progress_percent,omitempty"`
+	ETASeconds      int64  `json:"eta_seconds,omitempty"`
+	LastError       string `json:"last_error,omitempty"`
+	NextPhase       string `json:"next_phase,omitempty"`
+	BlockingReason  string `json:"blocking_reason,omitempty"`
 }
 
 type QueueRuntimeState struct {

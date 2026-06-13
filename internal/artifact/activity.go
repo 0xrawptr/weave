@@ -191,7 +191,7 @@ func startActivityHeartbeat(ctx context.Context, artifactName, target string, in
 	}
 	record()
 	go func() {
-		ticker := time.NewTicker(20 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {

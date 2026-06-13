@@ -157,7 +157,7 @@ func (c *Config) setWorkerDefaults() {
 		c.Temporal.Workers.Control.MaxConcurrentActivityTaskPollers = 4
 	}
 	if c.Temporal.Workers.Control.WorkerStopTimeout == 0 {
-		c.Temporal.Workers.Control.WorkerStopTimeout = 30 * time.Second
+		c.Temporal.Workers.Control.WorkerStopTimeout = 2 * time.Minute
 	}
 
 	if c.Temporal.Workers.DefaultArtifact.MaxConcurrentActivityTasks == 0 {
@@ -167,54 +167,54 @@ func (c *Config) setWorkerDefaults() {
 		c.Temporal.Workers.DefaultArtifact.MaxConcurrentActivityTaskPollers = 2
 	}
 	if c.Temporal.Workers.DefaultArtifact.WorkerStopTimeout == 0 {
-		c.Temporal.Workers.DefaultArtifact.WorkerStopTimeout = 30 * time.Second
+		c.Temporal.Workers.DefaultArtifact.WorkerStopTimeout = 2 * time.Minute
 	}
 
 	defaults := map[string]WorkerConfig{
 		"gogo": {
 			MaxConcurrentActivityTasks:       4,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"spray": {
 			MaxConcurrentActivityTasks:       6,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"nuclei": {
 			MaxConcurrentActivityTasks:       3,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"neutron": {
 			MaxConcurrentActivityTasks:       2,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"zombie": {
 			MaxConcurrentActivityTasks:       1,
 			MaxConcurrentActivityTaskPollers: 1,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"fingers": {
 			MaxConcurrentActivityTasks:       8,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"proton": {
 			MaxConcurrentActivityTasks:       8,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"cdncheck": {
 			MaxConcurrentActivityTasks:       8,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 		"dnsx": {
 			MaxConcurrentActivityTasks:       8,
 			MaxConcurrentActivityTaskPollers: 2,
-			WorkerStopTimeout:                30 * time.Second,
+			WorkerStopTimeout:                2 * time.Minute,
 		},
 	}
 	for artifactName, defaultsForArtifact := range defaults {

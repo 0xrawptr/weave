@@ -26,6 +26,7 @@ const SetWorkItemStatusActivityName = "set_work_item_status"
 const GetCampaignStatusActivityName = "get_campaign_status"
 const WorkItemSummaryActivityName = "work_item_summary"
 const SchedulerSnapshotActivityName = "scheduler_snapshot"
+const UpdateSchedulerCapacityActivityName = "update_scheduler_capacity"
 const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
 const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_items"
 
@@ -350,6 +351,13 @@ func (a *Activity) SchedulerSnapshot(ctx context.Context, request SchedulerSnaps
 		CampaignID: request.CampaignID,
 		BatchID:    request.BatchID,
 	})
+}
+
+func (a *Activity) UpdateSchedulerCapacity(ctx context.Context, request data.SchedulerCapacityUpdateRequest) ([]data.SchedulerCapacity, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil {
+		return nil, nil
+	}
+	return a.planner.repo.UpdateSchedulerCapacity(ctx, request)
 }
 
 type RecoverStaleWorkItemsRequest struct {
