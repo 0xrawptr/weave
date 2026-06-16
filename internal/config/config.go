@@ -13,8 +13,32 @@ type Config struct {
 	Postgres  PostgresConfig  `yaml:"postgres"`
 	Neo4j     Neo4jConfig     `yaml:"neo4j"`
 	Redis     RedisConfig     `yaml:"redis"`
+	SDK       SDKConfig       `yaml:"sdk"`
 	Artifacts ArtifactsConfig `yaml:"artifacts"`
 	Knowledge KnowledgeConfig `yaml:"knowledge"`
+}
+
+type SDKConfig struct {
+	Proxy    string               `yaml:"proxy,omitempty"`
+	CyberHub *CyberHubConfig      `yaml:"cyberhub,omitempty"`
+	File     *FileProviderConfig  `yaml:"file_provider,omitempty"`
+	URL      *URLProviderConfig   `yaml:"url_provider,omitempty"`
+}
+
+type CyberHubConfig struct {
+	Endpoint string `yaml:"url"`
+	APIKey   string `yaml:"api_key"`
+	Draft    bool   `yaml:"draft,omitempty"`
+}
+
+type FileProviderConfig struct {
+	FingersPath string `yaml:"fingers_path"`
+	POCsPath    string `yaml:"pocs_path"`
+}
+
+type URLProviderConfig struct {
+	FingersURL string `yaml:"fingers_url"`
+	POCsURL    string `yaml:"pocs_url"`
 }
 
 type ServerConfig struct {

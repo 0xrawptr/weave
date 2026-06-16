@@ -42,6 +42,24 @@ func (g *GogoArtifact) SetThreads(threads int) {
 	}
 }
 
+func (g *GogoArtifact) ResizeSDKCapacity(schedulerSlots int) int {
+	if g == nil || g.engine == nil || schedulerSlots <= 0 {
+		return 0
+	}
+	threads := g.threads
+	if threads <= 0 {
+		threads = gogoThreads()
+	}
+	return resizeSDKCapacity(g.engine, schedulerSlots*threads)
+}
+
+func (g *GogoArtifact) SDKCapacityTotal() int {
+	if g == nil || g.engine == nil || g.engine.Capacity() == nil {
+		return 0
+	}
+	return g.engine.Capacity().Total()
+}
+
 // SetResultHandler injects a per-result callback for streaming persist.
 func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, result *types.GOGOResult)) {
 	g.resultHandler = h

@@ -93,6 +93,55 @@ func TestGogoExtractorEmpty(t *testing.T) {
 		t.Errorf("expected empty entities, got %d", len(result.Entities))
 	}
 }
+
+func TestGogoExtractorDropsTimeoutGuessOnlyTCPResults(t *testing.T) {
+	result, err := (&GogoExtractor{}).Extract(context.Background(), "192.168.1.1/32", gogoJSON(
+		map[string]interface{}{
+			"ip":       "192.168.1.1",
+			"port":     "3306",
+			"protocol": "tcp",
+			"status":   "open",
+			"timing":   8000,
+			"frameworks": map[string]interface{}{
+				"mysql": map[string]interface{}{
+					"name":  "mysql",
+					"froms": map[string]bool{"4": true},
+				},
+			},
+		},
+	))
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	if result != nil && len(result.Entities) > 0 {
+		t.Fatalf("expected timeout guess-only TCP result to stay out of assets, got %#v", result.Entities)
+	}
+}
+
+func TestGogoExtractorKeepsTimeoutWithActiveEvidence(t *testing.T) {
+	result, err := (&GogoExtractor{}).Extract(context.Background(), "192.168.1.1/32", gogoJSON(
+		map[string]interface{}{
+			"ip":       "192.168.1.1",
+			"port":     "22",
+			"protocol": "tcp",
+			"status":   "open",
+			"timing":   8000,
+			"frameworks": map[string]interface{}{
+				"ssh": map[string]interface{}{
+					"name":  "ssh",
+					"froms": map[string]bool{"1": true},
+				},
+			},
+		},
+	))
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+	if findEntity(result.Entities, "port", "192.168.1.1:22") == nil {
+		t.Fatalf("expected active evidence result to be retained, got %#v", result.Entities)
+	}
+}
+
 func TestGogoExtractorNil(t *testing.T) {
 	e := &GogoExtractor{}
 	result, err := e.Extract(context.Background(), "", nil)

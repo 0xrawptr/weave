@@ -94,10 +94,6 @@ func NormalizeCampaignPhase(phase string) string {
 	}
 }
 
-func ValidCampaignPhase(phase string) bool {
-	return NormalizeCampaignPhase(phase) != CampaignPhaseAuto
-}
-
 func defaultString(value, fallback string) string {
 	if value != "" {
 		return value

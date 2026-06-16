@@ -29,11 +29,16 @@ const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_ite
 const MarkTailWorkItemsActivityName = "mark_tail_work_items"
 
 type Activity struct {
-	planner *Planner
+	planner         *Planner
+	syncSDKCapacity func([]data.SchedulerCapacity)
 }
 
 func NewActivity(repo *data.Repository) *Activity {
 	return &Activity{planner: New(repo)}
+}
+
+func NewActivityWithSDKCapacitySync(repo *data.Repository, sync func([]data.SchedulerCapacity)) *Activity {
+	return &Activity{planner: New(repo), syncSDKCapacity: sync}
 }
 
 type PlanDAGRequest struct {
@@ -311,7 +316,11 @@ func (a *Activity) UpdateSchedulerCapacity(ctx context.Context, request data.Sch
 	if a == nil || a.planner == nil || a.planner.repo == nil {
 		return nil, nil
 	}
-	return a.planner.repo.UpdateSchedulerCapacity(ctx, request)
+	capacities, err := a.planner.repo.UpdateSchedulerCapacity(ctx, request)
+	if err == nil && a.syncSDKCapacity != nil {
+		a.syncSDKCapacity(capacities)
+	}
+	return capacities, err
 }
 
 type RecoverStaleWorkItemsRequest struct {

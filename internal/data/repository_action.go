@@ -1,9 +1,6 @@
 package data
 
-import (
-	"context"
-	"encoding/json"
-)
+import "context"
 
 func (r *Repository) ClaimAction(ctx context.Context, record ActionRecord) (bool, error) {
 	if r.Postgres == nil {
@@ -32,9 +29,4 @@ func (r *Repository) GetActionRecordsFiltered(ctx context.Context, target, campa
 		return nil, nil
 	}
 	return r.Postgres.QueryActionRecordsFiltered(ctx, target, campaignID)
-}
-
-func MarshalActionInput(input map[string]interface{}) []byte {
-	raw, _ := json.Marshal(input)
-	return raw
 }

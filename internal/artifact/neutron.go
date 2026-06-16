@@ -31,6 +31,20 @@ func NewNeutronArtifactFromEngine(engine *sdkneutron.Engine) *NeutronArtifact {
 	return &NeutronArtifact{engine: engine}
 }
 
+func (n *NeutronArtifact) ResizeSDKCapacity(schedulerSlots int) int {
+	if n == nil || n.engine == nil || schedulerSlots <= 0 {
+		return 0
+	}
+	return resizeSDKCapacity(n.engine, schedulerSlots)
+}
+
+func (n *NeutronArtifact) SDKCapacityTotal() int {
+	if n == nil || n.engine == nil || n.engine.Capacity() == nil {
+		return 0
+	}
+	return n.engine.Capacity().Total()
+}
+
 // SetURLResolver injects a resolver for DB-backed URL resolution.
 func (n *NeutronArtifact) SetURLResolver(r URLResolver) { n.urlResolver = r }
 

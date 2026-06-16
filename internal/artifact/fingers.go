@@ -3,7 +3,6 @@ package artifact
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -114,18 +113,19 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 			}
 		}
 		fingersCtx := sdkfingers.NewContext().WithContext(ctx)
-		transport := activeMatchTransport(fingersCtx)
-		level := fingersCtx.GetLevel()
-		for _, rawURL := range urls {
-			baseURL, ok := activeMatchBaseURL(rawURL)
-			if !ok {
+		resultCh, err := f.engine.HTTPMatchStream(fingersCtx, activeMatchBaseURLs(urls))
+		if err != nil {
+			return Output{Artifact: f.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
+		}
+		for result := range resultCh {
+			if result == nil || result.Err != nil {
 				continue
 			}
-			for _, sr := range f.engine.ActiveMatch(baseURL, level, transport) {
+			for _, sr := range result.Results {
 				if sr == nil || sr.Framework == nil {
 					continue
 				}
-				items = append(items, frameworkItem(baseURL, sr.Framework.Name, sr.Framework))
+				items = append(items, frameworkItem(result.Target, sr.Framework.Name, sr.Framework))
 			}
 		}
 		// Favicon detection with smarter HTML parsing.
@@ -167,22 +167,25 @@ func (f *FingersArtifact) Close() error {
 	return f.engine.Close()
 }
 
-func activeMatchTransport(ctx *sdkfingers.Context) http.RoundTripper {
-	if ctx == nil {
-		return http.DefaultTransport
+func activeMatchBaseURLs(rawURLs []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(rawURLs))
+	for _, raw := range rawURLs {
+		baseURL, ok := activeMatchBaseURL(raw)
+		if !ok {
+			continue
+		}
+		if _, ok := seen[baseURL]; ok {
+			continue
+		}
+		seen[baseURL] = struct{}{}
+		out = append(out, baseURL)
 	}
-	client := ctx.GetClient()
-	if client == nil || client.Transport == nil {
-		return http.DefaultTransport
-	}
-	return client.Transport
+	return out
 }
 
 func activeMatchBaseURL(raw string) (string, bool) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", false
-	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", false

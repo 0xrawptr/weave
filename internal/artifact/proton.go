@@ -31,6 +31,20 @@ func NewProtonArtifactFromEngine(engine *sdkproton.Engine) *ProtonArtifact {
 	return &ProtonArtifact{engine: engine}
 }
 
+func (p *ProtonArtifact) ResizeSDKCapacity(schedulerSlots int) int {
+	if p == nil || p.engine == nil || schedulerSlots <= 0 {
+		return 0
+	}
+	return resizeSDKCapacity(p.engine, schedulerSlots)
+}
+
+func (p *ProtonArtifact) SDKCapacityTotal() int {
+	if p == nil || p.engine == nil || p.engine.Capacity() == nil {
+		return 0
+	}
+	return p.engine.Capacity().Total()
+}
+
 func (p *ProtonArtifact) Name() string { return "proton" }
 
 func (p *ProtonArtifact) Descriptor() Descriptor {

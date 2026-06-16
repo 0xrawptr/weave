@@ -8,10 +8,6 @@ import (
 
 const defaultCIDRChunkPrefix = 24
 
-func splitCIDR(target string) []string {
-	return splitCIDRToPrefix(target, defaultCIDRChunkPrefix)
-}
-
 func splitCIDRToPrefix(target string, prefix int) []string {
 	_, ipnet, err := net.ParseCIDR(target)
 	if err != nil {

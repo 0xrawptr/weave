@@ -540,8 +540,8 @@ func (p *PostgresStore) UpdateCampaignPhase(ctx context.Context, campaignID, bat
 	}
 	defer tx.Rollback(ctx)
 
-	var previous string
-	err = tx.QueryRow(ctx, `SELECT phase FROM campaigns WHERE id = $1 FOR UPDATE`, campaignID).Scan(&previous)
+	var previous, previousReason string
+	err = tx.QueryRow(ctx, `SELECT phase, phase_reason FROM campaigns WHERE id = $1 FOR UPDATE`, campaignID).Scan(&previous, &previousReason)
 	if err == pgx.ErrNoRows {
 		_, err = tx.Exec(ctx,
 			`INSERT INTO campaigns (id, name, status, phase, phase_reason, updated_at)
@@ -555,6 +555,12 @@ func (p *PostgresStore) UpdateCampaignPhase(ctx context.Context, campaignID, bat
 		return nil, err
 	}
 
+	if previous == phase && previousReason == reason {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return p.GetCampaign(ctx, campaignID)
+	}
 	if previous != phase {
 		_, err = tx.Exec(ctx,
 			`INSERT INTO campaign_phase_events (id, campaign_id, batch_id, from_phase, to_phase, reason)
@@ -563,8 +569,9 @@ func (p *PostgresStore) UpdateCampaignPhase(ctx context.Context, campaignID, bat
 				SELECT 1 FROM campaign_phase_events
 				WHERE campaign_id = $2
 				  AND batch_id = $3
-				  AND from_phase = $5
-				  AND to_phase = $4
+				  AND from_phase = $4
+				  AND to_phase = $5
+				  AND reason = $6
 				  AND created_at >= NOW() - INTERVAL '2 minutes'
 			 )`,
 			GenerateID("campaign_phase_event", campaignID, batchID, previous, phase, fmt.Sprintf("%d", time.Now().UnixNano())),

@@ -200,14 +200,13 @@ func scheduledActionItemTypes() []string {
 }
 
 func schedulePipelineWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput) (int, bool, error) {
+	if paused, err := campaignPaused(stateCtx, input.BatchInput.CampaignID); err != nil {
+		return 0, false, err
+	} else if paused {
+		return 0, true, nil
+	}
 	processed := 0
 	for processed < input.ContinueAfter {
-		if paused, err := campaignPaused(stateCtx, input.BatchInput.CampaignID); err != nil {
-			return processed, false, err
-		} else if paused {
-			return processed, true, nil
-		}
-
 		snapshot, err := loadSchedulerSnapshot(stateCtx, input)
 		if err != nil {
 			return processed, false, err
@@ -814,14 +813,6 @@ func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemIn
 	var claimed bool
 	err := workflow.ExecuteActivity(ctx, planner.ClaimActionActivityName, action).Get(ctx, &claimed)
 	return claimed, err
-}
-
-func skipScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, reason string) error {
-	claimed, err := claimScheduledActionRecord(ctx, item, itemInput, "")
-	if err != nil || !claimed {
-		return err
-	}
-	return completeScheduledActionRecord(ctx, item.ID, false, "skipped", reason)
 }
 
 func completeScheduledActionRecord(ctx workflow.Context, actionID string, success bool, status, errorMessage string) error {
@@ -1587,13 +1578,6 @@ func plannedDAGFollowUpWorkItem(input SchedulerWorkflowInput, target, parentID s
 		Status:      "pending",
 		MaxAttempts: 1,
 	}
-}
-
-func minPositive(value, fallback int) int {
-	if value > 0 && value < fallback {
-		return value
-	}
-	return fallback
 }
 
 func maxPositive(value, fallback int) int {

@@ -30,8 +30,6 @@ func GenerateID(parts ...string) string {
 	return hex.EncodeToString(h[:8])
 }
 
-func generateID(parts ...string) string { return GenerateID(parts...) }
-
 func TargetID(value string) string {
 	return GenerateID("target", value)
 }

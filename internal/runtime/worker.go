@@ -14,19 +14,15 @@ import (
 	"github.com/0xrawptr/weave/internal/etl"
 	"github.com/0xrawptr/weave/internal/planner"
 	"github.com/0xrawptr/weave/internal/workflow"
+	"github.com/chainreactors/sdk/pkg/association"
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	"go.temporal.io/sdk/activity"
 	sdkworker "go.temporal.io/sdk/worker"
 )
 
-func ConfigureWorker(w sdkworker.Worker, runtimeApp *app.App) {
-	ConfigureControlWorker(w, runtimeApp)
-	ConfigureArtifactWorker(w, runtimeApp, "")
-}
-
 func ConfigureControlWorker(w sdkworker.Worker, runtimeApp *app.App) {
 	repo := runtimeApp.Repo
-	registerPlannerActivities(w, repo)
+	registerPlannerActivities(w, repo, runtimeApp.SyncSDKCapacityWithLog)
 	registerWorkflows(w)
 }
 
@@ -86,8 +82,16 @@ func wireGogoStreaming(runtimeApp *app.App) {
 			WorkflowID: workflowID,
 			Data:       raw,
 		})
+		if !etl.IsGogoResultAssetCandidate(result) {
+			return
+		}
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}})
-		if err := runtimeApp.Pipelines.Gogo.Process(etl.WithCampaignID(ctx, campaignID), target, wrapped); err != nil {
+		etlCtx := etl.WithCampaignID(ctx, campaignID)
+		q := association.NewQuery().WithFrameworks(result.Frameworks).WithVulns(result.Vulns)
+		if qr, lookupErr := runtimeApp.SDK.Lookup(q); lookupErr == nil {
+			etlCtx = etl.WithPreEnrichment(etlCtx, qr)
+		}
+		if err := runtimeApp.Pipelines.Gogo.Process(etlCtx, target, wrapped); err != nil {
 			log.Printf("WARNING: gogo streaming ETL failed: %v", err)
 			return
 		}
@@ -120,7 +124,22 @@ func wireSprayStreaming(runtimeApp *app.App) {
 			Data:       raw,
 		})
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}, "total": 1})
-		if err := runtimeApp.Pipelines.Spray.Process(etl.WithCampaignID(ctx, campaignID), target, wrapped); err != nil {
+		etlCtx := etl.WithCampaignID(ctx, campaignID)
+		if len(result.Frameworks) > 0 {
+			names := make([]string, 0, len(result.Frameworks))
+			for _, fw := range result.Frameworks {
+				if fw.Name != "" {
+					names = append(names, fw.Name)
+				}
+			}
+			if len(names) > 0 {
+				q := association.NewQuery().WithFingers(names...)
+				if qr, lookupErr := runtimeApp.SDK.Lookup(q); lookupErr == nil {
+					etlCtx = etl.WithPreEnrichment(etlCtx, qr)
+				}
+			}
+		}
+		if err := runtimeApp.Pipelines.Spray.Process(etlCtx, target, wrapped); err != nil {
 			log.Printf("WARNING: spray streaming ETL failed: %v", err)
 			return
 		}
@@ -335,8 +354,8 @@ func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target, 
 	}
 }
 
-func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
-	planActivity := planner.NewActivity(repo)
+func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSDKCapacity func([]data.SchedulerCapacity)) {
+	planActivity := planner.NewActivityWithSDKCapacitySync(repo, syncSDKCapacity)
 	w.RegisterActivityWithOptions(planActivity.PlanDAGTarget, activity.RegisterOptions{Name: planner.PlanDAGTargetActivityName})
 	w.RegisterActivityWithOptions(planActivity.ClaimAction, activity.RegisterOptions{Name: planner.ClaimActionActivityName})
 	w.RegisterActivityWithOptions(planActivity.CompleteAction, activity.RegisterOptions{Name: planner.CompleteActionActivityName})

@@ -52,6 +52,20 @@ func NewZombieArtifactFromEngine(engine *sdkzombie.Engine) *ZombieArtifact {
 	return &ZombieArtifact{engine: engine}
 }
 
+func (z *ZombieArtifact) ResizeSDKCapacity(schedulerSlots int) int {
+	if z == nil || z.engine == nil || schedulerSlots <= 0 {
+		return 0
+	}
+	return resizeSDKCapacity(z.engine, schedulerSlots)
+}
+
+func (z *ZombieArtifact) SDKCapacityTotal() int {
+	if z == nil || z.engine == nil || z.engine.Capacity() == nil {
+		return 0
+	}
+	return z.engine.Capacity().Total()
+}
+
 func (z *ZombieArtifact) Name() string { return "zombie" }
 
 func (z *ZombieArtifact) Descriptor() Descriptor {

@@ -26,16 +26,6 @@ func longActivityTimeout(seconds int) time.Duration {
 	return timeout
 }
 
-func longActivityContext(ctx workflow.Context, timeoutSeconds int) workflow.Context {
-	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: longActivityTimeout(timeoutSeconds),
-		HeartbeatTimeout:    defaultHeartbeatTimeout,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: 1,
-		},
-	})
-}
-
 func artifactActivityContext(ctx workflow.Context, artifactName string, timeoutSeconds int) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           ArtifactTaskQueue(artifactName),
@@ -43,23 +33,6 @@ func artifactActivityContext(ctx workflow.Context, artifactName string, timeoutS
 		HeartbeatTimeout:    defaultHeartbeatTimeout,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 1,
-		},
-	})
-}
-
-func shortArtifactActivityContext(ctx workflow.Context, artifactName string, timeout time.Duration, maxAttempts int32) workflow.Context {
-	if timeout <= 0 {
-		timeout = defaultStateActivityTimeout
-	}
-	if maxAttempts <= 0 {
-		maxAttempts = 1
-	}
-	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		TaskQueue:           ArtifactTaskQueue(artifactName),
-		StartToCloseTimeout: timeout,
-		HeartbeatTimeout:    defaultHeartbeatTimeout,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: maxAttempts,
 		},
 	})
 }

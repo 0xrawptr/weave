@@ -12,7 +12,10 @@ import (
 	sdkclient "github.com/chainreactors/sdk/client"
 	sdkgogo "github.com/chainreactors/sdk/gogo"
 	sdkneutron "github.com/chainreactors/sdk/neutron"
+	"github.com/chainreactors/sdk/pkg/association"
+	"github.com/chainreactors/sdk/pkg/cyberhub"
 	"github.com/chainreactors/sdk/pkg/provider"
+	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	sdkproton "github.com/chainreactors/sdk/proton"
 	sdkspray "github.com/chainreactors/sdk/spray"
 	sdkzombie "github.com/chainreactors/sdk/zombie"
@@ -102,11 +105,17 @@ func configureArtifactDefaults(reg *artifact.Registry, cfg *config.Config) {
 
 func buildSDKClient(cfg *config.Config) *sdkclient.Client {
 	opts := []sdkclient.Option{
-		sdkclient.WithProvider(provider.NewEmbedProvider()),
-		sdkclient.WithIndex(nil),
+		sdkclient.WithProvider(buildProviders(cfg)...),
+		sdkclient.WithIndex(&association.IndexOptions{
+			MetadataKeys: []string{"product", "vendor", "service"},
+		}),
 	}
 	if cfg == nil {
 		return sdkclient.New(opts...)
+	}
+
+	if cfg.SDK.Proxy != "" {
+		opts = append(opts, sdkclient.WithProxy(cfg.SDK.Proxy))
 	}
 
 	gogoCfg := sdkgogo.NewConfig()
@@ -165,6 +174,59 @@ func sdkCapacity(artifact string, override int) int {
 		return override
 	}
 	return data.DefaultSDKCapacityForArtifact(artifact)
+}
+
+func buildProviders(cfg *config.Config) []sdktypes.Provider {
+	providers := []sdktypes.Provider{provider.NewEmbedProvider()}
+	if cfg == nil {
+		return providers
+	}
+	if fp := cfg.SDK.File; fp != nil && (fp.FingersPath != "" || fp.POCsPath != "") {
+		providers = append(providers, provider.NewFileProvider(fp.FingersPath, fp.POCsPath))
+	}
+	if up := cfg.SDK.URL; up != nil && (up.FingersURL != "" || up.POCsURL != "") {
+		providers = append(providers, provider.NewURLProvider(up.FingersURL, up.POCsURL))
+	}
+	if ch := cfg.SDK.CyberHub; ch != nil && ch.Endpoint != "" {
+		p := cyberhub.NewProvider(ch.Endpoint, ch.APIKey)
+		if ch.Draft {
+			p.WithFilter(sdktypes.NewExportFilter().WithDraft(true))
+		}
+		providers = append(providers, p)
+	}
+	return providers
+}
+
+func (a *App) SyncSDKCapacity(capacities []data.SchedulerCapacity) map[string]int {
+	out := map[string]int{}
+	if a == nil || a.Registry == nil {
+		return out
+	}
+	for _, capacity := range capacities {
+		if capacity.Artifact == "" || capacity.EffectiveCapacity <= 0 {
+			continue
+		}
+		artifactInstance, err := a.Registry.Get(capacity.Artifact)
+		if err != nil {
+			continue
+		}
+		resizable, ok := artifactInstance.(artifact.SDKCapacityResizable)
+		if !ok {
+			continue
+		}
+		total := resizable.ResizeSDKCapacity(capacity.EffectiveCapacity)
+		if total > 0 {
+			out[capacity.Artifact] = total
+		}
+	}
+	return out
+}
+
+func (a *App) SyncSDKCapacityWithLog(capacities []data.SchedulerCapacity) {
+	totals := a.SyncSDKCapacity(capacities)
+	for artifactName, total := range totals {
+		log.Printf("sdk capacity resized: artifact=%s total=%d", artifactName, total)
+	}
 }
 
 func (a *App) WireResolvers() {

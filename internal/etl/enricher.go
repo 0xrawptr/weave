@@ -11,6 +11,20 @@ import (
 	"github.com/chainreactors/sdk/pkg/association"
 )
 
+type preEnrichmentKey struct{}
+
+func WithPreEnrichment(ctx context.Context, qr *association.QueryResult) context.Context {
+	if qr == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, preEnrichmentKey{}, qr)
+}
+
+func preEnrichmentFromContext(ctx context.Context) *association.QueryResult {
+	qr, _ := ctx.Value(preEnrichmentKey{}).(*association.QueryResult)
+	return qr
+}
+
 // Enricher augments extracted entities with derived knowledge.
 type Enricher interface {
 	Enrich(ctx context.Context, result *ExtractResult) (*ExtractResult, error)
@@ -62,6 +76,13 @@ func (a *AssociationEnricher) Enrich(ctx context.Context, result *ExtractResult)
 		return result, nil
 	}
 
+	if qr := preEnrichmentFromContext(ctx); qr != nil {
+		for i, e := range result.Entities {
+			result.Entities[i] = applyAssociationResult(e, qr)
+		}
+		return result, nil
+	}
+
 	idx, err := a.client.Index()
 	if err != nil || idx == nil {
 		log.Printf("WARNING: enrichment skipped — index not available: %v", err)
@@ -94,10 +115,12 @@ func associationQueryForEntity(e Entity) *association.Query {
 		q.WithFingers(e.Value).
 			WithAliases(e.Value, e.Product).
 			WithAttr("product", e.Product)
+		addAssociationSearch(q, e.Value, e.Product)
 	case "service":
 		q.WithServices(serviceAssociationTerms(e.Value, e.Product)...)
 	case "template":
 		q.WithTemplates(e.Value)
+		addAssociationSearch(q, e.Value)
 	case "cve":
 		q.WithCVEs(e.Value)
 	case "cpe":
@@ -106,6 +129,7 @@ func associationQueryForEntity(e Entity) *association.Query {
 		q.WithTemplates(e.TemplateIDs...).
 			WithCVEs(e.CVEs...).
 			WithAttr("severity", e.Severity)
+		addAssociationSearch(q, e.Value, e.Product)
 	default:
 		return nil
 	}
@@ -116,10 +140,44 @@ func associationQueryForEntity(e Entity) *association.Query {
 		len(q.Services) == 0 &&
 		len(q.CPEs) == 0 &&
 		len(q.CVEs) == 0 &&
-		len(q.Attributes) == 0 {
+		len(q.Attributes) == 0 &&
+		q.Search == "" {
 		return nil
 	}
 	return q
+}
+
+func addAssociationSearch(q *association.Query, values ...string) {
+	for _, value := range values {
+		value = associationSearchTerm(value)
+		if value == "" {
+			continue
+		}
+		q.WithSearch(value)
+		return
+	}
+}
+
+func associationSearchTerm(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "cve-") ||
+		strings.HasPrefix(lower, "cpe:") ||
+		strings.Contains(lower, "://") ||
+		strings.Contains(lower, "/") {
+		return ""
+	}
+	if len([]rune(value)) < 4 {
+		return ""
+	}
+	switch lower {
+	case "http", "https", "ssh", "ftp", "tcp", "udp", "api", "web", "admin", "login":
+		return ""
+	}
+	return value
 }
 
 func serviceAssociationTerms(values ...string) []string {

@@ -112,6 +112,24 @@ func (s *SprayArtifact) SetDefaultThreads(threads int) {
 	}
 }
 
+func (s *SprayArtifact) ResizeSDKCapacity(schedulerSlots int) int {
+	if s == nil || s.engine == nil || schedulerSlots <= 0 {
+		return 0
+	}
+	threads := s.defaultThreads
+	if threads <= 0 {
+		threads = 20
+	}
+	return resizeSDKCapacity(s.engine, schedulerSlots*threads*5)
+}
+
+func (s *SprayArtifact) SDKCapacityTotal() int {
+	if s == nil || s.engine == nil || s.engine.Capacity() == nil {
+		return 0
+	}
+	return s.engine.Capacity().Total()
+}
+
 func (s *SprayArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, result SprayResultItem)) {
 	s.resultHandler = h
 }

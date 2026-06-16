@@ -215,12 +215,21 @@ info:
 }
 
 func TestAssociationQueryForServiceTemplateAndCVE(t *testing.T) {
+	fingerQuery := associationQueryForEntity(Entity{
+		Type:    "fingerprint",
+		Value:   "TongWeb",
+		Product: "tongweb",
+	})
+	if fingerQuery == nil || fingerQuery.Search != "TongWeb" || !has(fingerQuery.Fingers, "TongWeb") {
+		t.Fatalf("expected fingerprint search query: %#v", fingerQuery)
+	}
+
 	serviceQuery := associationQueryForEntity(Entity{
 		Type:  "service",
 		Value: "https://example.com:8443/admin",
 		Tags:  []string{"edge"},
 	})
-	if serviceQuery == nil || !has(serviceQuery.Services, "https") || !has(serviceQuery.Tags, "edge") {
+	if serviceQuery == nil || !has(serviceQuery.Services, "https") || !has(serviceQuery.Tags, "edge") || serviceQuery.Search != "" {
 		t.Fatalf("unexpected service query: %#v", serviceQuery)
 	}
 
@@ -236,6 +245,25 @@ func TestAssociationQueryForServiceTemplateAndCVE(t *testing.T) {
 	cveQuery := associationQueryForEntity(Entity{Type: "cve", Value: "CVE-2020-14882"})
 	if cveQuery == nil || !has(cveQuery.CVEs, "CVE-2020-14882") {
 		t.Fatalf("unexpected cve query: %#v", cveQuery)
+	}
+}
+
+func TestAssociationSearchTermRejectsLowSignalValues(t *testing.T) {
+	rejected := []string{
+		"http",
+		"login",
+		"admin",
+		"https://example.com/admin",
+		"CVE-2020-14882",
+		"cpe:2.3:a:oracle:weblogic_server:*:*:*:*:*:*:*:*",
+	}
+	for _, value := range rejected {
+		if got := associationSearchTerm(value); got != "" {
+			t.Fatalf("expected %q to be rejected, got %q", value, got)
+		}
+	}
+	if got := associationSearchTerm("WebLogic Server"); got != "WebLogic Server" {
+		t.Fatalf("expected high signal product search, got %q", got)
 	}
 }
 

@@ -6,7 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/chainreactors/fingers v1.2.2-0.20260615064219-7e07a99c93e0
 	github.com/chainreactors/gogo/v2 v2.14.2-0.20260529142124-907a45a1456c
-	github.com/chainreactors/sdk v0.3.2
+	github.com/chainreactors/sdk v0.3.3
 	github.com/chainreactors/spray v1.3.1-0.20260608085629-66dafe7eab4f
 	github.com/chainreactors/utils v0.0.0-20260529172343-6465cb8568b2
 	github.com/gin-gonic/gin v1.12.0

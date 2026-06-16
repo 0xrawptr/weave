@@ -303,6 +303,8 @@ github.com/chainreactors/sdk v0.3.1 h1:sYPz5TL2eFesGmgdM9tsysN05sW735Nw2ORdqsPRm
 github.com/chainreactors/sdk v0.3.1/go.mod h1:8aJwEmypSRwUHxP3jWxORRzEmLbiwZptcO10+zeV/gI=
 github.com/chainreactors/sdk v0.3.2 h1:wrK9CsddmBG8PazTZ8E2LhgdsEB4d6YUArL8HdHT/uY=
 github.com/chainreactors/sdk v0.3.2/go.mod h1:NNesmUsFPnwKUEm2mANbMDqYTUrtyxBSlQZf8SSyxNE=
+github.com/chainreactors/sdk v0.3.3 h1:gBqoYB2ZqYRCTY44kKljIsIPOVyIXKdK8ihtCHk13Oo=
+github.com/chainreactors/sdk v0.3.3/go.mod h1:NNesmUsFPnwKUEm2mANbMDqYTUrtyxBSlQZf8SSyxNE=
 github.com/chainreactors/spray v1.3.1-0.20260608085629-66dafe7eab4f h1:bacmQyBkv9YybjTSPLrv3nwVybHJkstLz6ImxmvF4Z8=
 github.com/chainreactors/spray v1.3.1-0.20260608085629-66dafe7eab4f/go.mod h1:lWxsw+RHzAUKp78rkatxBereXqNunBe22hSpRGrfbo0=
 github.com/chainreactors/utils v0.0.0-20240716182459-e85f2b01ee16/go.mod h1:LajXuvESQwP+qCMAvlcoSXppQCjuLlBrnQpu9XQ1HtU=
