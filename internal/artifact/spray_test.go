@@ -46,6 +46,9 @@ func TestSprayResultItemPreservesFrameworksAndExtracts(t *testing.T) {
 				Tags:    []string{"java", "appserver"},
 				IsFocus: true,
 				Attributes: &common.Attributes{
+					Part:    "a",
+					Vendor:  "tongtech",
+					Product: "tongweb",
 					Version: "7.0",
 				},
 				MatchDetail: &sdktypes.MatchDetail{
@@ -66,7 +69,7 @@ func TestSprayResultItemPreservesFrameworksAndExtracts(t *testing.T) {
 		t.Fatalf("expected framework metadata, got %#v", item.Frameworks)
 	}
 	fw := item.Frameworks[0]
-	if fw.Name != "TongWeb" || fw.Version != "7.0" || fw.MatchDetail["matcher_type"] != "body" {
+	if fw.Name != "TongWeb" || fw.Product != "tongweb" || fw.Version != "7.0" || fw.CPE == "" || fw.MatchDetail["matcher_type"] != "body" {
 		t.Fatalf("framework metadata not preserved: %#v", fw)
 	}
 	if len(item.Extracts) != 1 || item.Extracts[0].Values[0] != "https://example.com/api" {

@@ -4,9 +4,9 @@ go 1.26.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
-	github.com/chainreactors/fingers v1.2.2-0.20260611155635-f5c144ea1c12
+	github.com/chainreactors/fingers v1.2.2-0.20260615064219-7e07a99c93e0
 	github.com/chainreactors/gogo/v2 v2.14.2-0.20260529142124-907a45a1456c
-	github.com/chainreactors/sdk v0.3.0
+	github.com/chainreactors/sdk v0.3.2
 	github.com/chainreactors/spray v1.3.1-0.20260608085629-66dafe7eab4f
 	github.com/chainreactors/utils v0.0.0-20260529172343-6465cb8568b2
 	github.com/gin-gonic/gin v1.12.0
@@ -19,6 +19,7 @@ require (
 	github.com/projectdiscovery/mapcidr v1.1.97
 	github.com/projectdiscovery/nuclei/v3 v3.8.0
 	github.com/projectdiscovery/retryabledns v1.0.114
+	go.temporal.io/api v1.62.12
 	go.temporal.io/sdk v1.44.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -108,8 +109,8 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chainreactors/files v0.0.0-20240716182835-7884ee1e77f0 // indirect
 	github.com/chainreactors/logs v0.0.0-20260508055944-c678762ed15c // indirect
-	github.com/chainreactors/neutron v0.0.0-20260611050540-e112381dac6b // indirect
-	github.com/chainreactors/neutron/operators/full v0.0.0-20260611050540-e112381dac6b // indirect
+	github.com/chainreactors/neutron v0.0.0-20260615055126-a9bbe4fc3e95 // indirect
+	github.com/chainreactors/neutron/operators/full v0.0.0-20260615055126-a9bbe4fc3e95 // indirect
 	github.com/chainreactors/parsers v0.0.0-20260608085142-3d2c51baa8fe // indirect
 	github.com/chainreactors/proton v0.3.1-0.20260611174627-89c10c8c27e5 // indirect
 	github.com/chainreactors/proxyclient v1.1.1-0.20260529172347-2a80e08d5593 // indirect
@@ -448,7 +449,6 @@ require (
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	go.temporal.io/api v1.62.12 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect

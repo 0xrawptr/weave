@@ -87,8 +87,10 @@ type SprayResultItem struct {
 
 type SprayFrameworkItem struct {
 	Name        string                 `json:"name"`
+	Product     string                 `json:"product,omitempty"`
 	Version     string                 `json:"version,omitempty"`
 	Tags        []string               `json:"tags,omitempty"`
+	CPE         string                 `json:"cpe,omitempty"`
 	IsFocus     bool                   `json:"is_focus,omitempty"`
 	MatchDetail map[string]interface{} `json:"match_detail,omitempty"`
 }
@@ -442,7 +444,9 @@ func sprayFrameworkItems(r *sdktypes.SprayResult) []SprayFrameworkItem {
 			item.Name = name
 		}
 		if fw.Attributes != nil {
+			item.Product = fw.Product
 			item.Version = fw.Version
+			item.CPE = fw.CPE()
 		}
 		if fw.MatchDetail != nil {
 			item.MatchDetail = map[string]interface{}{

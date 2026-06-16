@@ -40,10 +40,10 @@ func TestCompleteWorkItemGroupSummary(t *testing.T) {
 
 func TestCompleteArtifactStatSummary(t *testing.T) {
 	summary := ArtifactStatSummary{
-		TotalRuns: 2,
-		Requests:  100,
-		Results:   25,
-		Errors:    5,
+		StatRecords: 2,
+		Requests:    100,
+		Results:     25,
+		Errors:      5,
 	}
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	last := first.Add(5 * time.Minute)
@@ -66,10 +66,10 @@ func TestCompleteArtifactStatSummary(t *testing.T) {
 
 func TestCompleteArtifactStatSummaryKeepsSubPercentErrorRate(t *testing.T) {
 	summary := ArtifactStatSummary{
-		TotalRuns: 77,
-		Requests:  109987,
-		Results:   28,
-		Errors:    979,
+		StatRecords: 77,
+		Requests:    109987,
+		Results:     28,
+		Errors:      979,
 	}
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	last := first.Add(5 * time.Minute)

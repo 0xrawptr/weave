@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
+	fingerscommon "github.com/chainreactors/fingers/common"
 )
 
 // GogoExtractor extracts IP, port, service, and fingerprint entities from gogo output.
@@ -113,7 +114,8 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		})
 
 		// Fingerprint entities. Service → has_fingerprint → fingerprint.
-		for fpName := range item.Frameworks {
+		for fpName, fpRaw := range item.Frameworks {
+			framework := parseGogoFramework(fpName, fpRaw)
 			fpID := evidenceID("fingerprint", serviceTarget, fpName)
 			fpStatus := "observed"
 			fpConfidence := 0.7
@@ -124,6 +126,8 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 			fpEntity := Entity{
 				ID: fpID, Type: "fingerprint", Value: fpName,
 				Source: "gogo", Confidence: fpConfidence, Status: fpStatus,
+				Product: framework.Product, Version: framework.Version,
+				Tags: framework.Tags, CPEs: nonEmptyStrings(framework.CPE),
 			}
 			applyTarget(&fpEntity, serviceTarget)
 			result.Entities = append(result.Entities, fpEntity)
@@ -133,6 +137,36 @@ func (g *GogoExtractor) Extract(ctx context.Context, scanTarget string, rawData 
 		}
 	}
 	return result, nil
+}
+
+type gogoFrameworkMetadata struct {
+	Product string
+	Version string
+	Tags    []string
+	CPE     string
+}
+
+func parseGogoFramework(name string, raw json.RawMessage) gogoFrameworkMetadata {
+	meta := gogoFrameworkMetadata{Product: name}
+	if len(raw) == 0 {
+		return meta
+	}
+	var fw fingerscommon.Framework
+	if err := json.Unmarshal(raw, &fw); err != nil {
+		return meta
+	}
+	if fw.Name != "" {
+		meta.Product = fw.Name
+	}
+	meta.Tags = append([]string(nil), fw.Tags...)
+	if fw.Attributes != nil {
+		if fw.Product != "" {
+			meta.Product = fw.Product
+		}
+		meta.Version = fw.Version
+		meta.CPE = fw.CPE()
+	}
+	return meta
 }
 
 func gogoServiceStatus(quality Quality) string {

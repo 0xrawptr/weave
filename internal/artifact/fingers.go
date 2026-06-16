@@ -3,7 +3,10 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/url"
 	"sort"
+	"strings"
 
 	fingerscommon "github.com/chainreactors/fingers/common"
 	sdkfingers "github.com/chainreactors/sdk/fingers"
@@ -111,16 +114,18 @@ func (f *FingersArtifact) Execute(ctx context.Context, input Input) (Output, err
 			}
 		}
 		fingersCtx := sdkfingers.NewContext().WithContext(ctx)
-		results, err := f.engine.HTTPMatch(fingersCtx, urls)
-		if err != nil {
-			return Output{Artifact: f.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
-		}
-		for _, tr := range results {
-			for _, sr := range tr.Results {
-				if sr.Framework == nil {
+		transport := activeMatchTransport(fingersCtx)
+		level := fingersCtx.GetLevel()
+		for _, rawURL := range urls {
+			baseURL, ok := activeMatchBaseURL(rawURL)
+			if !ok {
+				continue
+			}
+			for _, sr := range f.engine.ActiveMatch(baseURL, level, transport) {
+				if sr == nil || sr.Framework == nil {
 					continue
 				}
-				items = append(items, frameworkItem(tr.Target, sr.Framework.Name, sr.Framework))
+				items = append(items, frameworkItem(baseURL, sr.Framework.Name, sr.Framework))
 			}
 		}
 		// Favicon detection with smarter HTML parsing.
@@ -162,16 +167,39 @@ func (f *FingersArtifact) Close() error {
 	return f.engine.Close()
 }
 
+func activeMatchTransport(ctx *sdkfingers.Context) http.RoundTripper {
+	if ctx == nil {
+		return http.DefaultTransport
+	}
+	client := ctx.GetClient()
+	if client == nil || client.Transport == nil {
+		return http.DefaultTransport
+	}
+	return client.Transport
+}
+
+func activeMatchBaseURL(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", false
+	}
+	return parsed.Scheme + "://" + parsed.Host, true
+}
+
 func frameworkItem(target, name string, fw *fingerscommon.Framework) FingersFrameworkItem {
 	item := FingersFrameworkItem{Name: name, Target: target}
 	if fw == nil {
 		return item
 	}
-	item.Product = fw.Product
-	item.Version = fw.Version
 	item.Tags = fw.Tags
 	item.Focus = fw.IsFocus
 	if fw.Attributes != nil {
+		item.Product = fw.Product
+		item.Version = fw.Version
 		item.CPE = fw.CPE()
 	}
 	for from := range fw.Froms {

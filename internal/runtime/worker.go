@@ -384,12 +384,11 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository) {
 func registerWorkflows(w sdkworker.Worker) {
 	w.RegisterWorkflow(workflow.BatchPortScanWorkflow)
 	w.RegisterWorkflow(workflow.SchedulerWorkflow)
-	w.RegisterWorkflow(workflow.ScheduledPortScanWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledDNSPreflightWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ScheduledPlannedDAGWorkItemWorkflow)
-	w.RegisterWorkflow(workflow.ScheduledArtifactActionWorkItemWorkflow)
+	w.RegisterWorkflow(workflow.ScheduledArtifactWorkItemWorkflow)
 	w.RegisterWorkflow(workflow.ActionWorkflow)
-	log.Println("registered workflows: batch_portscan, scheduler, scheduled_portscan, scheduled_dns_preflight, scheduled_planned_dag, scheduled_artifact_action, action")
+	log.Println("registered workflows: batch_portscan, scheduler, scheduled_dns_preflight, scheduled_planned_dag, scheduled_artifact_work_item, action")
 }
 
 func targetType(raw string) string {

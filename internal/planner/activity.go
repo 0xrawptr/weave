@@ -77,6 +77,7 @@ func (a *Activity) ClaimAction(ctx context.Context, action Action) (bool, error)
 		Schedule:   action.Decision.Schedule,
 		Reason:     action.Reason,
 		Status:     "running",
+		Attempts:   action.Attempts,
 		WorkflowID: workflowID,
 	})
 }

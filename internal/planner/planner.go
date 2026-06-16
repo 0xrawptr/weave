@@ -14,6 +14,7 @@ type Action struct {
 	ID         string                 `json:"id"`
 	CampaignID string                 `json:"campaign_id,omitempty"`
 	WorkflowID string                 `json:"workflow_id,omitempty"`
+	Attempts   int                    `json:"attempts,omitempty"`
 	Target     string                 `json:"target"`
 	Artifact   string                 `json:"artifact"`
 	Input      map[string]interface{} `json:"input"`

@@ -147,8 +147,8 @@ func TestRuntimeTailWorkIsVisibleButNotBlocking(t *testing.T) {
 
 func TestProblemRuntimeArtifactsFiltersHealthyArtifacts(t *testing.T) {
 	got := problemRuntimeArtifacts([]ArtifactRuntimeHealth{
-		{Artifact: "gogo", TotalRuns: 10, Reason: "healthy"},
-		{Artifact: "spray", TotalRuns: 5, Errors: 1, ErrorRatePercent: 20, Reason: "errors observed"},
+		{Artifact: "gogo", StatRecords: 10, WorkItemRuns: 10, Reason: "healthy"},
+		{Artifact: "spray", StatRecords: 5, WorkItemRuns: 5, Errors: 1, ErrorRatePercent: 20, Reason: "errors observed"},
 	})
 	if len(got) != 1 || got[0].Artifact != "spray" {
 		t.Fatalf("problem artifacts = %#v, want only spray", got)

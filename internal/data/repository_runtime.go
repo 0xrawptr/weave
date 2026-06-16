@@ -395,7 +395,8 @@ func artifactRuntimeHealth(stats []ArtifactStatSummary) []ArtifactRuntimeHealth 
 	for _, stat := range stats {
 		health := ArtifactRuntimeHealth{
 			Artifact:         stat.Artifact,
-			TotalRuns:        stat.TotalRuns,
+			StatRecords:      stat.StatRecords,
+			WorkItemRuns:     stat.WorkItemRuns,
 			Requests:         stat.Requests,
 			Results:          stat.Results,
 			Errors:           stat.Errors,
@@ -403,8 +404,8 @@ func artifactRuntimeHealth(stats []ArtifactStatSummary) []ArtifactRuntimeHealth 
 			ThroughputPerMin: stat.ThroughputPerMin,
 		}
 		switch {
-		case stat.TotalRuns == 0:
-			health.Reason = "no runs observed"
+		case stat.StatRecords == 0 && stat.WorkItemRuns == 0:
+			health.Reason = "no execution observed"
 		case stat.Errors > 0 && stat.ErrorRatePercent >= 50:
 			health.Reason = "high error rate"
 		case stat.Errors > 0:
@@ -423,7 +424,7 @@ func artifactRuntimeHealth(stats []ArtifactStatSummary) []ArtifactRuntimeHealth 
 		if out[i].Errors != out[j].Errors {
 			return out[i].Errors > out[j].Errors
 		}
-		return out[i].TotalRuns > out[j].TotalRuns
+		return out[i].StatRecords > out[j].StatRecords
 	})
 	return out
 }

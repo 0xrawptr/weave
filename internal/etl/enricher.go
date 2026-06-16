@@ -52,7 +52,9 @@ func NewAssociationEnricher(c *sdkclient.Client) *AssociationEnricher {
 }
 
 // Enrich queries the SDK association index for each fingerprint entity and
-// appends related template IDs on the entity.
+// appends related template IDs on the entity. The SDK association index can
+// correlate fingerprints, aliases, CPEs, tags, CVEs, and POC templates; feed it
+// every normalized hint we have instead of only the display fingerprint name.
 func (a *AssociationEnricher) Enrich(ctx context.Context, result *ExtractResult) (*ExtractResult, error) {
 	if result == nil || a.client == nil {
 		return result, nil
@@ -68,7 +70,11 @@ func (a *AssociationEnricher) Enrich(ctx context.Context, result *ExtractResult)
 		if e.Type != "fingerprint" {
 			continue
 		}
-		q := association.NewQuery().WithFingers(e.Value)
+		q := association.NewQuery().
+			WithFingers(e.Value).
+			WithAliases(e.Value, e.Product).
+			WithCPEs(e.CPEs...).
+			WithTags(e.Tags...)
 		qr := idx.Lookup(q)
 		if qr == nil {
 			continue
@@ -77,6 +83,15 @@ func (a *AssociationEnricher) Enrich(ctx context.Context, result *ExtractResult)
 			if tpl != nil && tpl.Id != "" {
 				result.Entities[i].TemplateIDs = appendUniqueString(result.Entities[i].TemplateIDs, tpl.Id)
 			}
+		}
+		for _, finger := range qr.Fingers {
+			if finger == nil {
+				continue
+			}
+			result.Entities[i].Tags = appendUniqueString(result.Entities[i].Tags, finger.Tags...)
+		}
+		if len(result.Entities[i].TemplateIDs) > len(e.TemplateIDs) {
+			result.Entities[i].Reason = "fingerprint matched SDK association candidates"
 		}
 	}
 	return result, nil

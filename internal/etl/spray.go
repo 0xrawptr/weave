@@ -12,8 +12,10 @@ type SprayExtractor struct{}
 
 type sprayFrameworkItem struct {
 	Name        string                 `json:"name"`
+	Product     string                 `json:"product,omitempty"`
 	Version     string                 `json:"version,omitempty"`
 	Tags        []string               `json:"tags,omitempty"`
+	CPE         string                 `json:"cpe,omitempty"`
 	IsFocus     bool                   `json:"is_focus,omitempty"`
 	MatchDetail map[string]interface{} `json:"match_detail,omitempty"`
 }
@@ -109,11 +111,16 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 			if name == "" {
 				continue
 			}
+			product := strings.TrimSpace(framework.Product)
+			if product == "" {
+				product = name
+			}
 			fpID := evidenceID("fingerprint", urlTarget, name)
 			fpEntity := Entity{
 				ID: fpID, Type: "fingerprint", Value: name,
 				Source: "spray", RawData: candidate.raw,
-				Product: name, Version: framework.Version, Tags: framework.Tags,
+				Product: product, Version: framework.Version, Tags: framework.Tags,
+				CPEs:       nonEmptyStrings(framework.CPE),
 				Confidence: sprayFingerprintConfidence(len(framework.MatchDetail) > 0), Status: "observed",
 			}
 			applyTarget(&fpEntity, urlTarget)

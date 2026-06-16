@@ -168,7 +168,16 @@ func TestGogoExtractorKeepsRoot404HTTPServiceVisible(t *testing.T) {
 				"status":   "404",
 				"title":    "Not Found",
 				"frameworks": map[string]interface{}{
-					"microsoft-httpapi": map[string]interface{}{"name": "microsoft-httpapi"},
+					"microsoft-httpapi": map[string]interface{}{
+						"name": "microsoft-httpapi",
+						"tags": []string{"webserver"},
+						"attributes": map[string]interface{}{
+							"part":    "a",
+							"vendor":  "microsoft",
+							"product": "httpapi",
+							"version": "2.0",
+						},
+					},
 				},
 			},
 		},
@@ -193,6 +202,9 @@ func TestGogoExtractorKeepsRoot404HTTPServiceVisible(t *testing.T) {
 	}
 	if fingerprint.Status != "noise" {
 		t.Fatalf("expected fingerprint from noisy service to be noise, got %#v", fingerprint)
+	}
+	if fingerprint.Product != "httpapi" || fingerprint.Version != "2.0" || !has(fingerprint.Tags, "webserver") || len(fingerprint.CPEs) == 0 {
+		t.Fatalf("expected fingerprint metadata for association, got %#v", fingerprint)
 	}
 }
 

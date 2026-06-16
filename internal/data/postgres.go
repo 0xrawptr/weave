@@ -558,7 +558,15 @@ func (p *PostgresStore) UpdateCampaignPhase(ctx context.Context, campaignID, bat
 	if previous != phase {
 		_, err = tx.Exec(ctx,
 			`INSERT INTO campaign_phase_events (id, campaign_id, batch_id, from_phase, to_phase, reason)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			 SELECT $1, $2, $3, $4, $5, $6
+			 WHERE NOT EXISTS (
+				SELECT 1 FROM campaign_phase_events
+				WHERE campaign_id = $2
+				  AND batch_id = $3
+				  AND from_phase = $5
+				  AND to_phase = $4
+				  AND created_at >= NOW() - INTERVAL '2 minutes'
+			 )`,
 			GenerateID("campaign_phase_event", campaignID, batchID, previous, phase, fmt.Sprintf("%d", time.Now().UnixNano())),
 			campaignID, batchID, previous, phase, reason)
 		if err != nil {
@@ -842,8 +850,34 @@ func (p *PostgresStore) QueryArtifactStats(ctx context.Context, campaignID, work
 }
 
 func (p *PostgresStore) QueryArtifactStatSummary(ctx context.Context, campaignID, workflowID, artifactName, target string) ([]ArtifactStatSummary, error) {
-	query := `SELECT artifact,
-		COUNT(*)::INT AS total_runs,
+	query := `SELECT s.artifact,
+		COUNT(*)::INT AS stat_records,
+		COALESCE((
+			SELECT COUNT(*)::INT FROM work_items wi
+			WHERE wi.artifact = s.artifact`
+	args := []interface{}{}
+	argIdx := 1
+	if campaignID != "" {
+		query += fmt.Sprintf(" AND wi.campaign_id = $%d", argIdx)
+		args = append(args, campaignID)
+		argIdx++
+	}
+	if workflowID != "" {
+		query += fmt.Sprintf(" AND wi.workflow_id = $%d", argIdx)
+		args = append(args, workflowID)
+		argIdx++
+	}
+	if artifactName != "" {
+		query += fmt.Sprintf(" AND wi.artifact = $%d", argIdx)
+		args = append(args, artifactName)
+		argIdx++
+	}
+	if target != "" {
+		query += fmt.Sprintf(" AND wi.target = $%d", argIdx)
+		args = append(args, target)
+		argIdx++
+	}
+	query += `), 0)::INT AS work_item_runs,
 		COALESCE(SUM(targets), 0)::BIGINT,
 		COALESCE(SUM(tasks), 0)::BIGINT,
 		COALESCE(SUM(requests), 0)::BIGINT,
@@ -853,29 +887,27 @@ func (p *PostgresStore) QueryArtifactStatSummary(ctx context.Context, campaignID
 		COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0)::BIGINT,
 		MIN(created_at),
 		MAX(created_at)
-	FROM artifact_stats WHERE 1=1`
-	args := []interface{}{}
-	argIdx := 1
+	FROM artifact_stats s WHERE 1=1`
 	if campaignID != "" {
-		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		query += fmt.Sprintf(" AND s.campaign_id = $%d", argIdx)
 		args = append(args, campaignID)
 		argIdx++
 	}
 	if workflowID != "" {
-		query += fmt.Sprintf(" AND workflow_id = $%d", argIdx)
+		query += fmt.Sprintf(" AND s.workflow_id = $%d", argIdx)
 		args = append(args, workflowID)
 		argIdx++
 	}
 	if artifactName != "" {
-		query += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		query += fmt.Sprintf(" AND s.artifact = $%d", argIdx)
 		args = append(args, artifactName)
 		argIdx++
 	}
 	if target != "" {
-		query += fmt.Sprintf(" AND target = $%d", argIdx)
+		query += fmt.Sprintf(" AND s.target = $%d", argIdx)
 		args = append(args, target)
 	}
-	query += " GROUP BY artifact ORDER BY COALESCE(SUM(errors), 0) DESC, COALESCE(SUM(results), 0) DESC, COUNT(*) DESC"
+	query += " GROUP BY s.artifact ORDER BY COALESCE(SUM(errors), 0) DESC, COALESCE(SUM(results), 0) DESC, COUNT(*) DESC"
 
 	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -889,7 +921,8 @@ func (p *PostgresStore) QueryArtifactStatSummary(ctx context.Context, campaignID
 		var firstSeen, lastSeen time.Time
 		if err := rows.Scan(
 			&summary.Artifact,
-			&summary.TotalRuns,
+			&summary.StatRecords,
+			&summary.WorkItemRuns,
 			&summary.Targets,
 			&summary.Tasks,
 			&summary.Requests,
@@ -902,6 +935,7 @@ func (p *PostgresStore) QueryArtifactStatSummary(ctx context.Context, campaignID
 		); err != nil {
 			return nil, err
 		}
+		summary.ArtifactRequests = summary.Requests
 		completeArtifactStatSummary(&summary, firstSeen, lastSeen)
 		summaries = append(summaries, summary)
 	}
@@ -914,7 +948,7 @@ func completeArtifactStatSummary(summary *ArtifactStatSummary, firstSeen, lastSe
 		denominator = summary.Tasks
 	}
 	if denominator <= 0 {
-		denominator = int64(summary.TotalRuns)
+		denominator = int64(summary.StatRecords)
 	}
 	if denominator > 0 && summary.Errors > 0 {
 		summary.ErrorRatePercent = percentage(summary.Errors, denominator)
@@ -943,11 +977,14 @@ func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionReco
 	if record.Status == "" {
 		record.Status = "running"
 	}
+	if record.Attempts <= 0 {
+		record.Attempts = 1
+	}
 	record.Schedule = NormalizeSchedule(record.Schedule)
 	var id string
 	err := p.pool.QueryRow(ctx,
 		`INSERT INTO action_records (id, campaign_id, target, artifact, input, schedule, reason, status, attempts, workflow_id, started_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', 1, $8, NOW(), NOW())
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', $8, $9, NOW(), NOW())
 			 ON CONFLICT (id) DO UPDATE SET
 				campaign_id = CASE WHEN EXCLUDED.campaign_id <> '' THEN EXCLUDED.campaign_id ELSE action_records.campaign_id END,
 				target = EXCLUDED.target,
@@ -956,14 +993,14 @@ func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionReco
 				schedule = EXCLUDED.schedule,
 				reason = EXCLUDED.reason,
 			status = 'running',
-			attempts = action_records.attempts + 1,
+			attempts = GREATEST(action_records.attempts, EXCLUDED.attempts),
 			workflow_id = EXCLUDED.workflow_id,
 			error = '',
 			started_at = NOW(),
 			updated_at = NOW()
 		 WHERE action_records.status NOT IN ('running', 'completed')
 		 RETURNING id`,
-		record.ID, record.CampaignID, record.Target, record.Artifact, record.Input, record.Schedule, record.Reason, record.WorkflowID).Scan(&id)
+		record.ID, record.CampaignID, record.Target, record.Artifact, record.Input, record.Schedule, record.Reason, record.Attempts, record.WorkflowID).Scan(&id)
 	if err == nil {
 		return true, nil
 	}

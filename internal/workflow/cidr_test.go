@@ -396,19 +396,23 @@ func TestFullSprayShardWorkItemsUseSingleBaseURLChunks(t *testing.T) {
 	}
 }
 
-func TestActionChildWorkflowIDIncludesWorkItemID(t *testing.T) {
+func TestArtifactWorkItemChildWorkflowIDIsStablePerAttempt(t *testing.T) {
 	target := "202.205.161.0/24"
-	first := actionChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1, "run-a")
-	second := actionChildWorkflowID("batch-1", "spray_shard", target, "item-b", 1, "run-a")
+	first := artifactWorkItemChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1)
+	second := artifactWorkItemChildWorkflowID("batch-1", "spray_shard", target, "item-b", 1)
 	if first == second {
 		t.Fatalf("child workflow IDs should be unique per work item: %q", first)
 	}
 	if !strings.Contains(first, "item-a") || !strings.Contains(second, "item-b") {
 		t.Fatalf("child workflow IDs should include work item IDs: first=%q second=%q", first, second)
 	}
-	third := actionChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1, "run-b")
-	if first == third {
-		t.Fatalf("child workflow IDs should be unique per scheduler run: first=%q third=%q", first, third)
+	third := artifactWorkItemChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1)
+	if first != third {
+		t.Fatalf("child workflow IDs should be stable across scheduler runs: first=%q third=%q", first, third)
+	}
+	retry := artifactWorkItemChildWorkflowID("batch-1", "spray_shard", target, "item-a", 2)
+	if first == retry {
+		t.Fatalf("child workflow IDs should change per attempt: first=%q retry=%q", first, retry)
 	}
 }
 

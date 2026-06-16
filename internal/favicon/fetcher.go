@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	sdkhttpx "github.com/chainreactors/sdk/pkg/httpx"
 	"github.com/chainreactors/utils/encode"
 )
 
@@ -32,16 +33,14 @@ type Result struct {
 
 // NewFetcher 创建下载器
 func NewFetcher() *Fetcher {
+	client, err := sdkhttpx.NewClient(sdkhttpx.BrowserConfig().
+		WithTimeout(10 * time.Second).
+		WithRedirects(true))
+	if err != nil || client == nil {
+		client = sdkhttpx.DefaultClient()
+	}
 	return &Fetcher{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 3 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
-		},
+		client: client,
 	}
 }
 
@@ -57,7 +56,6 @@ func (f *Fetcher) Fetch(target string) (*Result, error) {
 	}
 
 	req, _ := http.NewRequest("GET", target, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -181,7 +179,6 @@ func (f *Fetcher) downloadIcon(candidates []string, resolveBase string, target s
 		}
 
 		iconReq, _ := http.NewRequest("GET", resolved, nil)
-		iconReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 		iconReq.Header.Set("Referer", target)
 
 		if iconResp, err := f.client.Do(iconReq); err == nil {
@@ -196,7 +193,6 @@ func (f *Fetcher) downloadIcon(candidates []string, resolveBase string, target s
 			retryResolved := resolveURL(resolveBase, "/"+candidate)
 			if retryResolved != resolved {
 				iconReq, _ = http.NewRequest("GET", retryResolved, nil)
-				iconReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 				iconReq.Header.Set("Referer", target)
 				if iconResp, err := f.client.Do(iconReq); err == nil {
 					data, _ := io.ReadAll(iconResp.Body)

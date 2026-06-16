@@ -486,17 +486,17 @@ func schedulerPipelineBurst(capacity schedulerCapacityMap, queue string, remaini
 }
 
 func startScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
-	childID := fmt.Sprintf("%s-portscan-%s-%d%s", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts, childIDRunSuffix(schedulerChildWorkflowRunToken(ctx)))
-	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledPortScanWorkItemWorkflow)
+	childID := artifactWorkItemChildWorkflowID(input.BatchID, item.Type, item.Target, item.ID, item.Attempts)
+	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledArtifactWorkItemWorkflow)
 }
 
 func startScheduledDNSPreflightWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
-	childID := fmt.Sprintf("%s-dns-preflight-%s-%d%s", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts, childIDRunSuffix(schedulerChildWorkflowRunToken(ctx)))
+	childID := artifactWorkItemChildWorkflowID(input.BatchID, item.Type, item.Target, item.ID, item.Attempts)
 	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledDNSPreflightWorkItemWorkflow)
 }
 
 func startScheduledPlannedDAGWorkItem(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
-	childID := fmt.Sprintf("%s-planned-dag-%s-%d%s", input.BatchID, safeWorkflowIDPart(item.Target), item.Attempts, childIDRunSuffix(schedulerChildWorkflowRunToken(ctx)))
+	childID := artifactWorkItemChildWorkflowID(input.BatchID, item.Type, item.Target, item.ID, item.Attempts)
 	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledPlannedDAGWorkItemWorkflow)
 }
 
@@ -506,8 +506,8 @@ func startScheduledArtifactActionWorkItem(ctx, stateCtx workflow.Context, input 
 	if actionTarget == "" {
 		actionTarget = item.Target
 	}
-	childID := actionChildWorkflowID(input.BatchID, item.Type, actionTarget, item.ID, item.Attempts, schedulerChildWorkflowRunToken(ctx))
-	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledArtifactActionWorkItemWorkflow)
+	childID := artifactWorkItemChildWorkflowID(input.BatchID, item.Type, actionTarget, item.ID, item.Attempts)
+	return startScheduledWorkItemChild(ctx, stateCtx, input, item, childID, ScheduledArtifactWorkItemWorkflow)
 }
 
 func startScheduledWorkItemChild(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem, childID string, workflowFunc interface{}) error {
@@ -534,6 +534,9 @@ func startScheduledWorkItemsChild(ctx, stateCtx workflow.Context, input Schedule
 	})
 	future := workflow.ExecuteChildWorkflow(childCtx, workflowFunc, childInput)
 	if err := future.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+		if childWorkflowAlreadyStarted(err) {
+			return nil
+		}
 		for _, item := range items {
 			if updateErr := setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), childID, err.Error(), false); updateErr != nil {
 				return updateErr
@@ -542,6 +545,16 @@ func startScheduledWorkItemsChild(ctx, stateCtx workflow.Context, input Schedule
 		return err
 	}
 	return nil
+}
+
+func childWorkflowAlreadyStarted(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(err.Error())
+	return strings.Contains(value, "child workflow execution already started") ||
+		strings.Contains(value, "workflow execution already started") ||
+		strings.Contains(value, "already started")
 }
 
 func signalSchedulerWakeup(ctx workflow.Context, input SchedulerWorkflowInput, reason string) {
@@ -609,22 +622,6 @@ func runScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, schedulerInput
 		return nil
 	}
 	return upsertBatchWorkItem(stateCtx, plannedDAGFollowUpWorkItemFromScheduler(schedulerInput, item, signal.Schedule))
-}
-
-func ScheduledPortScanWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
-	schedulerInput := input.SchedulerInput
-	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
-	defer signalSchedulerWakeup(ctx, schedulerInput, "portscan_done")
-	item := input.Item
-	workflowID := input.WorkflowID
-	if workflowID == "" {
-		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
-	}
-	stateCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: defaultStateActivityTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
-	})
-	return runScheduledPortScanWorkItem(ctx, stateCtx, schedulerInput, item, workflowID)
 }
 
 func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
@@ -743,11 +740,11 @@ func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWo
 	return setBatchWorkItemStatus(stateCtx, item.ID, "completed", workflowID, "", false)
 }
 
-func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
+func ScheduledArtifactWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
 	schedulerInput := input.SchedulerInput
 	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
-	defer signalSchedulerWakeup(ctx, schedulerInput, "artifact_action_done")
 	item := input.Item
+	defer signalSchedulerWakeup(ctx, schedulerInput, item.Type+"_done")
 	workflowID := input.WorkflowID
 	if workflowID == "" {
 		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -756,6 +753,9 @@ func ScheduledArtifactActionWorkItemWorkflow(ctx workflow.Context, input Schedul
 		StartToCloseTimeout: defaultStateActivityTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
+	if item.Type == "portscan_chunk" {
+		return runScheduledPortScanWorkItem(ctx, stateCtx, schedulerInput, item, workflowID)
+	}
 
 	itemInput := parseSchedulerWorkItemInput(item)
 	actionTarget := itemInput.Target
@@ -912,6 +912,7 @@ func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput
 		ID:         item.ID,
 		CampaignID: item.CampaignID,
 		WorkflowID: workflowID,
+		Attempts:   item.Attempts,
 		Target:     item.Target,
 		Artifact:   item.Artifact,
 		Input:      input,
@@ -924,28 +925,8 @@ func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput
 	}
 }
 
-func schedulerRunToken(ctx workflow.Context) string {
-	info := workflow.GetInfo(ctx)
-	return data.GenerateID("scheduler_run", info.WorkflowExecution.ID, info.WorkflowExecution.RunID)
-}
-
-func schedulerChildWorkflowRunToken(ctx workflow.Context) string {
-	version := workflow.GetVersion(ctx, "scheduler-run-scoped-child-workflow-ids", workflow.DefaultVersion, 1)
-	if version == workflow.DefaultVersion {
-		return ""
-	}
-	return schedulerRunToken(ctx)
-}
-
-func childIDRunSuffix(runToken string) string {
-	if runToken == "" {
-		return ""
-	}
-	return "-" + runToken
-}
-
-func actionChildWorkflowID(batchID, itemType, target, itemID string, attempts int, runToken string) string {
-	return fmt.Sprintf("%s-%s-%s-%s-%d%s", batchID, itemType, safeWorkflowIDPart(target), itemID, attempts, childIDRunSuffix(runToken))
+func artifactWorkItemChildWorkflowID(batchID, itemType, target, itemID string, attempts int) string {
+	return fmt.Sprintf("%s-%s-%s-%s-%d", batchID, itemType, safeWorkflowIDPart(target), itemID, attempts)
 }
 
 func evaluateActionWorkItemCondition(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput) (bool, string, error) {

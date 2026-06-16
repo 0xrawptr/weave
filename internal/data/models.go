@@ -460,7 +460,8 @@ type TargetRuntimeState struct {
 
 type ArtifactRuntimeHealth struct {
 	Artifact         string  `json:"artifact"`
-	TotalRuns        int     `json:"total_runs"`
+	StatRecords      int     `json:"stat_records,omitempty"`
+	WorkItemRuns     int     `json:"work_item_runs,omitempty"`
 	Requests         int64   `json:"requests,omitempty"`
 	Results          int64   `json:"results,omitempty"`
 	Errors           int64   `json:"errors,omitempty"`
@@ -477,7 +478,9 @@ type ETARuntimeState struct {
 
 type ArtifactStatSummary struct {
 	Artifact                string  `json:"artifact"`
-	TotalRuns               int     `json:"total_runs"`
+	StatRecords             int     `json:"stat_records"`
+	WorkItemRuns            int     `json:"work_item_runs"`
+	ArtifactRequests        int64   `json:"artifact_requests,omitempty"`
 	Targets                 int64   `json:"targets,omitempty"`
 	Tasks                   int64   `json:"tasks,omitempty"`
 	Requests                int64   `json:"requests,omitempty"`
