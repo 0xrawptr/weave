@@ -157,6 +157,34 @@ func TestSprayExtractorPersistsFrameworksAndExtracts(t *testing.T) {
 	}
 }
 
+func TestSprayPipelineRunsEnricher(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"results": []map[string]interface{}{
+			{
+				"url":         "https://example.com/console/login/LoginForm.jsp",
+				"status_code": 200,
+				"valid":       true,
+				"frameworks": []map[string]interface{}{
+					{"name": "TongWeb", "product": "tongweb", "tags": []string{"java"}},
+				},
+			},
+		},
+		"total": 1,
+	})
+	loader := &captureLoader{}
+	pipeline := NewPipeline(&SprayExtractor{}, loader).WithEnricher(templateMarkingEnricher{})
+	if err := pipeline.Process(context.Background(), "example.com", raw); err != nil {
+		t.Fatalf("Process failed: %v", err)
+	}
+	fingerprint := findEntity(loader.result.Entities, "fingerprint", "TongWeb")
+	if fingerprint == nil {
+		t.Fatalf("expected spray fingerprint entity, got %#v", loader.result.Entities)
+	}
+	if !has(fingerprint.TemplateIDs, "sdk-associated-template") {
+		t.Fatalf("expected spray fingerprint to be enriched before load, got %#v", fingerprint)
+	}
+}
+
 func TestGogoExtractorKeepsRoot404HTTPServiceVisible(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"results": []map[string]interface{}{
@@ -449,6 +477,26 @@ func TestTemplateMatchesCVE(t *testing.T) {
 	if templateMatchesCVE("exposed-redis", "CVE-2022-0543") {
 		t.Fatalf("generic product template should not be linked as CVE evidence")
 	}
+}
+
+type captureLoader struct {
+	result *ExtractResult
+}
+
+func (l *captureLoader) Save(ctx context.Context, result *ExtractResult) error {
+	l.result = result
+	return nil
+}
+
+type templateMarkingEnricher struct{}
+
+func (templateMarkingEnricher) Enrich(ctx context.Context, result *ExtractResult) (*ExtractResult, error) {
+	for i := range result.Entities {
+		if result.Entities[i].Type == "fingerprint" {
+			result.Entities[i].TemplateIDs = append(result.Entities[i].TemplateIDs, "sdk-associated-template")
+		}
+	}
+	return result, nil
 }
 
 func hasRelationType(relations []Relation, relType string) bool {

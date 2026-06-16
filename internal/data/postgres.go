@@ -1025,10 +1025,6 @@ func (p *PostgresStore) CompleteActionRecord(ctx context.Context, id, status, er
 	return err
 }
 
-func (p *PostgresStore) QueryActionRecords(ctx context.Context, target string) ([]ActionRecord, error) {
-	return p.QueryActionRecordsFiltered(ctx, target, "")
-}
-
 func (p *PostgresStore) QueryActionRecordsFiltered(ctx context.Context, target, campaignID string) ([]ActionRecord, error) {
 	query := `SELECT id, campaign_id, target, artifact, input, schedule, reason, status, attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
@@ -2387,26 +2383,6 @@ func (p *PostgresStore) CountAssetEvidence(ctx context.Context, targetID, eviden
 	if campaignID != "" {
 		query += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
 		args = append(args, campaignID)
-	}
-	if err := p.pool.QueryRow(ctx, query, args...).Scan(&count); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
-func (p *PostgresStore) CountAssets(ctx context.Context, targetID, assetType string) (int, error) {
-	var count int
-	query := `SELECT count(*) FROM assets WHERE 1=1`
-	args := []interface{}{}
-	argIdx := 1
-	if targetID != "" {
-		query += fmt.Sprintf(" AND target_id = $%d", argIdx)
-		args = append(args, targetID)
-		argIdx++
-	}
-	if assetType != "" {
-		query += fmt.Sprintf(" AND type = $%d", argIdx)
-		args = append(args, assetType)
 	}
 	if err := p.pool.QueryRow(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err

@@ -9,12 +9,10 @@ import (
 	"go.temporal.io/sdk/activity"
 )
 
-const PlanTargetActivityName = "plan_target"
 const PlanDAGTargetActivityName = "plan_dag_target"
 const ClaimActionActivityName = "claim_action"
 const CompleteActionActivityName = "complete_action"
 const EvaluateConditionActivityName = "evaluate_condition"
-const GetCampaignPhaseActivityName = "get_campaign_phase"
 const UpdateCampaignPhaseActivityName = "update_campaign_phase"
 const UpsertBatchRunActivityName = "upsert_batch_run"
 const UpsertBatchChunkActivityName = "upsert_batch_chunk"
@@ -24,7 +22,6 @@ const AdmitWorkItemsActivityName = "admit_work_items"
 const ClaimWorkItemActivityName = "claim_work_item"
 const SetWorkItemStatusActivityName = "set_work_item_status"
 const GetCampaignStatusActivityName = "get_campaign_status"
-const WorkItemSummaryActivityName = "work_item_summary"
 const SchedulerSnapshotActivityName = "scheduler_snapshot"
 const UpdateSchedulerCapacityActivityName = "update_scheduler_capacity"
 const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
@@ -37,13 +34,6 @@ type Activity struct {
 
 func NewActivity(repo *data.Repository) *Activity {
 	return &Activity{planner: New(repo)}
-}
-
-func (a *Activity) PlanTarget(ctx context.Context, target string) ([]Action, error) {
-	if a == nil || a.planner == nil {
-		return nil, nil
-	}
-	return a.planner.PlanForTarget(ctx, target)
 }
 
 type PlanDAGRequest struct {
@@ -201,17 +191,6 @@ func (a *Activity) UpdateCampaignPhase(ctx context.Context, update CampaignPhase
 	return *campaign, nil
 }
 
-func (a *Activity) GetCampaignPhase(ctx context.Context, campaignID string) (string, error) {
-	if campaignID == "" || a == nil || a.planner == nil || a.planner.repo == nil {
-		return data.CampaignPhaseBootstrap, nil
-	}
-	campaign, err := a.planner.repo.GetCampaign(ctx, campaignID)
-	if err != nil || campaign == nil || campaign.Phase == "" {
-		return data.CampaignPhaseBootstrap, err
-	}
-	return data.NormalizeCampaignPhase(campaign.Phase), nil
-}
-
 func (a *Activity) UpsertBatchRun(ctx context.Context, run data.BatchRun) error {
 	if a == nil || a.planner == nil || a.planner.repo == nil {
 		return nil
@@ -311,33 +290,6 @@ func (a *Activity) GetCampaignStatus(ctx context.Context, campaignID string) (st
 		return "active", nil
 	}
 	return campaign.Status, nil
-}
-
-type WorkItemSummaryRequest struct {
-	CampaignID string `json:"campaign_id,omitempty"`
-	BatchID    string `json:"batch_id,omitempty"`
-	Type       string `json:"type,omitempty"`
-	Artifact   string `json:"artifact,omitempty"`
-}
-
-type WorkItemSummary struct {
-	ByStatus map[string]int `json:"by_status"`
-	Total    int            `json:"total"`
-}
-
-func (a *Activity) WorkItemSummary(ctx context.Context, request WorkItemSummaryRequest) (WorkItemSummary, error) {
-	if a == nil || a.planner == nil || a.planner.repo == nil {
-		return WorkItemSummary{}, nil
-	}
-	counts, err := a.planner.repo.CountWorkItemsByStatus(ctx, request.CampaignID, request.BatchID, request.Type, request.Artifact)
-	if err != nil {
-		return WorkItemSummary{}, err
-	}
-	total := 0
-	for _, count := range counts {
-		total += count
-	}
-	return WorkItemSummary{ByStatus: counts, Total: total}, nil
 }
 
 type SchedulerSnapshotRequest struct {

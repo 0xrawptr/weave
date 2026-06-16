@@ -364,24 +364,25 @@ type WorkItemProgressSummary struct {
 }
 
 type CampaignRuntimeView struct {
-	Campaign            *Campaign               `json:"campaign,omitempty"`
-	Phase               string                  `json:"phase"`
-	PhaseReason         string                  `json:"phase_reason,omitempty"`
-	PhaseBlockingReason string                  `json:"phase_blocking_reason,omitempty"`
-	CurrentBottleneck   *RuntimeBottleneck      `json:"current_bottleneck,omitempty"`
-	ExecutionPlan       []RuntimePlanItem       `json:"execution_plan,omitempty"`
-	OpenPhaseWork       []WorkItemGroupSummary  `json:"open_phase_work,omitempty"`
-	RuntimeQueues       []QueueRuntimeState     `json:"runtime_queues,omitempty"`
-	BlockedQueues       []QueueRuntimeState     `json:"blocked_queues,omitempty"`
-	SlowTargets         []TargetRuntimeState    `json:"slow_targets,omitempty"`
-	ArtifactHealth      []ArtifactRuntimeHealth `json:"artifact_health,omitempty"`
-	ProblemArtifacts    []ArtifactRuntimeHealth `json:"problem_artifacts,omitempty"`
-	CapacityDecisions   []SchedulerCapacity     `json:"capacity_decisions,omitempty"`
-	RuntimeWarnings     []string                `json:"runtime_warnings,omitempty"`
-	ETA                 ETARuntimeState         `json:"eta"`
-	Summary             WorkItemProgressSummary `json:"summary"`
-	RecentPhaseEvents   []CampaignPhaseEvent    `json:"recent_phase_events,omitempty"`
-	GeneratedAt         time.Time               `json:"generated_at"`
+	Campaign            *Campaign                `json:"campaign,omitempty"`
+	Phase               string                   `json:"phase"`
+	PhaseReason         string                   `json:"phase_reason,omitempty"`
+	PhaseBlockingReason string                   `json:"phase_blocking_reason,omitempty"`
+	CurrentBottleneck   *RuntimeBottleneck       `json:"current_bottleneck,omitempty"`
+	ExecutionPlan       []RuntimePlanItem        `json:"execution_plan,omitempty"`
+	OpenPhaseWork       []WorkItemGroupSummary   `json:"open_phase_work,omitempty"`
+	RuntimeQueues       []QueueRuntimeState      `json:"runtime_queues,omitempty"`
+	BlockedQueues       []QueueRuntimeState      `json:"blocked_queues,omitempty"`
+	SlowTargets         []TargetRuntimeState     `json:"slow_targets,omitempty"`
+	ArtifactHealth      []ArtifactRuntimeHealth  `json:"artifact_health,omitempty"`
+	ProblemArtifacts    []ArtifactRuntimeHealth  `json:"problem_artifacts,omitempty"`
+	CapacityDecisions   []SchedulerCapacity      `json:"capacity_decisions,omitempty"`
+	CapacityProfiles    []RuntimeCapacityProfile `json:"capacity_profiles,omitempty"`
+	RuntimeWarnings     []string                 `json:"runtime_warnings,omitempty"`
+	ETA                 ETARuntimeState          `json:"eta"`
+	Summary             WorkItemProgressSummary  `json:"summary"`
+	RecentPhaseEvents   []CampaignPhaseEvent     `json:"recent_phase_events,omitempty"`
+	GeneratedAt         time.Time                `json:"generated_at"`
 }
 
 type RuntimeBottleneck struct {
@@ -468,6 +469,24 @@ type ArtifactRuntimeHealth struct {
 	ErrorRatePercent float64 `json:"error_rate_percent,omitempty"`
 	ThroughputPerMin int64   `json:"throughput_per_min,omitempty"`
 	Reason           string  `json:"reason,omitempty"`
+}
+
+type RuntimeCapacityProfile struct {
+	Queue                      string `json:"queue,omitempty"`
+	Artifact                   string `json:"artifact"`
+	SchedulerScope             string `json:"scheduler_scope"`
+	SchedulerMinCapacity       int    `json:"scheduler_min_capacity,omitempty"`
+	SchedulerInitialCapacity   int    `json:"scheduler_initial_capacity,omitempty"`
+	SchedulerMaxCapacity       int    `json:"scheduler_max_capacity,omitempty"`
+	SchedulerSlowMs            int64  `json:"scheduler_slow_ms,omitempty"`
+	SchedulerErrorLimitPercent int    `json:"scheduler_error_limit_percent,omitempty"`
+	SchedulerDescription       string `json:"scheduler_description,omitempty"`
+	SDKScope                   string `json:"sdk_scope"`
+	SDKConfiguredCapacity      int    `json:"sdk_configured_capacity,omitempty"`
+	SDKDefaultCapacity         int    `json:"sdk_default_capacity,omitempty"`
+	SDKUnit                    string `json:"sdk_unit,omitempty"`
+	SDKDescription             string `json:"sdk_description,omitempty"`
+	ObservationNote            string `json:"observation_note,omitempty"`
 }
 
 type ETARuntimeState struct {

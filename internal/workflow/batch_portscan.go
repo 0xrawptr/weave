@@ -23,9 +23,7 @@ type BatchPortScanInput struct {
 	CampaignPhase          string   `json:"campaign_phase,omitempty"`
 
 	RunPlannedDAG           bool `json:"run_planned_dag,omitempty"`
-	PlannedDAGConcurrency   int  `json:"planned_dag_concurrency,omitempty"`
 	PlannedDAGMaxIterations int  `json:"planned_dag_max_iterations,omitempty"`
-	PlannedDAGContinue      bool `json:"planned_dag_continue_on_failure,omitempty"`
 	SprayShardBaseURLs      int  `json:"spray_shard_base_urls,omitempty"`
 	SprayShardWords         int  `json:"spray_shard_words,omitempty"`
 	NucleiGroupTargets      int  `json:"nuclei_group_targets,omitempty"`

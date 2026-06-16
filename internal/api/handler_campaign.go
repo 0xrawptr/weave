@@ -109,12 +109,38 @@ func (s *Server) GetCampaignRuntime(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
 		return
 	}
-	view, err := s.repo.GetCampaignRuntimeView(c.Request.Context(), c.Param("id"), c.Query("batch_id"))
+	view, err := s.repo.GetCampaignRuntimeViewWithCapacity(c.Request.Context(), c.Param("id"), c.Query("batch_id"), s.sdkCapacityOverrides())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, view)
+}
+
+func (s *Server) sdkCapacityOverrides() map[string]int {
+	if s == nil || s.cfg == nil {
+		return nil
+	}
+	overrides := map[string]int{}
+	if s.cfg.Artifacts.Gogo.Capacity > 0 {
+		overrides["gogo"] = s.cfg.Artifacts.Gogo.Capacity
+	}
+	if s.cfg.Artifacts.Spray.Capacity > 0 {
+		overrides["spray"] = s.cfg.Artifacts.Spray.Capacity
+	}
+	if s.cfg.Artifacts.Neutron.Capacity > 0 {
+		overrides["neutron"] = s.cfg.Artifacts.Neutron.Capacity
+	}
+	if s.cfg.Artifacts.Zombie.Capacity > 0 {
+		overrides["zombie"] = s.cfg.Artifacts.Zombie.Capacity
+	}
+	if s.cfg.Artifacts.Proton.Capacity > 0 {
+		overrides["proton"] = s.cfg.Artifacts.Proton.Capacity
+	}
+	if len(overrides) == 0 {
+		return nil
+	}
+	return overrides
 }
 
 func (s *Server) UpdateCampaignStatus(c *gin.Context) {

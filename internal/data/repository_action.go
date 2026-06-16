@@ -27,10 +27,6 @@ func (r *Repository) SetActionStatus(ctx context.Context, id, status, errorMessa
 	return r.Postgres.CompleteActionRecord(ctx, id, status, errorMessage)
 }
 
-func (r *Repository) GetActionRecords(ctx context.Context, target string) ([]ActionRecord, error) {
-	return r.GetActionRecordsFiltered(ctx, target, "")
-}
-
 func (r *Repository) GetActionRecordsFiltered(ctx context.Context, target, campaignID string) ([]ActionRecord, error) {
 	if r.Postgres == nil {
 		return nil, nil

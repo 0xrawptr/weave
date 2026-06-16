@@ -3,6 +3,8 @@ package etl
 import (
 	"context"
 	"log"
+	"net/url"
+	"strings"
 
 	"github.com/0xrawptr/weave/internal/knowledge"
 	sdkclient "github.com/chainreactors/sdk/client"
@@ -41,7 +43,7 @@ func (m *MultiEnricher) Enrich(ctx context.Context, result *ExtractResult) (*Ext
 }
 
 // AssociationEnricher uses the SDK's association index to look up templates
-// and CVEs related to discovered fingerprints.
+// and CVEs related to discovered assets.
 type AssociationEnricher struct {
 	client *sdkclient.Client
 }
@@ -51,10 +53,10 @@ func NewAssociationEnricher(c *sdkclient.Client) *AssociationEnricher {
 	return &AssociationEnricher{client: c}
 }
 
-// Enrich queries the SDK association index for each fingerprint entity and
-// appends related template IDs on the entity. The SDK association index can
-// correlate fingerprints, aliases, CPEs, tags, CVEs, and POC templates; feed it
-// every normalized hint we have instead of only the display fingerprint name.
+// Enrich queries the SDK association index for each entity that has useful
+// association hints. The SDK index can correlate fingerprints, services,
+// aliases, CPEs, tags, CVEs, and POC templates; feed it every normalized hint
+// we have instead of only the display fingerprint name.
 func (a *AssociationEnricher) Enrich(ctx context.Context, result *ExtractResult) (*ExtractResult, error) {
 	if result == nil || a.client == nil {
 		return result, nil
@@ -67,34 +69,144 @@ func (a *AssociationEnricher) Enrich(ctx context.Context, result *ExtractResult)
 	}
 
 	for i, e := range result.Entities {
-		if e.Type != "fingerprint" {
+		q := associationQueryForEntity(e)
+		if q == nil {
 			continue
 		}
-		q := association.NewQuery().
-			WithFingers(e.Value).
-			WithAliases(e.Value, e.Product).
-			WithCPEs(e.CPEs...).
-			WithTags(e.Tags...)
 		qr := idx.Lookup(q)
 		if qr == nil {
 			continue
 		}
-		for _, tpl := range qr.Templates {
-			if tpl != nil && tpl.Id != "" {
-				result.Entities[i].TemplateIDs = appendUniqueString(result.Entities[i].TemplateIDs, tpl.Id)
-			}
-		}
-		for _, finger := range qr.Fingers {
-			if finger == nil {
-				continue
-			}
-			result.Entities[i].Tags = appendUniqueString(result.Entities[i].Tags, finger.Tags...)
-		}
-		if len(result.Entities[i].TemplateIDs) > len(e.TemplateIDs) {
-			result.Entities[i].Reason = "fingerprint matched SDK association candidates"
-		}
+		result.Entities[i] = applyAssociationResult(result.Entities[i], qr)
 	}
 	return result, nil
+}
+
+func associationQueryForEntity(e Entity) *association.Query {
+	q := association.NewQuery().
+		WithTags(e.Tags...).
+		WithCPEs(e.CPEs...).
+		WithCVEs(e.CVEs...).
+		WithTemplates(e.TemplateIDs...)
+
+	switch e.Type {
+	case "fingerprint":
+		q.WithFingers(e.Value).
+			WithAliases(e.Value, e.Product).
+			WithAttr("product", e.Product)
+	case "service":
+		q.WithServices(serviceAssociationTerms(e.Value, e.Product)...)
+	case "template":
+		q.WithTemplates(e.Value)
+	case "cve":
+		q.WithCVEs(e.Value)
+	case "cpe":
+		q.WithCPEs(e.Value)
+	case "vulnerability":
+		q.WithTemplates(e.TemplateIDs...).
+			WithCVEs(e.CVEs...).
+			WithAttr("severity", e.Severity)
+	default:
+		return nil
+	}
+	if len(q.Fingers) == 0 &&
+		len(q.Aliases) == 0 &&
+		len(q.Templates) == 0 &&
+		len(q.Tags) == 0 &&
+		len(q.Services) == 0 &&
+		len(q.CPEs) == 0 &&
+		len(q.CVEs) == 0 &&
+		len(q.Attributes) == 0 {
+		return nil
+	}
+	return q
+}
+
+func serviceAssociationTerms(values ...string) []string {
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ToLower(value))
+		if value == "" {
+			continue
+		}
+		if parsed, err := url.Parse(value); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			out = appendUniqueString(out, parsed.Scheme)
+			continue
+		}
+		if strings.Contains(value, "://") {
+			continue
+		}
+		if host, port, ok := strings.Cut(value, ":"); ok && host != "" && port != "" {
+			out = appendUniqueString(out, serviceNameForPort(port))
+			continue
+		}
+		out = appendUniqueString(out, value)
+	}
+	return out
+}
+
+func serviceNameForPort(port string) string {
+	switch strings.TrimSpace(port) {
+	case "21":
+		return "ftp"
+	case "22":
+		return "ssh"
+	case "80", "8080":
+		return "http"
+	case "443", "8443":
+		return "https"
+	case "445":
+		return "smb"
+	case "3306":
+		return "mysql"
+	case "5432":
+		return "postgresql"
+	case "6379":
+		return "redis"
+	case "27017":
+		return "mongo"
+	default:
+		return ""
+	}
+}
+
+func applyAssociationResult(entity Entity, qr *association.QueryResult) Entity {
+	beforeTemplates := len(entity.TemplateIDs)
+	beforeCVEs := len(entity.CVEs)
+	beforeCPEs := len(entity.CPEs)
+	for _, tpl := range qr.Templates {
+		if tpl == nil || tpl.Id == "" {
+			continue
+		}
+		entity.TemplateIDs = appendUniqueString(entity.TemplateIDs, tpl.Id)
+		entity.Tags = appendUniqueString(entity.Tags, tpl.GetTags()...)
+		if entity.Severity == "" {
+			entity.Severity = strings.ToLower(strings.TrimSpace(tpl.Info.Severity))
+		}
+		if tpl.Info.Classification != nil {
+			entity.CVEs = appendUniqueString(entity.CVEs, tpl.Info.Classification.CVEID)
+			entity.CPEs = appendUniqueString(entity.CPEs, tpl.Info.Classification.CPE)
+		}
+	}
+	for _, finger := range qr.Fingers {
+		if finger == nil {
+			continue
+		}
+		entity.Tags = appendUniqueString(entity.Tags, finger.Tags...)
+	}
+	for _, alias := range qr.Aliases {
+		if alias == nil {
+			continue
+		}
+		entity.Tags = appendUniqueString(entity.Tags, alias.Tags...)
+		if entity.Product == "" && alias.Product != "" {
+			entity.Product = alias.Product
+		}
+	}
+	if len(entity.TemplateIDs) > beforeTemplates || len(entity.CVEs) > beforeCVEs || len(entity.CPEs) > beforeCPEs {
+		entity.Reason = "entity matched SDK association candidates"
+	}
+	return entity
 }
 
 // KnowledgeEnricher uses the local nuclei-template knowledge index.

@@ -7,6 +7,10 @@ import (
 )
 
 func (r *Repository) GetCampaignRuntimeView(ctx context.Context, campaignID, batchID string) (CampaignRuntimeView, error) {
+	return r.GetCampaignRuntimeViewWithCapacity(ctx, campaignID, batchID, nil)
+}
+
+func (r *Repository) GetCampaignRuntimeViewWithCapacity(ctx context.Context, campaignID, batchID string, sdkCapacityOverrides map[string]int) (CampaignRuntimeView, error) {
 	filter := WorkItemFilter{CampaignID: campaignID, BatchID: batchID}
 	summary, err := r.GetWorkItemProgressSummary(ctx, filter)
 	if err != nil {
@@ -49,6 +53,7 @@ func (r *Repository) GetCampaignRuntimeView(ctx context.Context, campaignID, bat
 	view.ArtifactHealth = artifactRuntimeHealth(artifactStats)
 	view.ProblemArtifacts = problemRuntimeArtifacts(view.ArtifactHealth)
 	view.CapacityDecisions = capacityDecisionSnapshots(capacity)
+	view.CapacityProfiles = RuntimeCapacityProfiles(sdkCapacityOverrides)
 	view.ETA = runtimeETA(summary)
 	view.CurrentBottleneck = runtimeCurrentBottleneck(view)
 	view.RuntimeWarnings = runtimeWarnings(view)

@@ -43,3 +43,44 @@ func TestDecideSchedulerCapacityHalvesOnArtifactErrorRate(t *testing.T) {
 		t.Fatalf("capacity = %#v, want error-rate decrease to 2", got)
 	}
 }
+
+func TestSchedulerCapacityPoliciesComeFromProfiles(t *testing.T) {
+	policies := DefaultSchedulerCapacityPolicies()
+	if len(policies) == 0 {
+		t.Fatal("expected scheduler capacity policies")
+	}
+	byQueue := map[string]SchedulerCapacityPolicy{}
+	for _, policy := range policies {
+		byQueue[policy.Queue] = policy
+	}
+	spray := byQueue["spray"]
+	if spray.Artifact != "spray" || spray.Initial != 3 || spray.Max != 12 {
+		t.Fatalf("spray policy = %#v, want profile-derived scheduler policy", spray)
+	}
+	if _, ok := byQueue[""]; ok {
+		t.Fatal("profiles without a scheduler queue must not become scheduler policies")
+	}
+}
+
+func TestRuntimeCapacityProfilesSeparateSchedulerAndSDKScopes(t *testing.T) {
+	profiles := RuntimeCapacityProfiles(map[string]int{"spray": 123})
+	var spray RuntimeCapacityProfile
+	var neutron RuntimeCapacityProfile
+	for _, profile := range profiles {
+		switch profile.Artifact {
+		case "spray":
+			spray = profile
+		case "neutron":
+			neutron = profile
+		}
+	}
+	if spray.SchedulerScope != "scheduler_admission" || spray.SDKScope != "sdk_engine_bucket" {
+		t.Fatalf("spray scopes = %#v, want explicit scheduler/sdk scopes", spray)
+	}
+	if spray.SDKConfiguredCapacity != 123 || spray.SDKDefaultCapacity != 300 {
+		t.Fatalf("spray sdk capacities = %#v, want override plus default", spray)
+	}
+	if neutron.SchedulerScope != "none" || neutron.SDKDefaultCapacity != 30 {
+		t.Fatalf("neutron profile = %#v, want sdk-only profile", neutron)
+	}
+}

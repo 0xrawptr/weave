@@ -302,28 +302,6 @@ func dispatchPhaseWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkf
 	}
 }
 
-func resolveSchedulerCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput) (string, error) {
-	phase := NormalizeCampaignPhase(input.BatchInput.CampaignPhase)
-	if phase != CampaignPhaseAuto {
-		return phase, nil
-	}
-	if input.BatchInput.CampaignID != "" {
-		campaignPhase, err := getCampaignPhase(ctx, input.BatchInput.CampaignID)
-		if err == nil && campaignPhase != "" {
-			return campaignPhase, nil
-		}
-	}
-	return deriveSchedulerCampaignPhase(ctx, input)
-}
-
-func resolveAndPersistSchedulerCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput) (string, error) {
-	snapshot, err := loadSchedulerSnapshot(ctx, input)
-	if err != nil {
-		return "", err
-	}
-	return resolveAndPersistSchedulerCampaignPhaseFromSnapshot(ctx, input, snapshot)
-}
-
 func resolveAndPersistSchedulerCampaignPhaseFromSnapshot(ctx workflow.Context, input SchedulerWorkflowInput, snapshot data.WorkItemProgressSummary) (string, error) {
 	desired, reason := desiredSchedulerCampaignPhaseFromSnapshot(input, snapshot)
 	if input.BatchInput.CampaignID == "" {
@@ -336,15 +314,6 @@ func resolveAndPersistSchedulerCampaignPhaseFromSnapshot(ctx workflow.Context, i
 	return updateCampaignPhase(ctx, input, desired, reason)
 }
 
-func desiredSchedulerCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput) (string, string, error) {
-	snapshot, err := loadSchedulerSnapshot(ctx, input)
-	if err != nil {
-		return "", "", err
-	}
-	phase, reason := desiredSchedulerCampaignPhaseFromSnapshot(input, snapshot)
-	return phase, reason, nil
-}
-
 func desiredSchedulerCampaignPhaseFromSnapshot(input SchedulerWorkflowInput, snapshot data.WorkItemProgressSummary) (string, string) {
 	phase := NormalizeCampaignPhase(input.BatchInput.CampaignPhase)
 	if phase != CampaignPhaseAuto {
@@ -352,14 +321,6 @@ func desiredSchedulerCampaignPhaseFromSnapshot(input SchedulerWorkflowInput, sna
 	}
 	derived := deriveSchedulerCampaignPhaseFromSnapshot(snapshot)
 	return derived, campaignPhaseReason(derived)
-}
-
-func deriveSchedulerCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput) (string, error) {
-	snapshot, err := loadSchedulerSnapshot(ctx, input)
-	if err != nil {
-		return "", err
-	}
-	return deriveSchedulerCampaignPhaseFromSnapshot(snapshot), nil
 }
 
 func deriveSchedulerCampaignPhaseFromSnapshot(snapshot data.WorkItemProgressSummary) string {
@@ -407,15 +368,6 @@ func campaignPhaseReason(phase string) string {
 	}
 }
 
-func getCampaignPhase(ctx workflow.Context, campaignID string) (string, error) {
-	var phase string
-	err := workflow.ExecuteActivity(ctx, planner.GetCampaignPhaseActivityName, campaignID).Get(ctx, &phase)
-	if err != nil {
-		return "", err
-	}
-	return NormalizeCampaignPhase(phase), nil
-}
-
 func updateCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput, phase, reason string) (string, error) {
 	var campaign data.Campaign
 	err := workflow.ExecuteActivity(ctx, planner.UpdateCampaignPhaseActivityName, planner.CampaignPhaseUpdate{
@@ -430,7 +382,7 @@ func updateCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput, pha
 	return NormalizeCampaignPhase(campaign.Phase), nil
 }
 
-func openWorkItems(summary planner.WorkItemSummary) int {
+func openWorkItems(summary schedulerWorkItemSummary) int {
 	return summary.ByStatus["pending"] +
 		summary.ByStatus["starting"] +
 		nonTailRunning(summary.ByStatus) +
@@ -1110,17 +1062,22 @@ func updateSchedulerCapacity(ctx workflow.Context, input SchedulerWorkflowInput)
 	return out, err
 }
 
-func schedulerSummaryForType(snapshot data.WorkItemProgressSummary, itemType string) planner.WorkItemSummary {
+type schedulerWorkItemSummary struct {
+	ByStatus map[string]int
+	Total    int
+}
+
+func schedulerSummaryForType(snapshot data.WorkItemProgressSummary, itemType string) schedulerWorkItemSummary {
 	for _, group := range snapshot.ByType {
 		if group.Key == itemType {
 			return workItemSummaryFromGroup(group)
 		}
 	}
-	return planner.WorkItemSummary{ByStatus: map[string]int{}, Total: 0}
+	return schedulerWorkItemSummary{ByStatus: map[string]int{}, Total: 0}
 }
 
-func workItemSummaryFromGroup(group data.WorkItemGroupSummary) planner.WorkItemSummary {
-	return planner.WorkItemSummary{
+func workItemSummaryFromGroup(group data.WorkItemGroupSummary) schedulerWorkItemSummary {
+	return schedulerWorkItemSummary{
 		Total: group.Total,
 		ByStatus: map[string]int{
 			data.WorkItemStatusPending:      group.Pending,
@@ -1220,28 +1177,6 @@ func schedulerArtifactForType(itemType string) string {
 	default:
 		return itemType
 	}
-}
-
-func workItemSummary(ctx workflow.Context, input SchedulerWorkflowInput, itemType string) (planner.WorkItemSummary, error) {
-	var summary planner.WorkItemSummary
-	err := workflow.ExecuteActivity(ctx, planner.WorkItemSummaryActivityName, planner.WorkItemSummaryRequest{
-		CampaignID: input.BatchInput.CampaignID,
-		BatchID:    input.BatchID,
-		Type:       itemType,
-	}).Get(ctx, &summary)
-	return summary, err
-}
-
-func schedulerHasOpenWorkItems(ctx workflow.Context, input SchedulerWorkflowInput, itemType string) (bool, error) {
-	summary, err := workItemSummary(ctx, input, itemType)
-	if err != nil {
-		return false, err
-	}
-	return summary.ByStatus["pending"] > 0 ||
-		summary.ByStatus["starting"] > 0 ||
-		nonTailRunning(summary.ByStatus) > 0 ||
-		summary.ByStatus["retry_waiting"] > 0 ||
-		summary.ByStatus["paused"] > 0, nil
 }
 
 func recoverStaleScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
@@ -1782,12 +1717,6 @@ func normalizeBatchPortScanInput(input BatchPortScanInput) BatchPortScanInput {
 	}
 	if input.RetryDelaySeconds > 3600 {
 		input.RetryDelaySeconds = 3600
-	}
-	if input.PlannedDAGConcurrency <= 0 {
-		input.PlannedDAGConcurrency = 4
-	}
-	if input.PlannedDAGConcurrency > 64 {
-		input.PlannedDAGConcurrency = 64
 	}
 	input.CampaignPhase = NormalizeCampaignPhase(input.CampaignPhase)
 	if input.PlannedDAGMaxIterations <= 0 {

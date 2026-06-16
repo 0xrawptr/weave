@@ -195,12 +195,3 @@ func joinReasons(values []string) string {
 	}
 	return out
 }
-
-func containsAny(value string, tokens ...string) bool {
-	for _, token := range tokens {
-		if strings.Contains(value, token) {
-			return true
-		}
-	}
-	return false
-}

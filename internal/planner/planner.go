@@ -99,13 +99,6 @@ func New(repo *data.Repository) *Planner {
 	return &Planner{repo: repo}
 }
 
-// PlanForTarget converts the current asset graph into next-step scan actions.
-// It intentionally returns recommendations; workflow execution can consume the
-// same actions later without changing this decision logic.
-func (p *Planner) PlanForTarget(ctx context.Context, target string) ([]Action, error) {
-	return p.PlanForTargetInCampaign(ctx, target, "")
-}
-
 func (p *Planner) PlanForTargetInCampaign(ctx context.Context, target, campaignID string) ([]Action, error) {
 	if p == nil || p.repo == nil {
 		return nil, nil

@@ -8,6 +8,10 @@ import (
 
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/knowledge"
+	"github.com/chainreactors/fingers/alias"
+	"github.com/chainreactors/fingers/common"
+	"github.com/chainreactors/neutron/templates"
+	"github.com/chainreactors/sdk/pkg/association"
 )
 
 func TestKnowledgeEnricherAddsTemplatesTagsAndCVEs(t *testing.T) {
@@ -207,6 +211,68 @@ info:
 	}
 	if !has(entity.CPEs, "cpe:2.3:a:oracle:weblogic_server:*:*:*:*:*:*:*:*") {
 		t.Fatalf("missing CPE from product lookup: %#v", entity.CPEs)
+	}
+}
+
+func TestAssociationQueryForServiceTemplateAndCVE(t *testing.T) {
+	serviceQuery := associationQueryForEntity(Entity{
+		Type:  "service",
+		Value: "https://example.com:8443/admin",
+		Tags:  []string{"edge"},
+	})
+	if serviceQuery == nil || !has(serviceQuery.Services, "https") || !has(serviceQuery.Tags, "edge") {
+		t.Fatalf("unexpected service query: %#v", serviceQuery)
+	}
+
+	templateQuery := associationQueryForEntity(Entity{
+		Type:  "template",
+		Value: "CVE-2020-14882",
+		CVEs:  []string{"CVE-2020-14882"},
+	})
+	if templateQuery == nil || !has(templateQuery.Templates, "CVE-2020-14882") || !has(templateQuery.CVEs, "CVE-2020-14882") {
+		t.Fatalf("unexpected template query: %#v", templateQuery)
+	}
+
+	cveQuery := associationQueryForEntity(Entity{Type: "cve", Value: "CVE-2020-14882"})
+	if cveQuery == nil || !has(cveQuery.CVEs, "CVE-2020-14882") {
+		t.Fatalf("unexpected cve query: %#v", cveQuery)
+	}
+}
+
+func TestApplyAssociationResultAddsTemplateCVECPETags(t *testing.T) {
+	entity := Entity{Type: "service", Value: "https://example.com"}
+	got := applyAssociationResult(entity, &association.QueryResult{
+		Aliases: []*alias.Alias{{
+			Name:       "weblogic",
+			Tags:       []string{"java", "appserver"},
+			Attributes: common.Attributes{Product: "WebLogic Server"},
+		}},
+		Templates: []*templates.Template{{
+			Id: "CVE-2020-14882",
+			Info: templates.Info{
+				Severity: "critical",
+				Tags:     "cve,weblogic,rce",
+				Classification: &templates.Classification{
+					CVEID: "CVE-2020-14882",
+					CPE:   "cpe:2.3:a:oracle:weblogic_server:*:*:*:*:*:*:*:*",
+				},
+			},
+		}},
+	})
+	if !has(got.TemplateIDs, "CVE-2020-14882") {
+		t.Fatalf("missing template: %#v", got)
+	}
+	if !has(got.CVEs, "CVE-2020-14882") {
+		t.Fatalf("missing cve: %#v", got)
+	}
+	if !has(got.CPEs, "cpe:2.3:a:oracle:weblogic_server:*:*:*:*:*:*:*:*") {
+		t.Fatalf("missing cpe: %#v", got)
+	}
+	if !has(got.Tags, "weblogic") || !has(got.Tags, "java") {
+		t.Fatalf("missing tags: %#v", got)
+	}
+	if got.Product != "WebLogic Server" || got.Severity != "critical" || got.Reason == "" {
+		t.Fatalf("missing metadata: %#v", got)
 	}
 }
 

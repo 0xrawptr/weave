@@ -6,16 +6,128 @@ import (
 	"time"
 )
 
-func DefaultSchedulerCapacityPolicies() []SchedulerCapacityPolicy {
-	return []SchedulerCapacityPolicy{
-		{Queue: "dns", Artifact: "dnsx", Min: 1, Initial: 4, Max: 12, SlowMs: 30_000, ErrorLimit: 40},
-		{Queue: "portscan", Artifact: "gogo", Min: 1, Initial: 4, Max: 8, SlowMs: 180_000, ErrorLimit: 30},
-		{Queue: "planner", Artifact: "planned_dag", Min: 1, Initial: 4, Max: 16, SlowMs: 10_000, ErrorLimit: 50},
-		{Queue: "http", Artifact: "fingers", Min: 1, Initial: 6, Max: 16, SlowMs: 60_000, ErrorLimit: 40},
-		{Queue: "spray", Artifact: "spray", Min: 1, Initial: 3, Max: 12, SlowMs: 120_000, ErrorLimit: 25},
-		{Queue: "nuclei", Artifact: "nuclei", Min: 1, Initial: 2, Max: 6, SlowMs: 240_000, ErrorLimit: 30},
-		{Queue: "bruteforce", Artifact: "zombie", Min: 1, Initial: 1, Max: 1, SlowMs: 300_000, ErrorLimit: 10},
+type CapacityProfile struct {
+	Queue               string
+	Artifact            string
+	SchedulerMin        int
+	SchedulerInitial    int
+	SchedulerMax        int
+	SchedulerSlowMs     int64
+	SchedulerErrorLimit int
+	SDKDefaultCapacity  int
+	SDKUnit             string
+	SDKDescription      string
+}
+
+func DefaultCapacityProfiles() []CapacityProfile {
+	return []CapacityProfile{
+		{
+			Queue: "dns", Artifact: "dnsx",
+			SchedulerMin: 1, SchedulerInitial: 4, SchedulerMax: 12, SchedulerSlowMs: 30_000, SchedulerErrorLimit: 40,
+			SDKUnit: "not_configured", SDKDescription: "dnsx capacity is controlled by Temporal worker slots and scheduler admission",
+		},
+		{
+			Queue: "portscan", Artifact: "gogo",
+			SchedulerMin: 1, SchedulerInitial: 4, SchedulerMax: 8, SchedulerSlowMs: 180_000, SchedulerErrorLimit: 30,
+			SDKDefaultCapacity: 6000, SDKUnit: "engine_tokens", SDKDescription: "local SDK gogo engine capacity inside one worker process",
+		},
+		{
+			Queue: "planner", Artifact: "planned_dag",
+			SchedulerMin: 1, SchedulerInitial: 4, SchedulerMax: 16, SchedulerSlowMs: 10_000, SchedulerErrorLimit: 50,
+			SDKUnit: "not_applicable", SDKDescription: "planner is Weave-owned logic and has no SDK engine bucket",
+		},
+		{
+			Queue: "http", Artifact: "fingers",
+			SchedulerMin: 1, SchedulerInitial: 6, SchedulerMax: 16, SchedulerSlowMs: 60_000, SchedulerErrorLimit: 40,
+			SDKUnit: "not_configured", SDKDescription: "fingers capacity is controlled by Temporal worker slots and scheduler admission",
+		},
+		{
+			Queue: "spray", Artifact: "spray",
+			SchedulerMin: 1, SchedulerInitial: 3, SchedulerMax: 12, SchedulerSlowMs: 120_000, SchedulerErrorLimit: 25,
+			SDKDefaultCapacity: 300, SDKUnit: "engine_tokens", SDKDescription: "local SDK spray engine capacity inside one worker process",
+		},
+		{
+			Queue: "nuclei", Artifact: "nuclei",
+			SchedulerMin: 1, SchedulerInitial: 2, SchedulerMax: 6, SchedulerSlowMs: 240_000, SchedulerErrorLimit: 30,
+			SDKUnit: "not_applicable", SDKDescription: "nuclei is executed by Weave adapter without a shared SDK bucket",
+		},
+		{
+			Queue: "bruteforce", Artifact: "zombie",
+			SchedulerMin: 1, SchedulerInitial: 1, SchedulerMax: 1, SchedulerSlowMs: 300_000, SchedulerErrorLimit: 10,
+			SDKDefaultCapacity: 20, SDKUnit: "engine_tokens", SDKDescription: "local SDK zombie engine capacity inside one worker process",
+		},
+		{
+			Artifact:           "neutron",
+			SDKDefaultCapacity: 30, SDKUnit: "template_executions", SDKDescription: "local SDK neutron template execution capacity inside one worker process",
+		},
+		{
+			Artifact: "proton",
+			SDKUnit:  "engine_tokens", SDKDescription: "local SDK proton engine capacity inside one worker process",
+		},
 	}
+}
+
+func DefaultSchedulerCapacityPolicies() []SchedulerCapacityPolicy {
+	profiles := DefaultCapacityProfiles()
+	out := make([]SchedulerCapacityPolicy, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile.Queue == "" {
+			continue
+		}
+		out = append(out, SchedulerCapacityPolicy{
+			Queue:      profile.Queue,
+			Artifact:   profile.Artifact,
+			Min:        profile.SchedulerMin,
+			Initial:    profile.SchedulerInitial,
+			Max:        profile.SchedulerMax,
+			SlowMs:     profile.SchedulerSlowMs,
+			ErrorLimit: profile.SchedulerErrorLimit,
+		})
+	}
+	return out
+}
+
+func DefaultSDKCapacityForArtifact(artifact string) int {
+	for _, profile := range DefaultCapacityProfiles() {
+		if profile.Artifact == artifact {
+			return profile.SDKDefaultCapacity
+		}
+	}
+	return 0
+}
+
+func RuntimeCapacityProfiles(sdkOverrides map[string]int) []RuntimeCapacityProfile {
+	profiles := DefaultCapacityProfiles()
+	out := make([]RuntimeCapacityProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		configured := profile.SDKDefaultCapacity
+		if sdkOverrides != nil && sdkOverrides[profile.Artifact] > 0 {
+			configured = sdkOverrides[profile.Artifact]
+		}
+		item := RuntimeCapacityProfile{
+			Queue:                      profile.Queue,
+			Artifact:                   profile.Artifact,
+			SchedulerScope:             "scheduler_admission",
+			SchedulerMinCapacity:       profile.SchedulerMin,
+			SchedulerInitialCapacity:   profile.SchedulerInitial,
+			SchedulerMaxCapacity:       profile.SchedulerMax,
+			SchedulerSlowMs:            profile.SchedulerSlowMs,
+			SchedulerErrorLimitPercent: profile.SchedulerErrorLimit,
+			SchedulerDescription:       "adaptive work_item dispatch capacity decided by Weave scheduler",
+			SDKScope:                   "sdk_engine_bucket",
+			SDKConfiguredCapacity:      configured,
+			SDKDefaultCapacity:         profile.SDKDefaultCapacity,
+			SDKUnit:                    profile.SDKUnit,
+			SDKDescription:             profile.SDKDescription,
+			ObservationNote:            "scheduler_admission is campaign-level dispatch control; sdk_engine_bucket is local to each worker process and is not a global cluster limit",
+		}
+		if profile.Queue == "" {
+			item.SchedulerScope = "none"
+			item.SchedulerDescription = "no Weave scheduler queue is bound to this SDK engine"
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (r *Repository) UpdateSchedulerCapacity(ctx context.Context, request SchedulerCapacityUpdateRequest) ([]SchedulerCapacity, error) {

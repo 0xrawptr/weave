@@ -68,7 +68,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 			Gogo:     etl.NewPipeline(&etl.GogoExtractor{}, loader).WithEnricher(enricher),
 			Fingers:  etl.NewPipeline(&etl.FingersExtractor{}, loader).WithEnricher(enricher),
 			Neutron:  etl.NewPipeline(&etl.NeutronExtractor{}, loader),
-			Spray:    etl.NewPipeline(&etl.SprayExtractor{}, loader),
+			Spray:    etl.NewPipeline(&etl.SprayExtractor{}, loader).WithEnricher(enricher),
 			Zombie:   etl.NewPipeline(&etl.ZombieExtractor{}, loader),
 			Proton:   etl.NewPipeline(&etl.ProtonExtractor{}, loader),
 			Cdncheck: etl.NewPipeline(&etl.CdncheckExtractor{}, loader),
@@ -110,32 +110,32 @@ func buildSDKClient(cfg *config.Config) *sdkclient.Client {
 	}
 
 	gogoCfg := sdkgogo.NewConfig()
-	if cfg.Artifacts.Gogo.Capacity > 0 {
-		gogoCfg.WithCapacity(cfg.Artifacts.Gogo.Capacity)
+	if capacity := sdkCapacity("gogo", cfg.Artifacts.Gogo.Capacity); capacity > 0 {
+		gogoCfg.WithCapacity(capacity)
 		opts = append(opts, sdkclient.WithGogoConfig(gogoCfg))
 	}
 
 	sprayCfg := sdkspray.NewConfig().WithMatchDetail().WithResourceProvider(spraypkg.LoadEmbeddedConfig)
-	if cfg.Artifacts.Spray.Capacity > 0 {
-		sprayCfg.WithCapacity(cfg.Artifacts.Spray.Capacity)
+	if capacity := sdkCapacity("spray", cfg.Artifacts.Spray.Capacity); capacity > 0 {
+		sprayCfg.WithCapacity(capacity)
 	}
 	opts = append(opts, sdkclient.WithSprayConfig(sprayCfg))
 
 	neutronCfg := sdkneutron.NewConfig()
-	if cfg.Artifacts.Neutron.Capacity > 0 {
-		neutronCfg.Capacity = cfg.Artifacts.Neutron.Capacity
+	if capacity := sdkCapacity("neutron", cfg.Artifacts.Neutron.Capacity); capacity > 0 {
+		neutronCfg.Capacity = capacity
 		opts = append(opts, sdkclient.WithNeutronConfig(neutronCfg))
 	}
 
 	zombieCfg := sdkzombie.NewConfig()
-	if cfg.Artifacts.Zombie.Capacity > 0 {
-		zombieCfg.WithCapacity(cfg.Artifacts.Zombie.Capacity)
+	if capacity := sdkCapacity("zombie", cfg.Artifacts.Zombie.Capacity); capacity > 0 {
+		zombieCfg.WithCapacity(capacity)
 		opts = append(opts, sdkclient.WithZombieConfig(zombieCfg))
 	}
 
 	protonCfg := sdkproton.NewConfig()
-	if cfg.Artifacts.Proton.Capacity > 0 {
-		protonCfg.WithCapacity(cfg.Artifacts.Proton.Capacity)
+	if capacity := sdkCapacity("proton", cfg.Artifacts.Proton.Capacity); capacity > 0 {
+		protonCfg.WithCapacity(capacity)
 	}
 	if len(cfg.Artifacts.Proton.TemplatePaths) > 0 {
 		protonCfg.WithTemplatePaths(cfg.Artifacts.Proton.TemplatePaths...)
@@ -158,6 +158,13 @@ func buildSDKClient(cfg *config.Config) *sdkclient.Client {
 	opts = append(opts, sdkclient.WithProtonConfig(protonCfg))
 
 	return sdkclient.New(opts...)
+}
+
+func sdkCapacity(artifact string, override int) int {
+	if override > 0 {
+		return override
+	}
+	return data.DefaultSDKCapacityForArtifact(artifact)
 }
 
 func (a *App) WireResolvers() {

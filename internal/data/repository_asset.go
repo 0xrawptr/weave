@@ -77,11 +77,6 @@ func (r *Repository) UpdateAssetStatus(ctx context.Context, id, status string) e
 	return nil
 }
 
-// GetWebURLs returns the web service URLs discovered by gogo for a scan target.
-func (r *Repository) GetWebURLs(ctx context.Context, scanTarget string) ([]string, error) {
-	return r.GetWebURLsInCampaign(ctx, scanTarget, "")
-}
-
 // GetWebURLsInCampaign returns web service URLs scoped to a campaign when provided.
 func (r *Repository) GetWebURLsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
@@ -98,10 +93,6 @@ func (r *Repository) GetWebURLsInCampaign(ctx context.Context, scanTarget, campa
 		}
 	}
 	return urls, nil
-}
-
-func (r *Repository) CountAssets(ctx context.Context, scanTarget, assetType, source, status string) (int, error) {
-	return r.CountAssetsInCampaign(ctx, scanTarget, "", assetType, source, status)
 }
 
 func (r *Repository) CountAssetsInCampaign(ctx context.Context, scanTarget, campaignID, assetType, source, status string) (int, error) {
@@ -193,12 +184,6 @@ func plannerEvidenceType(value string) bool {
 	}
 }
 
-// GetDiscoveredURLs returns HTTP URLs discovered by URL-expansion artifacts
-// such as spray. These URLs can be fed back into planner iterations.
-func (r *Repository) GetDiscoveredURLs(ctx context.Context, scanTarget string) ([]Asset, error) {
-	return r.GetDiscoveredURLsInCampaign(ctx, scanTarget, "")
-}
-
 // GetDiscoveredURLsInCampaign returns spray-discovered URLs scoped to a campaign when provided.
 func (r *Repository) GetDiscoveredURLsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]Asset, error) {
 	if r.Postgres == nil {
@@ -250,11 +235,6 @@ func isHTTPURL(value string) bool {
 	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
 }
 
-// GetFingerprints returns the unique fingerprint names discovered by gogo for a target.
-func (r *Repository) GetFingerprints(ctx context.Context, scanTarget string) ([]string, error) {
-	return r.GetFingerprintsInCampaign(ctx, scanTarget, "")
-}
-
 func (r *Repository) GetFingerprintsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
 		return nil, nil
@@ -272,12 +252,6 @@ func (r *Repository) GetFingerprintsInCampaign(ctx context.Context, scanTarget, 
 		}
 	}
 	return names, nil
-}
-
-// GetTemplateIDs returns template IDs associated with fingerprints for a target.
-// These are populated by the ETL enrichment phase.
-func (r *Repository) GetTemplateIDs(ctx context.Context, scanTarget string) ([]string, error) {
-	return r.GetTemplateIDsInCampaign(ctx, scanTarget, "")
 }
 
 func (r *Repository) GetTemplateIDsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
@@ -299,11 +273,6 @@ func (r *Repository) GetTemplateIDsInCampaign(ctx context.Context, scanTarget, c
 	return ids, nil
 }
 
-// GetTags returns normalized enrichment tags associated with a target.
-func (r *Repository) GetTags(ctx context.Context, scanTarget string) ([]string, error) {
-	return r.GetTagsInCampaign(ctx, scanTarget, "")
-}
-
 func (r *Repository) GetTagsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
 	if r.Postgres == nil {
 		return nil, nil
@@ -321,11 +290,6 @@ func (r *Repository) GetTagsInCampaign(ctx context.Context, scanTarget, campaign
 		}
 	}
 	return tags, nil
-}
-
-// GetCVEAssets returns CVE candidate/confirmed assets for a target.
-func (r *Repository) GetCVEAssets(ctx context.Context, scanTarget string) ([]Asset, error) {
-	return r.GetCVEAssetsInCampaign(ctx, scanTarget, "")
 }
 
 func (r *Repository) GetCVEAssetsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]Asset, error) {
@@ -354,13 +318,6 @@ func (r *Repository) GetCVEAssetsInCampaign(ctx context.Context, scanTarget, cam
 		}
 	}
 	return out, nil
-}
-
-// GetKnowledgeEvidence returns graph-derived planner evidence. Neo4j is the
-// preferred source because it preserves relationships; Postgres is a fallback
-// for local setups that only have normalized assets.
-func (r *Repository) GetKnowledgeEvidence(ctx context.Context, scanTarget string) ([]EvidenceRecord, error) {
-	return r.GetKnowledgeEvidenceInCampaign(ctx, scanTarget, "")
 }
 
 func (r *Repository) GetKnowledgeEvidenceInCampaign(ctx context.Context, scanTarget, campaignID string) ([]EvidenceRecord, error) {

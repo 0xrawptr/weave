@@ -192,7 +192,7 @@ func (s *Server) WorkItemSummary(c *gin.Context) {
 	var runtimeView *data.CampaignRuntimeView
 	if filter.CampaignID != "" {
 		campaign, _ = s.repo.GetCampaign(c.Request.Context(), filter.CampaignID)
-		if view, viewErr := s.repo.GetCampaignRuntimeView(c.Request.Context(), filter.CampaignID, filter.BatchID); viewErr == nil {
+		if view, viewErr := s.repo.GetCampaignRuntimeViewWithCapacity(c.Request.Context(), filter.CampaignID, filter.BatchID, s.sdkCapacityOverrides()); viewErr == nil {
 			runtimeView = &view
 		}
 	}
