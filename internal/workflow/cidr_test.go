@@ -210,7 +210,7 @@ func TestSchedulerPhasePlansGateWorkItemTypes(t *testing.T) {
 		now   bool
 	}{
 		{phase: CampaignPhaseBootstrap, want: []string{"dns_preflight"}},
-		{phase: CampaignPhaseDiscovery, want: []string{"portscan_chunk", "planned_dag_followup", "fingers_action"}},
+		{phase: CampaignPhaseDiscovery, want: []string{"portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard"}},
 		{phase: CampaignPhaseExpansion, want: []string{"spray_shard", "fingers_action"}},
 		{phase: CampaignPhaseVerification, want: []string{"nuclei_group", "spray_shard"}},
 		{phase: CampaignPhaseSteady, want: []string{"dns_preflight", "portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard", "nuclei_group"}, now: true},

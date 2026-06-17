@@ -14,7 +14,6 @@ import (
 	"github.com/0xrawptr/weave/internal/etl"
 	"github.com/0xrawptr/weave/internal/planner"
 	"github.com/0xrawptr/weave/internal/workflow"
-	"github.com/chainreactors/sdk/pkg/association"
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	"go.temporal.io/sdk/activity"
 	sdkworker "go.temporal.io/sdk/worker"
@@ -67,7 +66,7 @@ func wireGogoStreaming(runtimeApp *app.App) {
 	if err != nil {
 		return
 	}
-	a.(*artifact.GogoArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, result *sdktypes.GOGOResult) {
+	a.(*artifact.GogoArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result *sdktypes.GOGOResult) {
 		raw, _ := json.Marshal(result)
 		workflowID := ""
 		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
@@ -87,8 +86,7 @@ func wireGogoStreaming(runtimeApp *app.App) {
 		}
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}})
 		etlCtx := etl.WithCampaignID(ctx, campaignID)
-		q := association.NewQuery().WithFrameworks(result.Frameworks).WithVulns(result.Vulns)
-		if qr, lookupErr := runtimeApp.SDK.Lookup(q); lookupErr == nil {
+		if qr, lookupErr := runtimeApp.SDK.LookupResult(sdkResult); lookupErr == nil {
 			etlCtx = etl.WithPreEnrichment(etlCtx, qr)
 		}
 		if err := runtimeApp.Pipelines.Gogo.Process(etlCtx, target, wrapped); err != nil {
@@ -108,7 +106,7 @@ func wireSprayStreaming(runtimeApp *app.App) {
 	if err != nil {
 		return
 	}
-	a.(*artifact.SprayArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, result artifact.SprayResultItem) {
+	a.(*artifact.SprayArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result artifact.SprayResultItem) {
 		raw, _ := json.Marshal(result)
 		workflowID := ""
 		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
@@ -125,19 +123,8 @@ func wireSprayStreaming(runtimeApp *app.App) {
 		})
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}, "total": 1})
 		etlCtx := etl.WithCampaignID(ctx, campaignID)
-		if len(result.Frameworks) > 0 {
-			names := make([]string, 0, len(result.Frameworks))
-			for _, fw := range result.Frameworks {
-				if fw.Name != "" {
-					names = append(names, fw.Name)
-				}
-			}
-			if len(names) > 0 {
-				q := association.NewQuery().WithFingers(names...)
-				if qr, lookupErr := runtimeApp.SDK.Lookup(q); lookupErr == nil {
-					etlCtx = etl.WithPreEnrichment(etlCtx, qr)
-				}
-			}
+		if qr, lookupErr := runtimeApp.SDK.LookupResult(sdkResult); lookupErr == nil {
+			etlCtx = etl.WithPreEnrichment(etlCtx, qr)
 		}
 		if err := runtimeApp.Pipelines.Spray.Process(etlCtx, target, wrapped); err != nil {
 			log.Printf("WARNING: spray streaming ETL failed: %v", err)

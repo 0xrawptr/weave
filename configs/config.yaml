@@ -72,6 +72,22 @@ redis:
   password: ""
   db: 0
 
+sdk:
+  # Optional global proxy for SDK-managed engines.
+  # proxy: socks5://127.0.0.1:1080
+  proxy: ""
+  # Optional provider sources. EmbedProvider is always loaded first.
+  # cyberhub:
+  #   url: ${CYBERHUB_URL}
+  #   api_key: ${CYBERHUB_KEY}
+  #   draft: false
+  # file_provider:
+  #   fingers_path: ${WEAVE_SDK_FINGERS_PATH}
+  #   pocs_path: ${WEAVE_SDK_POCS_PATH}
+  # url_provider:
+  #   fingers_url: ${WEAVE_SDK_FINGERS_URL}
+  #   pocs_url: ${WEAVE_SDK_POCS_URL}
+
 knowledge:
   # Local knowledge paths should be provided through environment variables.
   # Example:

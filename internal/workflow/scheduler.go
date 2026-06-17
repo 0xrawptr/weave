@@ -183,7 +183,7 @@ func schedulerPhasePlanFor(phase string) schedulerPhasePlan {
 	case CampaignPhaseBootstrap:
 		return schedulerPhasePlan{Phase: CampaignPhaseBootstrap, ItemTypes: []string{"dns_preflight"}}
 	case CampaignPhaseDiscovery:
-		return schedulerPhasePlan{Phase: CampaignPhaseDiscovery, ItemTypes: []string{"portscan_chunk", "planned_dag_followup", "fingers_action"}}
+		return schedulerPhasePlan{Phase: CampaignPhaseDiscovery, ItemTypes: []string{"portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard"}}
 	case CampaignPhaseExpansion:
 		return schedulerPhasePlan{Phase: CampaignPhaseExpansion, ItemTypes: []string{"spray_shard", "fingers_action"}}
 	case CampaignPhaseVerification:

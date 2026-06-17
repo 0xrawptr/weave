@@ -17,7 +17,7 @@ import (
 type GogoArtifact struct {
 	engine        *sdkgogo.Engine
 	threads       int
-	resultHandler func(ctx context.Context, target, campaignID string, result *types.GOGOResult) // streaming persist
+	resultHandler func(ctx context.Context, target, campaignID string, sdkResult types.Result, result *types.GOGOResult) // streaming persist
 }
 
 type GogoInput struct {
@@ -61,7 +61,7 @@ func (g *GogoArtifact) SDKCapacityTotal() int {
 }
 
 // SetResultHandler injects a per-result callback for streaming persist.
-func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, result *types.GOGOResult)) {
+func (g *GogoArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, sdkResult types.Result, result *types.GOGOResult)) {
 	g.resultHandler = h
 }
 
@@ -150,7 +150,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 				webURLs = append(webURLs, result.GetBaseURL())
 			}
 			if g.resultHandler != nil {
-				g.resultHandler(ctx, input.Target, input.CampaignID, result)
+				g.resultHandler(ctx, input.Target, input.CampaignID, sdkResult, result)
 			}
 		case <-ticker.C:
 			h := map[string]interface{}{

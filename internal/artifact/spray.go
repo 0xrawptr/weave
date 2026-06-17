@@ -16,7 +16,7 @@ import (
 type SprayArtifact struct {
 	engine         *sdkspray.Engine
 	defaultThreads int
-	resultHandler  func(ctx context.Context, target, campaignID string, result SprayResultItem)
+	resultHandler  func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result SprayResultItem)
 }
 
 // SprayInput defines the input for spray operations.
@@ -130,7 +130,7 @@ func (s *SprayArtifact) SDKCapacityTotal() int {
 	return s.engine.Capacity().Total()
 }
 
-func (s *SprayArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, result SprayResultItem)) {
+func (s *SprayArtifact) SetResultHandler(h func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result SprayResultItem)) {
 	s.resultHandler = h
 }
 
@@ -245,7 +245,7 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 			}
 			item := sprayResultItem(data)
 			items = append(items, item)
-			s.emitResult(ctx, input, item)
+			s.emitResult(ctx, input, r, item)
 		}
 	} else if len(sprayIn.URLs) > 0 {
 		recordArtifactHeartbeat(ctx, s.Name(), input.Target, "check", started, map[string]interface{}{
@@ -263,7 +263,7 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 			}
 			item := sprayResultItem(data)
 			items = append(items, item)
-			s.emitResult(ctx, input, item)
+			s.emitResult(ctx, input, r, item)
 		}
 	} else {
 		return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: "no valid input: provide urls or base_urls+wordlist"}, nil
@@ -288,9 +288,9 @@ func (s *SprayArtifact) Close() error {
 	return s.engine.Close()
 }
 
-func (s *SprayArtifact) emitResult(ctx context.Context, input Input, item SprayResultItem) {
+func (s *SprayArtifact) emitResult(ctx context.Context, input Input, sdkResult sdktypes.Result, item SprayResultItem) {
 	if s.resultHandler != nil && item.URL != "" {
-		s.resultHandler(ctx, input.Target, input.CampaignID, item)
+		s.resultHandler(ctx, input.Target, input.CampaignID, sdkResult, item)
 	}
 }
 
