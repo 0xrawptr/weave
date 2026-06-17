@@ -107,6 +107,9 @@ func wireSprayStreaming(runtimeApp *app.App) {
 		return
 	}
 	a.(*artifact.SprayArtifact).SetResultHandler(func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result artifact.SprayResultItem) {
+		if !result.Valid || result.Fuzzy {
+			return
+		}
 		raw, _ := json.Marshal(result)
 		workflowID := ""
 		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {

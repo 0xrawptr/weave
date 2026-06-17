@@ -40,6 +40,7 @@ func (s *SprayExtractor) Extract(ctx context.Context, scanTarget string, rawData
 		BodySimhash   string               `json:"body_simhash,omitempty"`
 		FaviconHash   string               `json:"favicon_hash,omitempty"`
 		Location      string               `json:"location,omitempty"`
+		DedupGroup    string               `json:"dedup_group,omitempty"`
 		Valid         *bool                `json:"valid,omitempty"`
 		Fuzzy         bool                 `json:"fuzzy,omitempty"`
 		Reason        string               `json:"reason,omitempty"`

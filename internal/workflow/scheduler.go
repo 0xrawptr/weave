@@ -179,24 +179,16 @@ type schedulerPhasePlan struct {
 type schedulerCapacityMap map[string]int
 
 func schedulerPhasePlanFor(phase string) schedulerPhasePlan {
-	switch NormalizeCampaignPhase(phase) {
-	case CampaignPhaseBootstrap:
-		return schedulerPhasePlan{Phase: CampaignPhaseBootstrap, ItemTypes: []string{"dns_preflight"}}
-	case CampaignPhaseDiscovery:
-		return schedulerPhasePlan{Phase: CampaignPhaseDiscovery, ItemTypes: []string{"portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard"}}
-	case CampaignPhaseExpansion:
-		return schedulerPhasePlan{Phase: CampaignPhaseExpansion, ItemTypes: []string{"spray_shard", "fingers_action"}}
-	case CampaignPhaseVerification:
-		return schedulerPhasePlan{Phase: CampaignPhaseVerification, ItemTypes: []string{"nuclei_group", "spray_shard"}}
-	case CampaignPhaseSteady:
-		return schedulerPhasePlan{Phase: CampaignPhaseSteady, ItemTypes: []string{"dns_preflight", "portscan_chunk", "planned_dag_followup", "fingers_action", "spray_shard", "nuclei_group"}, NowOnly: true}
-	default:
-		return schedulerPhasePlanFor(CampaignPhaseDiscovery)
+	normalized := NormalizeCampaignPhase(phase)
+	if normalized == CampaignPhaseAuto {
+		normalized = CampaignPhaseDiscovery
 	}
+	itemTypes, nowOnly := data.WorkItemTypesForPhase(normalized)
+	return schedulerPhasePlan{Phase: normalized, ItemTypes: itemTypes, NowOnly: nowOnly}
 }
 
 func scheduledActionItemTypes() []string {
-	return []string{"nuclei_group", "fingers_action", "spray_shard"}
+	return []string{data.WorkItemTypeNucleiGroup, data.WorkItemTypeFingersAction, data.WorkItemTypeSprayShard}
 }
 
 func schedulePipelineWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput) (int, bool, error) {
@@ -278,12 +270,8 @@ func dispatchScheduleStage(ctx, stateCtx workflow.Context, input SchedulerWorkfl
 }
 
 func plannerPhaseItemType(itemType string) bool {
-	switch itemType {
-	case "planned_dag_followup", "fingers_action", "spray_shard", "nuclei_group":
-		return true
-	default:
-		return false
-	}
+	def, ok := data.WorkItemDefinitionForType(itemType)
+	return ok && def.Planner
 }
 
 func dispatchPhaseWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, capacity schedulerCapacityMap, schedule string, remaining int) (int, error) {
@@ -1133,41 +1121,17 @@ func schedulerStartingLeaseSeconds(input SchedulerWorkflowInput) int {
 }
 
 func schedulerQueueForType(itemType string) string {
-	switch itemType {
-	case "dns_preflight":
-		return "dns"
-	case "portscan_chunk":
-		return "portscan"
-	case "planned_dag_followup":
-		return "planner"
-	case "fingers_action":
-		return "http"
-	case "spray_shard":
-		return "spray"
-	case "nuclei_group":
-		return "nuclei"
-	default:
-		return itemType
+	if def, ok := data.WorkItemDefinitionForType(itemType); ok {
+		return def.Queue
 	}
+	return itemType
 }
 
 func schedulerArtifactForType(itemType string) string {
-	switch itemType {
-	case "dns_preflight":
-		return "dns_preflight"
-	case "portscan_chunk":
-		return "gogo"
-	case "planned_dag_followup":
-		return "planned_dag"
-	case "fingers_action":
-		return "fingers"
-	case "spray_shard":
-		return "spray"
-	case "nuclei_group":
-		return "nuclei"
-	default:
-		return itemType
+	if def, ok := data.WorkItemDefinitionForType(itemType); ok {
+		return def.Artifact
 	}
+	return itemType
 }
 
 func recoverStaleScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
@@ -1684,9 +1648,7 @@ func stringFromActionInput(input map[string]interface{}, key string) string {
 }
 
 func normalizeBatchPortScanInput(input BatchPortScanInput) BatchPortScanInput {
-	if input.Ports == "" {
-		input.Ports = "top3"
-	}
+	input.Ports = strings.TrimSpace(input.Ports)
 	if input.ChunkPrefix <= 0 || input.ChunkPrefix > 32 {
 		input.ChunkPrefix = defaultCIDRChunkPrefix
 	}

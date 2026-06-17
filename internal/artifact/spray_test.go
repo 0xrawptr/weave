@@ -35,6 +35,18 @@ func TestSprayResultItemPreservesHTTPMetadata(t *testing.T) {
 	}
 }
 
+func TestSprayResultItemAddsRedirectDedupGroup(t *testing.T) {
+	item := sprayResultItem(&sdktypes.SprayResult{
+		UrlString:   "https://example.com/admin",
+		Status:      302,
+		RedirectURL: "/login/auth",
+		IsValid:     true,
+	})
+	if item.DedupGroup != "redirect:example.com:302:/login/auth" {
+		t.Fatalf("DedupGroup = %q", item.DedupGroup)
+	}
+}
+
 func TestSprayResultItemPreservesFrameworksAndExtracts(t *testing.T) {
 	item := sprayResultItem(&sdktypes.SprayResult{
 		UrlString: "https://example.com/console",

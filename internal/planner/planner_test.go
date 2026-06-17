@@ -9,11 +9,8 @@ import (
 
 func TestPlanFromStateStartsWithGogoWhenNoURLs(t *testing.T) {
 	actions := PlanFromState(State{Target: "example.com"})
-	if len(actions) != 1 {
-		t.Fatalf("expected one action, got %#v", actions)
-	}
-	if actions[0].Artifact != "gogo" {
-		t.Fatalf("expected gogo action, got %#v", actions[0])
+	if len(actions) != 0 {
+		t.Fatalf("expected no implicit gogo action, got %#v", actions)
 	}
 }
 

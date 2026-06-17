@@ -93,7 +93,8 @@ func (s *Server) StartBatch(c *gin.Context) {
 	}
 	ports := strings.TrimSpace(req.Ports)
 	if ports == "" {
-		ports = "top3"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ports are required"})
+		return
 	}
 	campaignID := strings.TrimSpace(req.CampaignID)
 	if campaignID == "" {
@@ -334,7 +335,8 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 	}
 	ports := run.Ports
 	if ports == "" {
-		ports = "top3"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "batch run has no ports; cannot resume scheduler"})
+		return
 	}
 	workflowID := fmt.Sprintf("batch_scheduler_resume-%s-%d", batchID, time.Now().UnixNano())
 	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{

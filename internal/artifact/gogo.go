@@ -102,7 +102,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 	if err := json.Unmarshal(input.Data, &gogoIn); err != nil {
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
-	gogoIn.Ports = normalizeGogoPorts(gogoIn.Ports)
+	gogoIn.Ports = strings.TrimSpace(gogoIn.Ports)
 	if err := validateGogoPorts(gogoIn.Ports); err != nil {
 		return Output{Artifact: g.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 	}
@@ -184,16 +184,6 @@ func gogoThreads() int {
 		n = fdlimit - 100
 	}
 	return n
-}
-
-func normalizeGogoPorts(ports string) string {
-	ports = strings.TrimSpace(ports)
-	switch strings.ToLower(ports) {
-	case "", "default", "top100", "top1000":
-		return "top3"
-	default:
-		return ports
-	}
 }
 
 func validateGogoPorts(ports string) error {

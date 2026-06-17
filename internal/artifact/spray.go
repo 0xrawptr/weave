@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -77,6 +78,7 @@ type SprayResultItem struct {
 	BodySimhash   string               `json:"body_simhash,omitempty"`
 	FaviconHash   string               `json:"favicon_hash,omitempty"`
 	RedirectURL   string               `json:"location,omitempty"`
+	DedupGroup    string               `json:"dedup_group,omitempty"`
 	Source        string               `json:"source,omitempty"`
 	Valid         bool                 `json:"valid"`
 	Fuzzy         bool                 `json:"fuzzy,omitempty"`
@@ -427,6 +429,7 @@ func sprayResultItem(r *sdktypes.SprayResult) SprayResultItem {
 		ContentType:   r.ContentType,
 		ContentLength: int64(r.BodyLength),
 		RedirectURL:   r.RedirectURL,
+		DedupGroup:    sprayDedupGroup(r.UrlString, r.Status, r.RedirectURL),
 		Valid:         r.IsValid,
 		Fuzzy:         r.IsFuzzy,
 		Reason:        r.Reason,
@@ -442,6 +445,17 @@ func sprayResultItem(r *sdktypes.SprayResult) SprayResultItem {
 	item.Frameworks = sprayFrameworkItems(r)
 	item.Extracts = sprayExtractItems(r)
 	return item
+}
+
+func sprayDedupGroup(rawURL string, status int, redirectURL string) string {
+	if status < 300 || status > 399 || strings.TrimSpace(redirectURL) == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return fmt.Sprintf("redirect:%s:%d:%s", strings.ToLower(parsed.Host), status, strings.TrimSpace(redirectURL))
 }
 
 func sprayFrameworkItems(r *sdktypes.SprayResult) []SprayFrameworkItem {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
 
 	"github.com/0xrawptr/weave/internal/app"
@@ -255,13 +256,15 @@ func resumeRecoveredScheduler(ctx context.Context, runtimeApp *app.App, temporal
 	}
 	ports := run.Ports
 	if strings.TrimSpace(ports) == "" {
-		ports = "top3"
+		return fmt.Errorf("batch run has no ports")
 	}
-	workflowID := fmt.Sprintf("%s-recovery-scheduler-%d", batchID, time.Now().UnixNano())
+	workflowID := fmt.Sprintf("%s-recovery-scheduler", batchID)
 	wfRun, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                  workflowID,
-		TaskQueue:           cfg.Temporal.TaskQueue,
-		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
+		ID:                       workflowID,
+		TaskQueue:                cfg.Temporal.TaskQueue,
+		WorkflowTaskTimeout:      workflow.ControlWorkflowTaskTimeout,
+		WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
+		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
 	}, workflow.SchedulerWorkflow, workflow.SchedulerWorkflowInput{
 		BatchID: batchID,
 		BatchInput: workflow.BatchPortScanInput{

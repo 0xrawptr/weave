@@ -124,14 +124,21 @@ type runtimePlanDefinition struct {
 }
 
 func runtimePlanDefinitions() []runtimePlanDefinition {
-	return []runtimePlanDefinition{
-		{Type: "dns_preflight", Queue: "dns", Artifact: "dnsx", Phase: CampaignPhaseBootstrap},
-		{Type: "portscan_chunk", Queue: "portscan", Artifact: "gogo", Phase: CampaignPhaseDiscovery},
-		{Type: "planned_dag_followup", Queue: "planner", Artifact: "planned_dag", Phase: CampaignPhaseDiscovery},
-		{Type: "fingers_action", Queue: "http", Artifact: "fingers", Phase: CampaignPhaseDiscovery},
-		{Type: "spray_shard", Queue: "spray", Artifact: "spray", Phase: CampaignPhaseExpansion},
-		{Type: "nuclei_group", Queue: "nuclei", Artifact: "nuclei", Phase: CampaignPhaseVerification},
+	defs := WorkItemDefinitions()
+	out := make([]runtimePlanDefinition, 0, len(defs))
+	for _, def := range defs {
+		artifact := def.RuntimeArtifact
+		if artifact == "" {
+			artifact = def.Artifact
+		}
+		out = append(out, runtimePlanDefinition{
+			Type:     def.Type,
+			Queue:    def.Queue,
+			Artifact: artifact,
+			Phase:    def.PrimaryPhase,
+		})
 	}
+	return out
 }
 
 func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []RuntimePlanItem {
@@ -175,25 +182,7 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 }
 
 func runtimeTypeAllowedInPhase(phase, itemType string) bool {
-	switch NormalizeCampaignPhase(phase) {
-	case CampaignPhaseBootstrap:
-		return itemType == "dns_preflight"
-	case CampaignPhaseDiscovery:
-		switch itemType {
-		case "portscan_chunk", "planned_dag_followup", "fingers_action":
-			return true
-		}
-	case CampaignPhaseExpansion:
-		switch itemType {
-		case "spray_shard", "fingers_action":
-			return true
-		}
-	case CampaignPhaseVerification:
-		return itemType == "nuclei_group" || itemType == "spray_shard"
-	case CampaignPhaseSteady:
-		return true
-	}
-	return false
+	return WorkItemTypeAllowedInPhase(phase, itemType)
 }
 
 func runtimePlanState(item RuntimePlanItem, group WorkItemGroupSummary, phase string) (string, string) {

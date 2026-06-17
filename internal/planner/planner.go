@@ -198,19 +198,6 @@ func PlanFromState(state State) []Action {
 
 	var actions []Action
 	if len(targets) == 0 {
-		actions = append(actions, Action{
-			ID:         data.GenerateID("action", state.Target, "gogo"),
-			CampaignID: state.CampaignID,
-			Target:     state.Target,
-			Artifact:   "gogo",
-			Input:      map[string]interface{}{"ip": state.Target, "ports": "top3"},
-			Reason:     "no web service URLs are available yet",
-			Status:     "candidate",
-			Evidence:   []Evidence{{Type: "target", Value: state.Target}},
-			Risk:       "low",
-			Cost:       40,
-			DedupKey:   actionDedupKey(state.Target, "gogo", "top3"),
-		})
 		return finalizeActions(actions, state.Actions)
 	}
 

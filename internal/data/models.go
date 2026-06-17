@@ -200,7 +200,7 @@ type WorkItem struct {
 	CampaignID     string    `json:"campaign_id,omitempty"`
 	BatchID        string    `json:"batch_id,omitempty"`
 	ParentID       string    `json:"parent_id,omitempty"`
-	Type           string    `json:"type"` // portscan_chunk, planned_dag_followup, spray_shard, nuclei_group
+	Type           string    `json:"type"`
 	Target         string    `json:"target"`
 	Artifact       string    `json:"artifact"`
 	Queue          string    `json:"queue,omitempty"`
