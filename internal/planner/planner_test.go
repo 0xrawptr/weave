@@ -140,6 +140,43 @@ func TestPlanFromStateDoesNotSprayDiscoveredURLs(t *testing.T) {
 	}
 }
 
+func TestApplyDecisionSuppressesInvalidArtifactInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		action Action
+		reason string
+	}{
+		{
+			name:   "spray without targets",
+			action: Action{Artifact: "spray", Input: map[string]interface{}{}},
+			reason: "spray requires base_urls or urls",
+		},
+		{
+			name:   "fingers without urls",
+			action: Action{Artifact: "fingers", Input: map[string]interface{}{}},
+			reason: "fingers requires urls",
+		},
+		{
+			name: "nuclei without ids or tags",
+			action: Action{
+				Artifact: "nuclei",
+				Input:    map[string]interface{}{"targets": []string{"https://example.com"}},
+			},
+			reason: "nuclei requires ids or tags",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action := tt.action
+			applyDecision(&action)
+			if !action.Decision.Suppressed || action.Decision.Reason != tt.reason {
+				t.Fatalf("decision = %#v, want suppressed reason %q", action.Decision, tt.reason)
+			}
+		})
+	}
+}
+
 func TestPlanFromStateKeepsNonHTTPServicesForNucleiOnly(t *testing.T) {
 	actions := PlanFromState(State{
 		Target:       "127.0.0.1",
@@ -499,6 +536,31 @@ func TestPlanDAGFromActionsOrdersAndLinksStages(t *testing.T) {
 	}
 	if plan.Nodes[2].RunIf == nil || plan.Nodes[2].RunIf.CampaignID != "camp-1" {
 		t.Fatalf("expected nuclei run_if with campaign, got %#v", plan.Nodes[2].RunIf)
+	}
+}
+
+func TestPlanDAGFromActionsSkipsSuppressedActions(t *testing.T) {
+	actions := []Action{
+		{
+			ID:       "spray-empty",
+			Target:   "example.com",
+			Artifact: "spray",
+			Input:    map[string]interface{}{},
+		},
+		{
+			ID:       "fingers-1",
+			Target:   "example.com",
+			Artifact: "fingers",
+			Input:    map[string]interface{}{"urls": []string{"https://example.com"}},
+		},
+	}
+
+	plan := PlanDAGFromActions("example.com", "camp-1", actions)
+	if len(plan.Nodes) != 1 || plan.Nodes[0].Artifact != "fingers" {
+		t.Fatalf("nodes = %#v, want only fingers", plan.Nodes)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Artifact != "fingers" {
+		t.Fatalf("actions = %#v, want only fingers", plan.Actions)
 	}
 }
 

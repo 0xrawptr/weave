@@ -189,10 +189,15 @@ func recoverExpiredRunningItemsOnce(ctx context.Context, runtimeApp *app.App, te
 	if runtimeApp == nil || runtimeApp.Repo == nil {
 		return data.WorkItemBulkResult{}, nil
 	}
-	result, _, err := recovery.RecoverStaleAndExpiredRunning(ctx, runtimeApp.Repo, temporalClient, data.WorkItemFilter{}, 10000, func(workflowID, workItemID string, err error) {
-		log.Printf("WARNING: temporal orphan check failed: workflow=%s work_item=%s err=%v", workflowID, workItemID, err)
+	recoveryResult, err := recovery.RecoverWorkItems(ctx, runtimeApp.Repo, temporalClient, recovery.RecoveryPolicy{
+		Limit:                 10000,
+		RecoverFailures:       true,
+		RecoverExpiredRunning: true,
+		OnCheckError: func(workflowID, workItemID string, err error) {
+			log.Printf("WARNING: temporal orphan check failed: workflow=%s work_item=%s err=%v", workflowID, workItemID, err)
+		},
 	})
-	return result, err
+	return recoveryResult.BulkResult(), err
 }
 
 func resumeRecoveredSchedulers(ctx context.Context, runtimeApp *app.App, temporalClient client.Client, cfg *config.Config, batches []data.WorkItemBulkBatch, reason string, last map[string]time.Time) {
@@ -238,7 +243,7 @@ func reconcileOpenBatchSchedulers(ctx context.Context, runtimeApp *app.App, temp
 			continue
 		}
 		pending := summary.ByStatus[data.WorkItemStatusPending] + summary.ByStatus[data.WorkItemStatusRetryWaiting]
-		running := summary.ByStatus[data.WorkItemStatusStarting] + summary.ByStatus[data.WorkItemStatusRunning]
+		running := summary.ByStatus[data.WorkItemStatusRunning]
 		if pending == 0 || running > 0 {
 			continue
 		}

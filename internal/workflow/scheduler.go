@@ -10,6 +10,7 @@ import (
 	"github.com/0xrawptr/weave/internal/artifact"
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/planner"
+	"github.com/0xrawptr/weave/internal/recovery"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -104,16 +105,7 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
 	result := &SchedulerWorkflowResult{BatchID: input.BatchID, ContinuedRuns: input.ContinuedRuns}
-	if err := recoverStaleScheduledWorkItems(stateCtx, input); err != nil {
-		return result, err
-	}
-	if err := recoverExpiredRunningScheduledWorkItems(stateCtx, input); err != nil {
-		return result, err
-	}
-	if err := requeueRetryWaitingScheduledWorkItems(stateCtx, input); err != nil {
-		return result, err
-	}
-	if err := markTailScheduledWorkItems(stateCtx, input); err != nil {
+	if err := recoverScheduledWorkItems(stateCtx, input); err != nil {
 		return result, err
 	}
 
@@ -374,18 +366,9 @@ func updateCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput, pha
 
 func openWorkItems(summary schedulerWorkItemSummary) int {
 	return summary.ByStatus["pending"] +
-		summary.ByStatus["starting"] +
-		nonTailRunning(summary.ByStatus) +
+		summary.ByStatus["running"] +
 		summary.ByStatus["retry_waiting"] +
 		summary.ByStatus["paused"]
-}
-
-func nonTailRunning(status map[string]int) int {
-	running := status["running"] - status["tail_running"]
-	if running < 0 {
-		return 0
-	}
-	return running
 }
 
 func NormalizeCampaignPhase(phase string) string {
@@ -992,7 +975,7 @@ func claimScheduledWorkItem(ctx workflow.Context, input SchedulerWorkflowInput, 
 		Artifact:     artifactName,
 		Queue:        queue,
 		WorkflowID:   workflow.GetInfo(ctx).WorkflowExecution.ID,
-		LeaseSeconds: schedulerStartingLeaseSeconds(input),
+		LeaseSeconds: schedulerLeaseSeconds(input),
 		Schedule:     data.NormalizeSchedule(schedule),
 		MaxRunning:   maxRunning,
 	}).Get(ctx, &item)
@@ -1063,9 +1046,7 @@ func workItemSummaryFromGroup(group data.WorkItemGroupSummary) schedulerWorkItem
 		Total: group.Total,
 		ByStatus: map[string]int{
 			data.WorkItemStatusPending:      group.Pending,
-			data.WorkItemStatusStarting:     group.Starting,
 			data.WorkItemStatusRunning:      group.Running,
-			"tail_running":                  group.TailRunning,
 			data.WorkItemStatusCompleted:    group.Completed,
 			data.WorkItemStatusFailed:       group.Failed,
 			data.WorkItemStatusRetryWaiting: group.RetryWaiting,
@@ -1083,44 +1064,33 @@ func loadSchedulerSummaryFromSnapshot(snapshot data.WorkItemProgressSummary, inp
 	result.PreflightDone = preflight.ByStatus["completed"]
 	result.PreflightFailed = preflight.ByStatus["failed"] + preflight.ByStatus["dead"]
 	result.PreflightPending = preflight.ByStatus["pending"] + preflight.ByStatus["retry_waiting"] + preflight.ByStatus["paused"]
-	result.PreflightRunning = preflight.ByStatus["starting"] + nonTailRunning(preflight.ByStatus)
+	result.PreflightRunning = preflight.ByStatus["running"]
 	portscan := schedulerSummaryForType(snapshot, "portscan_chunk")
 	result.PortScanTotal = portscan.Total
 	result.PortScanDone = portscan.ByStatus["completed"]
 	result.PortScanFailed = portscan.ByStatus["failed"] + portscan.ByStatus["dead"]
 	result.PortScanPending = portscan.ByStatus["pending"] + portscan.ByStatus["retry_waiting"] + portscan.ByStatus["paused"]
-	result.PortScanRunning = portscan.ByStatus["starting"] + nonTailRunning(portscan.ByStatus)
+	result.PortScanRunning = portscan.ByStatus["running"]
 	if input.BatchInput.RunPlannedDAG {
 		followUp := schedulerSummaryForType(snapshot, "planned_dag_followup")
 		result.FollowUpTotal = followUp.Total
 		result.FollowUpDone = followUp.ByStatus["completed"]
 		result.FollowUpFailed = followUp.ByStatus["failed"] + followUp.ByStatus["dead"]
 		result.FollowUpPending = followUp.ByStatus["pending"] + followUp.ByStatus["retry_waiting"] + followUp.ByStatus["paused"]
-		result.FollowUpRunning = followUp.ByStatus["starting"] + nonTailRunning(followUp.ByStatus)
+		result.FollowUpRunning = followUp.ByStatus["running"]
 		for _, itemType := range scheduledActionItemTypes() {
 			phaseSummary := schedulerSummaryForType(snapshot, itemType)
 			result.ActionTotal += phaseSummary.Total
 			result.ActionDone += phaseSummary.ByStatus["completed"] + phaseSummary.ByStatus["skipped"]
 			result.ActionFailed += phaseSummary.ByStatus["failed"] + phaseSummary.ByStatus["dead"]
 			result.ActionPending += phaseSummary.ByStatus["pending"] + phaseSummary.ByStatus["retry_waiting"] + phaseSummary.ByStatus["paused"]
-			result.ActionRunning += phaseSummary.ByStatus["starting"] + nonTailRunning(phaseSummary.ByStatus)
+			result.ActionRunning += phaseSummary.ByStatus["running"]
 		}
 	}
 }
 
 func schedulerLeaseSeconds(input SchedulerWorkflowInput) int {
 	return schedulerRunningLeaseSeconds
-}
-
-func schedulerStartingLeaseSeconds(input SchedulerWorkflowInput) int {
-	lease := schedulerLeaseSeconds(input)
-	if lease <= 0 || lease > 120 {
-		return 120
-	}
-	if lease < 30 {
-		return 30
-	}
-	return lease
 }
 
 func schedulerQueueForType(itemType string) string {
@@ -1137,51 +1107,18 @@ func schedulerArtifactForType(itemType string) string {
 	return itemType
 }
 
-func recoverStaleScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
-	var result data.WorkItemBulkResult
-	return workflow.ExecuteActivity(ctx, planner.RecoverStaleWorkItemsActivityName, planner.RecoverStaleWorkItemsRequest{
+func recoverScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
+	var result recovery.RecoveryResult
+	return workflow.ExecuteActivity(ctx, planner.RecoverWorkItemsActivityName, recovery.RecoveryPolicy{
 		Filter: data.WorkItemFilter{
 			CampaignID: input.BatchInput.CampaignID,
 			BatchID:    input.BatchID,
 		},
-		Limit: 1000,
-	}).Get(ctx, &result)
-}
-
-func recoverExpiredRunningScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
-	var result data.WorkItemBulkResult
-	return workflow.ExecuteActivity(ctx, planner.RecoverExpiredRunningWorkItemsActivityName, planner.RecoverStaleWorkItemsRequest{
-		Filter: data.WorkItemFilter{
-			CampaignID: input.BatchInput.CampaignID,
-			BatchID:    input.BatchID,
-		},
-		Limit: 1000,
-	}).Get(ctx, &result)
-}
-
-func requeueRetryWaitingScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
-	var result data.WorkItemBulkResult
-	return workflow.ExecuteActivity(ctx, planner.RequeueRetryWaitingWorkItemsActivityName, planner.RequeueRetryWaitingWorkItemsRequest{
-		Filter: data.WorkItemFilter{
-			CampaignID: input.BatchInput.CampaignID,
-			BatchID:    input.BatchID,
-		},
-		MinAgeSeconds: input.BatchInput.RetryDelaySeconds,
-		Limit:         1000,
-	}).Get(ctx, &result)
-}
-
-func markTailScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
-	var result data.WorkItemBulkResult
-	return workflow.ExecuteActivity(ctx, planner.MarkTailWorkItemsActivityName, data.WorkItemTailPolicyRequest{
-		Filter: data.WorkItemFilter{
-			CampaignID: input.BatchInput.CampaignID,
-			BatchID:    input.BatchID,
-		},
-		Limit:                  1000,
-		SprayAfterSeconds:      10 * 60,
-		PortscanAfterSeconds:   20 * 60,
-		PortscanMinDonePercent: 90,
+		Limit:                 1000,
+		RecoverFailures:       true,
+		RecoverExpiredRunning: true,
+		RequeueRetryWaiting:   true,
+		RetryDelaySeconds:     input.BatchInput.RetryDelaySeconds,
 	}).Get(ctx, &result)
 }
 
@@ -1257,19 +1194,62 @@ func plannedDAGFollowUpWorkItemFromScheduler(input SchedulerWorkflowInput, paren
 	return plannedDAGFollowUpWorkItem(input, parent.Target, parent.ID, 1, input.BatchInput.PlannedDAGMaxIterations, schedule)
 }
 
-func actionWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
-	switch node.Artifact {
-	case "spray":
-		return sprayShardWorkItemsFromDAGNode(input, parent, node, iteration, maxIterations)
-	case "nuclei":
-		return nucleiGroupWorkItemsFromDAGNode(input, parent, node, iteration, maxIterations)
-	default:
-		item := actionWorkItemFromDAGNode(input, parent, node, iteration, maxIterations)
-		if item.ID == "" {
-			return nil
-		}
-		return []data.WorkItem{item}
+type actionMaterializer interface {
+	ValidateShardableInput(planner.DAGPlanNode) bool
+	MaterializeWorkItems(SchedulerWorkflowInput, data.WorkItem, planner.DAGPlanNode, int, int) []data.WorkItem
+}
+
+type actionMaterializerFunc struct {
+	validate    func(planner.DAGPlanNode) bool
+	materialize func(SchedulerWorkflowInput, data.WorkItem, planner.DAGPlanNode, int, int) []data.WorkItem
+}
+
+func (m actionMaterializerFunc) ValidateShardableInput(node planner.DAGPlanNode) bool {
+	if m.validate == nil {
+		return true
 	}
+	return m.validate(node)
+}
+
+func (m actionMaterializerFunc) MaterializeWorkItems(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
+	if !m.ValidateShardableInput(node) {
+		return nil
+	}
+	return m.materialize(input, parent, node, iteration, maxIterations)
+}
+
+var actionMaterializers = map[string]actionMaterializer{
+	"spray": actionMaterializerFunc{
+		validate: func(node planner.DAGPlanNode) bool {
+			baseInput := mapAnyToInterface(node.Input)
+			return len(stringSliceFromActionInput(baseInput, "base_urls")) > 0 || len(stringSliceFromActionInput(baseInput, "urls")) > 0
+		},
+		materialize: sprayShardWorkItemsFromDAGNode,
+	},
+	"nuclei": actionMaterializerFunc{
+		validate: func(node planner.DAGPlanNode) bool {
+			baseInput := mapAnyToInterface(node.Input)
+			return len(stringSliceFromActionInput(baseInput, "targets")) > 0 &&
+				(len(stringSliceFromActionInput(baseInput, "ids")) > 0 || len(stringSliceFromActionInput(baseInput, "tags")) > 0)
+		},
+		materialize: nucleiGroupWorkItemsFromDAGNode,
+	},
+}
+
+func actionWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
+	materializer := actionMaterializers[node.Artifact]
+	if materializer == nil {
+		materializer = actionMaterializerFunc{materialize: singleActionWorkItemFromDAGNode}
+	}
+	return materializer.MaterializeWorkItems(input, parent, node, iteration, maxIterations)
+}
+
+func singleActionWorkItemFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
+	item := actionWorkItemFromDAGNode(input, parent, node, iteration, maxIterations)
+	if item.ID == "" {
+		return nil
+	}
+	return []data.WorkItem{item}
 }
 
 func actionWorkItemFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) data.WorkItem {

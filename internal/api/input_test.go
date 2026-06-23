@@ -32,13 +32,12 @@ func TestCleanStringSlice(t *testing.T) {
 	}
 }
 
-func TestStatusFromWorkItemCountsIgnoresTailRunning(t *testing.T) {
+func TestStatusFromWorkItemCountsTreatsRunningAsActive(t *testing.T) {
 	counts := map[string]int{
 		data.WorkItemStatusCompleted: 9,
 		data.WorkItemStatusRunning:   1,
-		"tail_running":               1,
 	}
-	if got := statusFromWorkItemCounts(10, counts); got != "completed" {
-		t.Fatalf("status = %q, want completed", got)
+	if got := statusFromWorkItemCounts(10, counts); got != "running" {
+		t.Fatalf("status = %q, want running", got)
 	}
 }

@@ -42,6 +42,52 @@ type Planner struct {
 	repo *data.Repository
 }
 
+type ActionSpec struct {
+	Artifact      string
+	Stage         int
+	DefaultReason string
+	DefaultNow    func(Action) (string, bool)
+	ValidateInput func(Action) string
+}
+
+var actionSpecs = map[string]ActionSpec{
+	"gogo": {
+		Artifact:      "gogo",
+		Stage:         10,
+		DefaultReason: "surface discovery",
+	},
+	"fingers": {
+		Artifact:      "fingers",
+		Stage:         20,
+		DefaultReason: "fingerprint enrichment",
+		ValidateInput: requireActionInput("urls", "fingers requires urls"),
+	},
+	"spray": {
+		Artifact:      "spray",
+		Stage:         30,
+		DefaultReason: "surface discovery",
+		ValidateInput: func(action Action) string {
+			if len(actionInputStrings(action.Input, "base_urls")) == 0 && len(actionInputStrings(action.Input, "urls")) == 0 {
+				return "spray requires base_urls or urls"
+			}
+			return ""
+		},
+	},
+	"nuclei": {
+		Artifact:      "nuclei",
+		Stage:         40,
+		DefaultReason: "verification can run in batch",
+		DefaultNow:    vulnerabilityEvidenceSchedule,
+		ValidateInput: validateNucleiActionInput,
+	},
+	"neutron": {
+		Artifact:      "neutron",
+		Stage:         40,
+		DefaultReason: "verification can run in batch",
+		DefaultNow:    vulnerabilityEvidenceSchedule,
+	},
+}
+
 type State struct {
 	Target        string
 	CampaignID    string
@@ -327,7 +373,11 @@ func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
 
 	byArtifact := make(map[string][]string)
 	nodes := make([]DAGPlanNode, 0, len(actions))
+	planActions := make([]Action, 0, len(actions))
 	for _, action := range actions {
+		if action.Decision.Suppressed {
+			continue
+		}
 		if action.CampaignID == "" {
 			action.CampaignID = campaignID
 		}
@@ -348,29 +398,22 @@ func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
 			Decision:   action.Decision,
 		}
 		nodes = append(nodes, node)
+		planActions = append(planActions, action)
 		byArtifact[action.Artifact] = append(byArtifact[action.Artifact], nodeID)
 	}
 	return DAGPlan{
 		Target:     target,
 		CampaignID: campaignID,
 		Nodes:      nodes,
-		Actions:    actions,
+		Actions:    planActions,
 	}
 }
 
 func dagStage(artifact string) int {
-	switch artifact {
-	case "gogo":
-		return 10
-	case "fingers":
-		return 20
-	case "spray":
-		return 30
-	case "nuclei", "neutron":
-		return 40
-	default:
-		return 50
+	if spec, ok := actionSpecs[artifact]; ok && spec.Stage > 0 {
+		return spec.Stage
 	}
+	return 50
 }
 
 func actionNodeID(action Action) string {
@@ -457,30 +500,95 @@ func applyDecision(action *Action) {
 	if action == nil {
 		return
 	}
+	if reason := invalidActionReason(*action); reason != "" {
+		action.Decision = Decision{Suppressed: true, Reason: reason}
+		return
+	}
 	if action.Decision.Schedule == "" && !action.Decision.Suppressed {
 		action.Decision = decisionForAction(*action)
 	}
+}
+
+func invalidActionReason(action Action) string {
+	if action.Artifact == "" {
+		return "missing artifact"
+	}
+	spec, ok := actionSpecs[action.Artifact]
+	if !ok || spec.ValidateInput == nil {
+		return ""
+	}
+	return spec.ValidateInput(action)
 }
 
 func decisionForAction(action Action) Decision {
 	if action.Artifact == "" {
 		return Decision{Suppressed: true, Reason: "missing artifact"}
 	}
-	switch action.Artifact {
-	case "nuclei", "neutron":
-		if hasPreciseEvidence(action.Evidence) {
-			return Decision{Schedule: ScheduleNow, Reason: "precise vulnerability evidence"}
+	if spec, ok := actionSpecs[action.Artifact]; ok {
+		if spec.DefaultNow != nil {
+			if reason, ok := spec.DefaultNow(action); ok {
+				return Decision{Schedule: ScheduleNow, Reason: reason}
+			}
 		}
-		if hasHighSeverityEvidence(action.Evidence) {
-			return Decision{Schedule: ScheduleNow, Reason: "high severity evidence"}
+		if spec.DefaultReason != "" {
+			return Decision{Schedule: ScheduleBatch, Reason: spec.DefaultReason}
 		}
-		return Decision{Schedule: ScheduleBatch, Reason: "verification can run in batch"}
-	case "fingers":
-		return Decision{Schedule: ScheduleBatch, Reason: "fingerprint enrichment"}
-	case "gogo", "spray":
-		return Decision{Schedule: ScheduleBatch, Reason: "surface discovery"}
+	}
+	return Decision{Schedule: ScheduleBatch, Reason: "default batch schedule"}
+}
+
+func requireActionInput(field, reason string) func(Action) string {
+	return func(action Action) string {
+		if len(actionInputStrings(action.Input, field)) == 0 {
+			return reason
+		}
+		return ""
+	}
+}
+
+func validateNucleiActionInput(action Action) string {
+	if len(actionInputStrings(action.Input, "targets")) == 0 {
+		return "nuclei requires targets"
+	}
+	if len(actionInputStrings(action.Input, "ids")) == 0 && len(actionInputStrings(action.Input, "tags")) == 0 {
+		return "nuclei requires ids or tags"
+	}
+	return ""
+}
+
+func vulnerabilityEvidenceSchedule(action Action) (string, bool) {
+	if hasPreciseEvidence(action.Evidence) {
+		return "precise vulnerability evidence", true
+	}
+	if hasHighSeverityEvidence(action.Evidence) {
+		return "high severity evidence", true
+	}
+	return "", false
+}
+
+func actionInputStrings(input map[string]interface{}, field string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	switch values := input[field].(type) {
+	case []string:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				out = append(out, value)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
 	default:
-		return Decision{Schedule: ScheduleBatch, Reason: "default batch schedule"}
+		return nil
 	}
 }
 
@@ -631,7 +739,7 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 
 func blocksActionStatus(status string) bool {
 	switch status {
-	case data.WorkItemStatusPending, data.WorkItemStatusStarting, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused, data.WorkItemStatusSkipped:
+	case data.WorkItemStatusPending, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused, data.WorkItemStatusSkipped:
 		return true
 	default:
 		return false

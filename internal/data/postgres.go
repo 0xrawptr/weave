@@ -259,10 +259,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		heartbeat_at TIMESTAMPTZ,
 		lease_expires_at TIMESTAMPTZ,
 		started_at TIMESTAMPTZ,
-		completed_at TIMESTAMPTZ,
-		tail BOOLEAN NOT NULL DEFAULT FALSE,
-		tail_at TIMESTAMPTZ,
-		tail_reason TEXT NOT NULL DEFAULT ''
+		completed_at TIMESTAMPTZ
 	);
 
 	CREATE TABLE IF NOT EXISTS scheduler_capacity (
@@ -315,9 +312,9 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE work_items DROP COLUMN IF EXISTS priority;
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
-	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS tail BOOLEAN NOT NULL DEFAULT FALSE;
-	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS tail_at TIMESTAMPTZ;
-	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS tail_reason TEXT NOT NULL DEFAULT '';
+	ALTER TABLE work_items DROP COLUMN IF EXISTS tail;
+	ALTER TABLE work_items DROP COLUMN IF EXISTS tail_at;
+	ALTER TABLE work_items DROP COLUMN IF EXISTS tail_reason;
 	ALTER TABLE asset_campaigns ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
 	ALTER TABLE scheduler_capacity ALTER COLUMN error_rate_percent TYPE DOUBLE PRECISION USING error_rate_percent::DOUBLE PRECISION;
 	DROP INDEX IF EXISTS idx_assets_priority;
@@ -1266,11 +1263,11 @@ func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) er
 					ELSE 'batch'
 				END,
 			status = CASE
-				WHEN work_items.status IN ('starting', 'running', 'completed', 'skipped', 'cancelled', 'dead') AND EXCLUDED.status = 'pending' THEN work_items.status
+				WHEN work_items.status IN ('running', 'completed', 'skipped', 'cancelled', 'dead') AND EXCLUDED.status = 'pending' THEN work_items.status
 				ELSE EXCLUDED.status
 			END,
 			attempts = CASE
-				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('starting', 'running', 'completed', 'skipped', 'cancelled', 'dead') THEN EXCLUDED.attempts
+				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('running', 'completed', 'skipped', 'cancelled', 'dead') THEN EXCLUDED.attempts
 				WHEN EXCLUDED.attempts > work_items.attempts THEN EXCLUDED.attempts
 				ELSE work_items.attempts
 			END,
@@ -1335,7 +1332,7 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		argIdx++
 	}
 	if request.MaxRunning > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status IN ('starting', 'running') AND r.queue = wi.queue) < $%d", argIdx)
+		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.queue = wi.queue) < $%d", argIdx)
 		args = append(args, request.MaxRunning)
 		argIdx++
 	}
@@ -1344,24 +1341,23 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		LIMIT 1
 	)
 	UPDATE work_items SET
-		status = 'starting',
+		status = 'running',
 		attempts = attempts + 1,
 		workflow_id = $%d,
 		error = '',
 		heartbeat_at = NOW(),
 		lease_expires_at = NOW() + ($%d * INTERVAL '1 second'),
-		started_at = NULL,
+		started_at = NOW(),
 		updated_at = NOW()
 	FROM candidate
 	WHERE work_items.id = candidate.id
 		RETURNING work_items.id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
-		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz),
-		tail, COALESCE(tail_at, '0001-01-01'::timestamptz), tail_reason`, argIdx, argIdx+1)
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)`, argIdx, argIdx+1)
 	args = append(args, request.WorkflowID, request.LeaseSeconds)
 
 	var item WorkItem
-	err := p.pool.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt, &item.Tail, &item.TailAt, &item.TailReason)
+	err := p.pool.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -1418,20 +1414,17 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 			error = $4,
 			attempts = GREATEST(attempts + CASE WHEN $5 THEN 1 ELSE 0 END - CASE WHEN $8 THEN 1 ELSE 0 END, 0),
 			started_at = CASE WHEN $2 = 'running' THEN NOW() ELSE started_at END,
-			heartbeat_at = CASE WHEN $2 IN ('starting', 'running') THEN NOW() ELSE heartbeat_at END,
+			heartbeat_at = CASE WHEN $2 = 'running' THEN NOW() ELSE heartbeat_at END,
 			lease_expires_at = CASE
 				WHEN $2 IN ('completed', 'failed', 'retry_waiting', 'paused', 'cancelled', 'skipped', 'dead') THEN NULL
-				WHEN $2 IN ('starting', 'running') AND $6 > 0 THEN NOW() + ($6 * INTERVAL '1 second')
+				WHEN $2 = 'running' AND $6 > 0 THEN NOW() + ($6 * INTERVAL '1 second')
 				ELSE lease_expires_at
 			END,
 			completed_at = CASE WHEN $2 IN ('completed', 'cancelled', 'skipped', 'dead') THEN NOW() ELSE completed_at END,
-			tail = CASE WHEN $2 IN ('pending', 'starting', 'running') THEN tail ELSE false END,
-			tail_at = CASE WHEN $2 IN ('pending', 'starting', 'running') THEN tail_at ELSE NULL END,
-			tail_reason = CASE WHEN $2 IN ('pending', 'starting', 'running') THEN tail_reason ELSE '' END,
 			updated_at = NOW()
 		 WHERE id = $1
 		   AND status = $7
-		   AND ($3 = '' OR workflow_id = $3 OR (status = 'starting' AND $2 = 'running'))`,
+		   AND ($3 = '' OR workflow_id = $3)`,
 		id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds, current, recoverableExecutionFailure)
 	if err != nil {
 		return err
@@ -1443,7 +1436,7 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 }
 
 func canTransferWorkItemLease(from, to string) bool {
-	return from == WorkItemStatusStarting && to == WorkItemStatusRunning
+	return false
 }
 
 func recoverableWorkItemExecutionError(message string) bool {
@@ -1467,7 +1460,7 @@ func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemH
 		heartbeat_at = NOW(),
 		lease_expires_at = NOW() + ($2 * INTERVAL '1 second'),
 		updated_at = NOW()
-		WHERE id = $1 AND status IN ('starting', 'running')`
+		WHERE id = $1 AND status = 'running'`
 	args := []interface{}{request.ID, request.LeaseSeconds}
 	if request.WorkflowID != "" {
 		query += ` AND workflow_id = $3`
@@ -1480,8 +1473,7 @@ func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemH
 func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID, status, itemType, artifactName, target string, limit, offset int) ([]WorkItem, error) {
 	query := `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
-		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz),
-		tail, COALESCE(tail_at, '0001-01-01'::timestamptz), tail_reason
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 		FROM work_items WHERE 1=1`
 	args := []interface{}{}
 	argIdx := 1
@@ -1527,7 +1519,7 @@ func (p *PostgresStore) QueryWorkItems(ctx context.Context, campaignID, batchID,
 	var items []WorkItem
 	for rows.Next() {
 		var item WorkItem
-		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt, &item.Tail, &item.TailAt, &item.TailReason); err != nil {
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -1542,8 +1534,7 @@ func (p *PostgresStore) GetWorkItemByWorkflowID(ctx context.Context, workflowID 
 	var item WorkItem
 	err := p.pool.QueryRow(ctx, `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
-		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz),
-		tail, COALESCE(tail_at, '0001-01-01'::timestamptz), tail_reason
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 		FROM work_items WHERE workflow_id = $1 ORDER BY updated_at DESC LIMIT 1`, workflowID).Scan(
 		&item.ID,
 		&item.CampaignID,
@@ -1566,9 +1557,6 @@ func (p *PostgresStore) GetWorkItemByWorkflowID(ctx context.Context, workflowID 
 		&item.LeaseExpiresAt,
 		&item.StartedAt,
 		&item.CompletedAt,
-		&item.Tail,
-		&item.TailAt,
-		&item.TailReason,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -1659,11 +1647,8 @@ func (p *PostgresStore) GetWorkItemProgressSummary(ctx context.Context, filter W
 		summary.ThroughputPerMin = summary.Overall.ThroughputPerMin
 		summary.ByStatus = map[string]int{
 			WorkItemStatusPending:      summary.Overall.Pending,
-			WorkItemStatusStarting:     summary.Overall.Starting,
 			WorkItemStatusRunning:      summary.Overall.Running,
-			"tail_running":             summary.Overall.TailRunning,
-			"stale_running":            summary.Overall.StaleRunning,
-			"heartbeat_stale_running":  summary.Overall.HeartbeatStaleRunning,
+			"stalled_running":          summary.Overall.StalledRunning,
 			WorkItemStatusCompleted:    summary.Overall.Completed,
 			WorkItemStatusFailed:       summary.Overall.Failed,
 			WorkItemStatusRetryWaiting: summary.Overall.RetryWaiting,
@@ -1683,7 +1668,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 	case "":
 	case "type", "queue", "artifact", "target":
 		groupExpr = groupBy
-		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'starting', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
+		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
 	default:
 		return nil, fmt.Errorf("unsupported work item summary group: %s", groupBy)
 	}
@@ -1692,19 +1677,14 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 		COALESCE(%[1]s, '') AS group_key,
 		COUNT(*)::INT AS total,
 		COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending,
-		COUNT(*) FILTER (WHERE status = 'starting')::INT AS starting,
 		COUNT(*) FILTER (WHERE status = 'running')::INT AS running,
-		COUNT(*) FILTER (WHERE status = 'running' AND tail)::INT AS tail_running,
 		COUNT(*) FILTER (
-			WHERE status IN ('starting', 'running')
-			  AND lease_expires_at IS NOT NULL
-			  AND lease_expires_at < NOW()
-		)::INT AS stale_running,
-		COUNT(*) FILTER (
-			WHERE status IN ('starting', 'running')
-			  AND heartbeat_at IS NOT NULL
-			  AND heartbeat_at < NOW() - INTERVAL '10 minutes'
-		)::INT AS heartbeat_stale_running,
+			WHERE status = 'running'
+			  AND (
+			    (lease_expires_at IS NOT NULL AND lease_expires_at < NOW())
+			    OR (heartbeat_at IS NOT NULL AND heartbeat_at < NOW() - INTERVAL '10 minutes')
+			  )
+		)::INT AS stalled_running,
 		COUNT(*) FILTER (WHERE status = 'completed')::INT AS completed,
 		COUNT(*) FILTER (WHERE status = 'failed')::INT AS failed,
 		COUNT(*) FILTER (WHERE status = 'retry_waiting')::INT AS retry_waiting,
@@ -1719,20 +1699,20 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			WHERE completed_at >= NOW() - INTERVAL '15 minutes'
 			  AND status IN ('completed', 'failed', 'dead', 'cancelled', 'skipped')
 		)::INT AS done_last_15m,
-		COALESCE(TO_CHAR(MIN(started_at) FILTER (WHERE status IN ('starting', 'running') AND started_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_started_at,
-		COALESCE(TO_CHAR(MIN(heartbeat_at) FILTER (WHERE status IN ('starting', 'running') AND heartbeat_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_heartbeat_at,
-		COALESCE(TO_CHAR(MIN(lease_expires_at) FILTER (WHERE status IN ('starting', 'running') AND lease_expires_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS next_lease_expires_at,
+		COALESCE(TO_CHAR(MIN(started_at) FILTER (WHERE status = 'running' AND started_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_started_at,
+		COALESCE(TO_CHAR(MIN(heartbeat_at) FILTER (WHERE status = 'running' AND heartbeat_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS oldest_running_heartbeat_at,
+		COALESCE(TO_CHAR(MIN(lease_expires_at) FILTER (WHERE status = 'running' AND lease_expires_at IS NOT NULL), 'YYYY-MM-DD"T"HH24:MI:SSOF'), '') AS next_lease_expires_at,
 		COALESCE((ARRAY_AGG(error ORDER BY updated_at DESC) FILTER (
 			WHERE error <> ''
 			  AND (
 				status IN ('failed', 'dead', 'retry_waiting')
 				OR (
-				  status IN ('starting', 'running')
+				  status = 'running'
 				  AND lease_expires_at IS NOT NULL
 				  AND lease_expires_at < NOW()
 				)
 				OR (
-				  status IN ('starting', 'running')
+				  status = 'running'
 				  AND heartbeat_at IS NOT NULL
 				  AND heartbeat_at < NOW() - INTERVAL '10 minutes'
 				)
@@ -1743,12 +1723,12 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			  AND (
 				status IN ('failed', 'dead', 'retry_waiting')
 				OR (
-				  status IN ('starting', 'running')
+				  status = 'running'
 				  AND lease_expires_at IS NOT NULL
 				  AND lease_expires_at < NOW()
 				)
 				OR (
-				  status IN ('starting', 'running')
+				  status = 'running'
 				  AND heartbeat_at IS NOT NULL
 				  AND heartbeat_at < NOW() - INTERVAL '10 minutes'
 				)
@@ -1775,11 +1755,8 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			&group.Key,
 			&group.Total,
 			&group.Pending,
-			&group.Starting,
 			&group.Running,
-			&group.TailRunning,
-			&group.StaleRunning,
-			&group.HeartbeatStaleRunning,
+			&group.StalledRunning,
 			&group.Completed,
 			&group.Failed,
 			&group.RetryWaiting,
@@ -1804,7 +1781,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 }
 
 func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) {
-	group.Queued = group.Pending + group.Starting + group.RetryWaiting + group.Paused
+	group.Queued = group.Pending + group.RetryWaiting + group.Paused
 	group.Done = group.Completed + group.Cancelled + group.Skipped
 	group.Error = group.Failed + group.Dead
 	if group.Total > 0 {
@@ -1813,7 +1790,7 @@ func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) 
 	if doneLast15m > 0 {
 		group.ThroughputPerMin = maxInt(1, doneLast15m/15)
 	}
-	active := group.Starting + group.Running
+	active := group.Running
 	remaining := group.Queued + group.Running
 	if remaining <= 0 {
 		return
@@ -1852,9 +1829,6 @@ func (p *PostgresStore) RetryWorkItems(ctx context.Context, request WorkItemRetr
 		attempts = CASE WHEN $1 THEN 0 ELSE attempts END,
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
-		tail = FALSE,
-		tail_at = NULL,
-		tail_reason = '',
 		started_at = NULL,
 		completed_at = NULL,
 		updated_at = NOW()
@@ -1889,9 +1863,6 @@ func (p *PostgresStore) ResumeWorkItems(ctx context.Context, filter WorkItemFilt
 		workflow_id = '',
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
-		tail = FALSE,
-		tail_at = NULL,
-		tail_reason = '',
 		started_at = NULL,
 		completed_at = NULL,
 		updated_at = NOW()
@@ -1925,9 +1896,6 @@ func (p *PostgresStore) PauseWorkItems(ctx context.Context, filter WorkItemFilte
 		workflow_id = '',
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
-		tail = FALSE,
-		tail_at = NULL,
-		tail_reason = '',
 		started_at = NULL,
 		completed_at = NULL,
 		updated_at = NOW()
@@ -1958,7 +1926,7 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 	if limit <= 0 {
 		limit = 1000
 	}
-	// Do not reclaim starting/running rows by DB lease alone. Temporal may have
+	// Do not reclaim running rows by DB lease alone. Temporal may have
 	// accepted the child workflow while its activity is still queued.
 	query := `WITH stale AS (
 		SELECT id FROM work_items
@@ -1983,9 +1951,6 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 		attempts = GREATEST(attempts - 1, 0),
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
-		tail = FALSE,
-		tail_at = NULL,
-		tail_reason = '',
 		started_at = NULL,
 		completed_at = NULL,
 		updated_at = NOW()
@@ -2030,10 +1995,9 @@ func (p *PostgresStore) ListExpiredRunningWorkItems(ctx context.Context, filter 
 	}
 	query := `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
-		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz),
-		tail, COALESCE(tail_at, '0001-01-01'::timestamptz), tail_reason
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 	FROM work_items
-	WHERE status IN ('starting', 'running')
+	WHERE status = 'running'
 	  AND workflow_id <> ''
 	  AND lease_expires_at IS NOT NULL
 	  AND lease_expires_at < NOW()`
@@ -2052,7 +2016,7 @@ func (p *PostgresStore) ListExpiredRunningWorkItems(ctx context.Context, filter 
 	var items []WorkItem
 	for rows.Next() {
 		var item WorkItem
-		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt, &item.Tail, &item.TailAt, &item.TailReason); err != nil {
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -2071,14 +2035,11 @@ func (p *PostgresStore) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workf
 		attempts = GREATEST(attempts - 1, 0),
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
-		tail = FALSE,
-		tail_at = NULL,
-		tail_reason = '',
 		started_at = NULL,
 		completed_at = NULL,
 		updated_at = NOW()
 	WHERE workflow_id = ANY($1)
-	  AND status IN ('starting', 'running')
+	  AND status = 'running'
 	RETURNING id, campaign_id, batch_id`, workflowIDs)
 	if err != nil {
 		return WorkItemBulkResult{}, err
@@ -2134,9 +2095,6 @@ func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter
 		error = '',
 		heartbeat_at = NULL,
 		lease_expires_at = NULL,
-		tail = FALSE,
-		tail_at = NULL,
-		tail_reason = '',
 		updated_at = NOW()
 	FROM retryable
 	WHERE work_items.id = retryable.id
@@ -2158,102 +2116,6 @@ func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter
 		updated++
 	}
 	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
-}
-
-func (p *PostgresStore) MarkTailWorkItems(ctx context.Context, request WorkItemTailPolicyRequest) (WorkItemBulkResult, error) {
-	if request.Limit <= 0 {
-		request.Limit = 1000
-	}
-	if request.SprayAfterSeconds <= 0 {
-		request.SprayAfterSeconds = 10 * 60
-	}
-	if request.PortscanAfterSeconds <= 0 {
-		request.PortscanAfterSeconds = 20 * 60
-	}
-	if request.PortscanMinDonePercent <= 0 {
-		request.PortscanMinDonePercent = 90
-	}
-	query := `WITH candidates AS (
-		SELECT id,
-			CASE
-				WHEN type = 'spray_shard' THEN 'spray shard exceeded tail threshold; continuing in background'
-				WHEN type = 'portscan_chunk' THEN 'portscan chunk exceeded tail threshold after most discovery completed; continuing in background'
-				ELSE 'work item exceeded tail threshold; continuing in background'
-			END AS reason
-		FROM work_items
-		WHERE status = 'running'
-		  AND tail = FALSE
-		  AND started_at IS NOT NULL
-		  AND heartbeat_at IS NOT NULL
-		  AND heartbeat_at >= NOW() - INTERVAL '10 minutes'
-		  AND (lease_expires_at IS NULL OR lease_expires_at >= NOW())
-		  AND (
-			(type = 'spray_shard' AND started_at <= NOW() - ($1 * INTERVAL '1 second'))
-			OR
-			(type = 'portscan_chunk'
-			  AND started_at <= NOW() - ($2 * INTERVAL '1 second')
-			  AND (
-				SELECT COUNT(*) FROM work_items p
-				WHERE p.campaign_id = work_items.campaign_id
-				  AND p.batch_id = work_items.batch_id
-				  AND p.type = 'portscan_chunk'
-			  ) > 0
-			  AND (
-				SELECT COUNT(*) FROM work_items p
-				WHERE p.campaign_id = work_items.campaign_id
-				  AND p.batch_id = work_items.batch_id
-				  AND p.type = 'portscan_chunk'
-				  AND p.status IN ('completed', 'cancelled', 'skipped', 'dead')
-			  ) * 100.0 / NULLIF((
-				SELECT COUNT(*) FROM work_items p
-				WHERE p.campaign_id = work_items.campaign_id
-				  AND p.batch_id = work_items.batch_id
-				  AND p.type = 'portscan_chunk'
-			  ), 0) >= $3)
-		  )`
-	args := []interface{}{request.SprayAfterSeconds, request.PortscanAfterSeconds, request.PortscanMinDonePercent}
-	argIdx := 4
-	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, request.Filter, false)
-	query += fmt.Sprintf(` ORDER BY started_at ASC LIMIT $%d
-	)
-	UPDATE work_items SET
-		tail = TRUE,
-		tail_at = NOW(),
-		tail_reason = candidates.reason,
-		updated_at = NOW()
-	FROM candidates
-	WHERE work_items.id = candidates.id
-	RETURNING work_items.id, work_items.campaign_id, work_items.batch_id`, argIdx)
-	args = append(args, request.Limit)
-
-	rows, err := p.pool.Query(ctx, query, args...)
-	if err != nil {
-		return WorkItemBulkResult{}, err
-	}
-	defer rows.Close()
-
-	updated := 0
-	batches := map[string]WorkItemBulkBatch{}
-	for rows.Next() {
-		var id string
-		var campaignID string
-		var batchID string
-		if err := rows.Scan(&id, &campaignID, &batchID); err != nil {
-			return WorkItemBulkResult{}, err
-		}
-		if batchID != "" {
-			batches[batchID] = WorkItemBulkBatch{CampaignID: campaignID, BatchID: batchID}
-		}
-		updated++
-	}
-	if err := rows.Err(); err != nil {
-		return WorkItemBulkResult{}, err
-	}
-	affected := make([]WorkItemBulkBatch, 0, len(batches))
-	for _, batch := range batches {
-		affected = append(affected, batch)
-	}
-	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
 }
 
 func appendWorkItemFilterSQL(query string, args []interface{}, argIdx int, filter WorkItemFilter, includeStatus bool) (string, []interface{}, int) {

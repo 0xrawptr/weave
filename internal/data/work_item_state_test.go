@@ -8,10 +8,7 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 		to   string
 		want bool
 	}{
-		{WorkItemStatusPending, WorkItemStatusStarting, true},
-		{WorkItemStatusStarting, WorkItemStatusRunning, true},
-		{WorkItemStatusStarting, WorkItemStatusCompleted, true},
-		{WorkItemStatusStarting, WorkItemStatusRetryWaiting, true},
+		{WorkItemStatusPending, WorkItemStatusRunning, true},
 		{WorkItemStatusRunning, WorkItemStatusCompleted, true},
 		{WorkItemStatusRunning, WorkItemStatusFailed, true},
 		{WorkItemStatusRunning, WorkItemStatusSkipped, true},
@@ -20,7 +17,7 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 		{WorkItemStatusPaused, WorkItemStatusPending, true},
 		{WorkItemStatusDead, WorkItemStatusCompleted, true},
 		{WorkItemStatusDead, WorkItemStatusSkipped, true},
-		{WorkItemStatusStarting, WorkItemStatusPending, false},
+		{WorkItemStatusRunning, WorkItemStatusPending, false},
 		{WorkItemStatusCompleted, WorkItemStatusRunning, false},
 		{WorkItemStatusDead, WorkItemStatusPending, false},
 		{WorkItemStatusDead, WorkItemStatusRunning, false},
@@ -35,8 +32,8 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 }
 
 func TestValidWorkItemStatus(t *testing.T) {
-	if !ValidWorkItemStatus(WorkItemStatusStarting) {
-		t.Fatalf("starting should be valid")
+	if !ValidWorkItemStatus(WorkItemStatusRunning) {
+		t.Fatalf("running should be valid")
 	}
 	if ValidWorkItemStatus("unknown") {
 		t.Fatalf("unknown status should be invalid")
@@ -44,9 +41,6 @@ func TestValidWorkItemStatus(t *testing.T) {
 }
 
 func TestCanTransferWorkItemLease(t *testing.T) {
-	if !canTransferWorkItemLease(WorkItemStatusStarting, WorkItemStatusRunning) {
-		t.Fatalf("starting -> running should allow workflow ownership transfer")
-	}
 	if canTransferWorkItemLease(WorkItemStatusRunning, WorkItemStatusCompleted) {
 		t.Fatalf("running -> completed should not allow workflow ownership transfer")
 	}

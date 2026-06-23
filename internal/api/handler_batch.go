@@ -237,12 +237,8 @@ func statusFromWorkItemCounts(total int, counts map[string]int) string {
 	if len(counts) == 0 {
 		return ""
 	}
-	tailRunning := counts["tail_running"]
 	pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
-	running := counts[data.WorkItemStatusStarting] + counts[data.WorkItemStatusRunning] - tailRunning
-	if running < 0 {
-		running = 0
-	}
+	running := counts[data.WorkItemStatusRunning]
 	completed := counts[data.WorkItemStatusCompleted]
 	failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
 	cancelled := counts[data.WorkItemStatusCancelled]
@@ -256,7 +252,7 @@ func statusFromWorkItemCounts(total int, counts map[string]int) string {
 	if failed > 0 && completed == 0 {
 		return "failed"
 	}
-	if total > 0 && completed+failed+cancelled+skipped+tailRunning >= total {
+	if total > 0 && completed+failed+cancelled+skipped >= total {
 		return "completed"
 	}
 	return "running"
@@ -271,7 +267,6 @@ func dagStatusFromSummary(summary data.WorkItemProgressSummary) string {
 		}
 		total += group.Total
 		counts[data.WorkItemStatusPending] += group.Pending
-		counts[data.WorkItemStatusStarting] += group.Starting
 		counts[data.WorkItemStatusRunning] += group.Running
 		counts[data.WorkItemStatusCompleted] += group.Completed
 		counts[data.WorkItemStatusFailed] += group.Failed

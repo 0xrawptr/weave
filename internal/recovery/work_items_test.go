@@ -40,3 +40,29 @@ func TestRecoverExpiredRunningOrphansSkipsWithoutTemporal(t *testing.T) {
 		t.Fatalf("result=%#v status=%q, want skipped temporal unavailable", result, status)
 	}
 }
+
+func TestRecoverWorkItemsReturnsEmptyWithoutRepo(t *testing.T) {
+	result, err := RecoverWorkItems(context.Background(), nil, nil, RecoveryPolicy{
+		RecoverFailures:       true,
+		RecoverExpiredRunning: true,
+		RequeueRetryWaiting:   true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bulk := result.BulkResult(); bulk.Updated != 0 || len(result.Batches) != 0 {
+		t.Fatalf("result = %#v bulk=%#v, want empty", result, bulk)
+	}
+}
+
+func TestRecoveryResultBulkResultMergesAllSources(t *testing.T) {
+	result := RecoveryResult{
+		RecoverableFailures: data.WorkItemBulkResult{Matched: 1, Updated: 1, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b1"}}},
+		ExpiredRunning:      data.WorkItemBulkResult{Matched: 2, Updated: 2, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b1"}}},
+		RetryRequeued:       data.WorkItemBulkResult{Matched: 3, Updated: 3, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b2"}}},
+	}
+	bulk := result.BulkResult()
+	if bulk.Matched != 6 || bulk.Updated != 6 || len(bulk.Batches) != 2 {
+		t.Fatalf("bulk = %#v, want merged counts and batches", bulk)
+	}
+}

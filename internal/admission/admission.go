@@ -154,7 +154,6 @@ func actionPreciseKey(item data.WorkItem, envelope workItemEnvelope) string {
 func blocks(status string) bool {
 	switch status {
 	case data.WorkItemStatusPending,
-		data.WorkItemStatusStarting,
 		data.WorkItemStatusRunning,
 		data.WorkItemStatusCompleted,
 		data.WorkItemStatusRetryWaiting,

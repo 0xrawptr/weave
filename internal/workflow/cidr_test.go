@@ -233,7 +233,7 @@ func TestSchedulerPhasePlansGateWorkItemTypes(t *testing.T) {
 	}
 }
 
-func TestSchedulerPhasePrefersVerificationOverSprayTail(t *testing.T) {
+func TestSchedulerPhasePrefersVerificationOverRunningSprayWhenVerificationQueued(t *testing.T) {
 	snapshot := data.WorkItemProgressSummary{
 		ByType: []data.WorkItemGroupSummary{
 			{Key: "spray_shard", Running: 3},
@@ -245,18 +245,18 @@ func TestSchedulerPhasePrefersVerificationOverSprayTail(t *testing.T) {
 	}
 }
 
-func TestSchedulerPhaseIgnoresBackgroundTailWork(t *testing.T) {
+func TestSchedulerPhaseTracksRunningSprayWork(t *testing.T) {
 	snapshot := data.WorkItemProgressSummary{
 		ByType: []data.WorkItemGroupSummary{
-			{Key: "spray_shard", Running: 3, TailRunning: 3},
+			{Key: "spray_shard", Running: 3},
 		},
 	}
-	if got := deriveSchedulerCampaignPhaseFromSnapshot(snapshot); got != CampaignPhaseSteady {
-		t.Fatalf("phase = %q, want steady", got)
+	if got := deriveSchedulerCampaignPhaseFromSnapshot(snapshot); got != CampaignPhaseExpansion {
+		t.Fatalf("phase = %q, want expansion", got)
 	}
 }
 
-func TestScheduledBatchStatusIgnoresTailOnlyRunning(t *testing.T) {
+func TestScheduledBatchStatusCompletesWhenNoRunningWork(t *testing.T) {
 	result := &SchedulerWorkflowResult{
 		PortScanTotal:   10,
 		PortScanDone:    10,
@@ -426,6 +426,28 @@ func TestSprayShardWorkItemsSkipEmptyInput(t *testing.T) {
 
 	if items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3); len(items) != 0 {
 		t.Fatalf("empty spray input created work items: %#v", items)
+	}
+}
+
+func TestActionWorkItemsFromDAGNodeUsesSharderRegistry(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:  "camp-1",
+			MaxAttempts: 2,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "115.236.38.192/26", Schedule: data.ScheduleBatch}
+	node := planner.DAGPlanNode{
+		ID:       "node-empty-spray",
+		Artifact: "spray",
+		Target:   "115.236.38.192/26",
+		Input:    map[string]any{},
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
+	}
+
+	if items := actionWorkItemsFromDAGNode(input, parent, node, 1, 3); len(items) != 0 {
+		t.Fatalf("registry sharder created empty spray work items: %#v", items)
 	}
 }
 

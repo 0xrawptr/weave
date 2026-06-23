@@ -6,7 +6,6 @@ import (
 
 const (
 	WorkItemStatusPending      = "pending"
-	WorkItemStatusStarting     = "starting"
 	WorkItemStatusRunning      = "running"
 	WorkItemStatusCompleted    = "completed"
 	WorkItemStatusFailed       = "failed"
@@ -217,9 +216,6 @@ type WorkItem struct {
 	LeaseExpiresAt time.Time `json:"lease_expires_at"`
 	StartedAt      time.Time `json:"started_at"`
 	CompletedAt    time.Time `json:"completed_at"`
-	Tail           bool      `json:"tail,omitempty"`
-	TailAt         time.Time `json:"tail_at,omitempty"`
-	TailReason     string    `json:"tail_reason,omitempty"`
 }
 
 type WorkItemClaimRequest struct {
@@ -248,7 +244,7 @@ type SchedulerCapacity struct {
 	Running             int       `json:"running"`
 	Pending             int       `json:"pending"`
 	RetryWaiting        int       `json:"retry_waiting"`
-	StaleRunning        int       `json:"stale_running"`
+	StalledRunning      int       `json:"stalled_running"`
 	Completed           int       `json:"completed"`
 	Failed              int       `json:"failed"`
 	Dead                int       `json:"dead"`
@@ -307,14 +303,6 @@ type WorkItemBulkResult struct {
 	Batches []WorkItemBulkBatch `json:"batches,omitempty"`
 }
 
-type WorkItemTailPolicyRequest struct {
-	Filter                 WorkItemFilter `json:"filter"`
-	Limit                  int            `json:"limit,omitempty"`
-	SprayAfterSeconds      int            `json:"spray_after_seconds,omitempty"`
-	PortscanAfterSeconds   int            `json:"portscan_after_seconds,omitempty"`
-	PortscanMinDonePercent int            `json:"portscan_min_done_percent,omitempty"`
-}
-
 type WorkItemBulkBatch struct {
 	CampaignID string `json:"campaign_id,omitempty"`
 	BatchID    string `json:"batch_id,omitempty"`
@@ -324,11 +312,9 @@ type WorkItemGroupSummary struct {
 	Key                    string `json:"key"`
 	Total                  int    `json:"total"`
 	Pending                int    `json:"pending"`
-	Starting               int    `json:"starting,omitempty"`
 	Running                int    `json:"running"`
-	StaleRunning           int    `json:"stale_running,omitempty"`
-	HeartbeatStaleRunning  int    `json:"heartbeat_stale_running,omitempty"`
-	TailRunning            int    `json:"tail_running,omitempty"`
+	StalledRunning         int    `json:"stalled_running,omitempty"`
+	NoProgressRunning      int    `json:"no_progress_running,omitempty"`
 	Completed              int    `json:"completed"`
 	Failed                 int    `json:"failed"`
 	RetryWaiting           int    `json:"retry_waiting"`
@@ -386,63 +372,59 @@ type CampaignRuntimeView struct {
 }
 
 type RuntimeBottleneck struct {
-	Kind         string `json:"kind"`
-	Key          string `json:"key"`
-	Reason       string `json:"reason"`
-	Phase        string `json:"phase,omitempty"`
-	Queue        string `json:"queue,omitempty"`
-	Type         string `json:"type,omitempty"`
-	Artifact     string `json:"artifact,omitempty"`
-	Target       string `json:"target,omitempty"`
-	Pending      int    `json:"pending,omitempty"`
-	Starting     int    `json:"starting,omitempty"`
-	Running      int    `json:"running,omitempty"`
-	RetryWaiting int    `json:"retry_waiting,omitempty"`
-	Paused       int    `json:"paused,omitempty"`
-	Failed       int    `json:"failed,omitempty"`
-	Dead         int    `json:"dead,omitempty"`
-	StaleRunning int    `json:"stale_running,omitempty"`
-	TailRunning  int    `json:"tail_running,omitempty"`
-	ETASeconds   int64  `json:"eta_seconds,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
+	Kind           string `json:"kind"`
+	Key            string `json:"key"`
+	Reason         string `json:"reason"`
+	Phase          string `json:"phase,omitempty"`
+	Queue          string `json:"queue,omitempty"`
+	Type           string `json:"type,omitempty"`
+	Artifact       string `json:"artifact,omitempty"`
+	Target         string `json:"target,omitempty"`
+	Pending        int    `json:"pending,omitempty"`
+	Running        int    `json:"running,omitempty"`
+	RetryWaiting   int    `json:"retry_waiting,omitempty"`
+	Paused         int    `json:"paused,omitempty"`
+	Failed         int    `json:"failed,omitempty"`
+	Dead           int    `json:"dead,omitempty"`
+	StalledRunning int    `json:"stalled_running,omitempty"`
+	ETASeconds     int64  `json:"eta_seconds,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
 }
 
 type RuntimePlanItem struct {
-	Type            string `json:"type"`
-	Queue           string `json:"queue"`
-	Artifact        string `json:"artifact"`
-	Phase           string `json:"phase"`
-	Allowed         bool   `json:"allowed"`
-	State           string `json:"state"`
-	Reason          string `json:"reason"`
-	Pending         int    `json:"pending"`
-	Starting        int    `json:"starting,omitempty"`
-	Running         int    `json:"running"`
-	Completed       int    `json:"completed"`
-	Failed          int    `json:"failed"`
-	Dead            int    `json:"dead"`
-	RetryWaiting    int    `json:"retry_waiting,omitempty"`
-	Paused          int    `json:"paused,omitempty"`
-	StaleRunning    int    `json:"stale_running,omitempty"`
-	TailRunning     int    `json:"tail_running,omitempty"`
-	ProgressPercent int    `json:"progress_percent,omitempty"`
-	ETASeconds      int64  `json:"eta_seconds,omitempty"`
-	LastError       string `json:"last_error,omitempty"`
-	NextPhase       string `json:"next_phase,omitempty"`
-	BlockingReason  string `json:"blocking_reason,omitempty"`
+	Type              string `json:"type"`
+	Queue             string `json:"queue"`
+	Artifact          string `json:"artifact"`
+	Phase             string `json:"phase"`
+	Allowed           bool   `json:"allowed"`
+	State             string `json:"state"`
+	Reason            string `json:"reason"`
+	Pending           int    `json:"pending"`
+	Running           int    `json:"running"`
+	Completed         int    `json:"completed"`
+	Failed            int    `json:"failed"`
+	Dead              int    `json:"dead"`
+	RetryWaiting      int    `json:"retry_waiting,omitempty"`
+	Paused            int    `json:"paused,omitempty"`
+	StalledRunning    int    `json:"stalled_running,omitempty"`
+	NoProgressRunning int    `json:"no_progress_running,omitempty"`
+	ProgressPercent   int    `json:"progress_percent,omitempty"`
+	ETASeconds        int64  `json:"eta_seconds,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	NextPhase         string `json:"next_phase,omitempty"`
+	BlockingReason    string `json:"blocking_reason,omitempty"`
 }
 
 type QueueRuntimeState struct {
-	Queue        string `json:"queue"`
-	Pending      int    `json:"pending"`
-	Starting     int    `json:"starting,omitempty"`
-	Running      int    `json:"running"`
-	RetryWaiting int    `json:"retry_waiting,omitempty"`
-	Paused       int    `json:"paused,omitempty"`
-	StaleRunning int    `json:"stale_running,omitempty"`
-	TailRunning  int    `json:"tail_running,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
-	Reason       string `json:"reason"`
+	Queue             string `json:"queue"`
+	Pending           int    `json:"pending"`
+	Running           int    `json:"running"`
+	RetryWaiting      int    `json:"retry_waiting,omitempty"`
+	Paused            int    `json:"paused,omitempty"`
+	StalledRunning    int    `json:"stalled_running,omitempty"`
+	NoProgressRunning int    `json:"no_progress_running,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	Reason            string `json:"reason"`
 }
 
 type TargetRuntimeState struct {
@@ -450,7 +432,7 @@ type TargetRuntimeState struct {
 	Total                  int    `json:"total"`
 	Queued                 int    `json:"queued"`
 	Running                int    `json:"running"`
-	TailRunning            int    `json:"tail_running,omitempty"`
+	StalledRunning         int    `json:"stalled_running,omitempty"`
 	Failed                 int    `json:"failed"`
 	Dead                   int    `json:"dead"`
 	ETASeconds             int64  `json:"eta_seconds,omitempty"`

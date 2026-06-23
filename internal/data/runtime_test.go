@@ -1,6 +1,9 @@
 package data
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestRuntimeQueuesSeparateLiveStateFromCapacitySnapshot(t *testing.T) {
 	groups := []WorkItemGroupSummary{
@@ -22,10 +25,10 @@ func TestRuntimeQueuesSeparateLiveStateFromCapacitySnapshot(t *testing.T) {
 
 func TestRuntimePhaseBlockingReasonReportsStaleWork(t *testing.T) {
 	open := []WorkItemGroupSummary{
-		{Key: "portscan_chunk", Running: 1, StaleRunning: 1},
+		{Key: "portscan_chunk", Running: 1, StalledRunning: 1},
 	}
 	got := runtimePhaseBlockingReason(CampaignPhaseDiscovery, open, WorkItemProgressSummary{Total: 1})
-	if got != "portscan_chunk has stale running work" {
+	if got != "portscan_chunk has running work without a valid progress heartbeat" {
 		t.Fatalf("blocking reason = %q", got)
 	}
 }
@@ -98,16 +101,16 @@ func TestBlockedRuntimeQueuesIgnoresQueuesWaitingForPhase(t *testing.T) {
 	}
 }
 
-func TestRuntimeCurrentBottleneckPrefersStaleWork(t *testing.T) {
+func TestRuntimeCurrentBottleneckPrefersStalledWork(t *testing.T) {
 	view := CampaignRuntimeView{
 		ExecutionPlan: []RuntimePlanItem{
-			{Type: "spray_shard", Queue: "spray", Artifact: "spray", Pending: 20, StaleRunning: 1, LastError: "lease expired"},
+			{Type: "spray_shard", Queue: "spray", Artifact: "spray", Pending: 20, StalledRunning: 1, LastError: "lease expired"},
 			{Type: "nuclei_group", Queue: "nuclei", Artifact: "nuclei", Failed: 2, LastError: "template error"},
 		},
 	}
 	got := runtimeCurrentBottleneck(view)
-	if got == nil || got.Kind != "stale_work" || got.Type != "spray_shard" || got.LastError != "lease expired" {
-		t.Fatalf("bottleneck = %#v, want stale spray work", got)
+	if got == nil || got.Kind != "stalled_work" || got.Type != "spray_shard" || got.LastError != "lease expired" {
+		t.Fatalf("bottleneck = %#v, want stalled spray work", got)
 	}
 }
 
@@ -123,25 +126,72 @@ func TestRuntimeCurrentBottleneckFallsBackToBlockedQueue(t *testing.T) {
 	}
 }
 
-func TestRuntimeTailWorkIsVisibleButNotBlocking(t *testing.T) {
+func TestRuntimeRunningWorkIsVisibleAndBlocking(t *testing.T) {
 	summary := WorkItemProgressSummary{ByType: []WorkItemGroupSummary{
-		{Key: "spray_shard", Running: 3, TailRunning: 3},
+		{Key: "spray_shard", Running: 3},
 	}}
 	plan := runtimeExecutionPlan(CampaignPhaseSteady, summary)
 	byType := map[string]RuntimePlanItem{}
 	for _, item := range plan {
 		byType[item.Type] = item
 	}
-	if byType["spray_shard"].State != "tail" || byType["spray_shard"].TailRunning != 3 {
-		t.Fatalf("spray plan = %#v, want tail state", byType["spray_shard"])
+	if byType["spray_shard"].State != "running" || byType["spray_shard"].Running != 3 {
+		t.Fatalf("spray plan = %#v, want running state", byType["spray_shard"])
 	}
 	view := CampaignRuntimeView{ExecutionPlan: plan}
-	if got := runtimeCurrentBottleneck(view); got != nil {
-		t.Fatalf("bottleneck = %#v, want nil for tail-only work", got)
+	if got := runtimeCurrentBottleneck(view); got == nil || got.Kind != "phase_work" || got.Type != "spray_shard" {
+		t.Fatalf("bottleneck = %#v, want active spray phase work", got)
 	}
-	queues := runtimeQueuesForPlan([]WorkItemGroupSummary{{Key: "spray", Running: 3, TailRunning: 3}}, plan)
-	if len(queues) != 1 || queues[0].TailRunning != 3 || queues[0].Reason != "running only background tail work" {
+	queues := runtimeQueuesForPlan([]WorkItemGroupSummary{{Key: "spray", Running: 3}}, plan)
+	if len(queues) != 1 || queues[0].Running != 3 || queues[0].Reason != "actively executing" {
 		t.Fatalf("queues = %#v, want visible tail queue", queues)
+	}
+}
+
+func TestNoProgressRunningUsesDurationThreshold(t *testing.T) {
+	stale := WorkItemGroupSummary{
+		Running:                1,
+		OldestRunningStartedAt: time.Now().Add(-20 * time.Minute).Format(time.RFC3339),
+		AvgDurationMs:          1000,
+	}
+	if got := noProgressRunning(stale); got != 1 {
+		t.Fatalf("noProgressRunning(stale) = %d, want 1", got)
+	}
+
+	recent := WorkItemGroupSummary{
+		Running:                1,
+		OldestRunningStartedAt: time.Now().Add(-1 * time.Minute).Format(time.RFC3339),
+		AvgDurationMs:          1000,
+	}
+	if got := noProgressRunning(recent); got != 0 {
+		t.Fatalf("noProgressRunning(recent) = %d, want 0", got)
+	}
+}
+
+func TestRuntimeWarningsReportNoProgressRunning(t *testing.T) {
+	view := CampaignRuntimeView{
+		ExecutionPlan: []RuntimePlanItem{{NoProgressRunning: 1}},
+	}
+	got := runtimeWarnings(view)
+	if !containsString(got, "running work has no valid progress heartbeat") {
+		t.Fatalf("warnings = %#v, want no-progress warning", got)
+	}
+}
+
+func TestRuntimeWarningsDeduplicateProgressHeartbeatWarning(t *testing.T) {
+	view := CampaignRuntimeView{
+		Summary:       WorkItemProgressSummary{Overall: WorkItemGroupSummary{StalledRunning: 1}},
+		ExecutionPlan: []RuntimePlanItem{{NoProgressRunning: 1}},
+	}
+	got := runtimeWarnings(view)
+	count := 0
+	for _, warning := range got {
+		if warning == "running work has no valid progress heartbeat" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("warnings = %#v, want one progress heartbeat warning", got)
 	}
 }
 
@@ -153,4 +203,13 @@ func TestProblemRuntimeArtifactsFiltersHealthyArtifacts(t *testing.T) {
 	if len(got) != 1 || got[0].Artifact != "spray" {
 		t.Fatalf("problem artifacts = %#v, want only spray", got)
 	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }

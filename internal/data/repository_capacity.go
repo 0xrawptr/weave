@@ -218,7 +218,7 @@ func (p *PostgresStore) GetSchedulerCapacities(ctx context.Context, campaignID, 
 	for rows.Next() {
 		var item SchedulerCapacity
 		if err := rows.Scan(&item.CampaignID, &item.BatchID, &item.Queue, &item.Artifact, &item.MinCapacity, &item.MaxCapacity, &item.EffectiveCapacity,
-			&item.RecommendedCapacity, &item.Running, &item.Pending, &item.RetryWaiting, &item.StaleRunning, &item.Completed, &item.Failed, &item.Dead,
+			&item.RecommendedCapacity, &item.Running, &item.Pending, &item.RetryWaiting, &item.StalledRunning, &item.Completed, &item.Failed, &item.Dead,
 			&item.AvgDurationMs, &item.ThroughputPerMin, &item.StatRequests, &item.StatResults, &item.StatErrors, &item.ErrorRatePercent,
 			&item.LastDecision, &item.DecisionReason, &item.UpdatedAt); err != nil {
 			return nil, err
@@ -277,7 +277,7 @@ func (p *PostgresStore) upsertSchedulerCapacity(ctx context.Context, capacity Sc
 		updated_at = NOW()`,
 		capacity.CampaignID, capacity.BatchID, capacity.Queue, capacity.Artifact, capacity.MinCapacity, capacity.MaxCapacity,
 		capacity.EffectiveCapacity, capacity.RecommendedCapacity, capacity.Running, capacity.Pending, capacity.RetryWaiting,
-		capacity.StaleRunning, capacity.Completed, capacity.Failed, capacity.Dead, capacity.AvgDurationMs, capacity.ThroughputPerMin,
+		capacity.StalledRunning, capacity.Completed, capacity.Failed, capacity.Dead, capacity.AvgDurationMs, capacity.ThroughputPerMin,
 		capacity.StatRequests, capacity.StatResults, capacity.StatErrors, capacity.ErrorRatePercent, capacity.LastDecision, capacity.DecisionReason)
 	return err
 }
@@ -291,7 +291,7 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 		current = policy.Min
 	}
 	current = clampInt(current, policy.Min, policy.Max)
-	stale := group.StaleRunning + group.HeartbeatStaleRunning
+	stalled := group.StalledRunning
 	statErrorRate := percentage(stat.Errors, stat.Requests)
 	workErrors := group.Failed + group.Dead
 	workDone := group.Completed + group.Failed + group.Dead
@@ -302,23 +302,23 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 	decision := "hold"
 	reason := "capacity stable"
 	switch {
-	case stale > 0:
+	case stalled > 0:
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
-		reason = "stale running work detected"
+		reason = "stalled running work detected"
 	case errorRate >= float64(policy.ErrorLimit) && errorRate > 0:
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
 		reason = "recent error rate above policy"
-	case policy.SlowMs > 0 && group.AvgDurationMs > policy.SlowMs && group.Running+group.Starting >= current:
+	case policy.SlowMs > 0 && group.AvgDurationMs > policy.SlowMs && group.Running >= current:
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
 		reason = "average duration above policy while saturated"
-	case group.Pending > 0 && group.RetryWaiting == 0 && group.Running+group.Starting >= current && current < policy.Max:
+	case group.Pending > 0 && group.RetryWaiting == 0 && group.Running >= current && current < policy.Max:
 		next = current + 1
 		decision = "increase"
 		reason = "healthy backlog with saturated capacity"
-	case group.Pending == 0 && group.Running+group.Starting == 0:
+	case group.Pending == 0 && group.Running == 0:
 		next = maxInt(policy.Min, minInt(current, policy.Initial))
 		decision = "cooldown"
 		reason = "queue idle"
@@ -333,10 +333,10 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 		MaxCapacity:         policy.Max,
 		EffectiveCapacity:   next,
 		RecommendedCapacity: next,
-		Running:             group.Running + group.Starting,
+		Running:             group.Running,
 		Pending:             group.Pending,
 		RetryWaiting:        group.RetryWaiting,
-		StaleRunning:        stale,
+		StalledRunning:      stalled,
 		Completed:           group.Completed,
 		Failed:              group.Failed,
 		Dead:                group.Dead,

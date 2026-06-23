@@ -16,13 +16,13 @@ func TestDecideSchedulerCapacityIncreasesHealthyBacklog(t *testing.T) {
 	}
 }
 
-func TestDecideSchedulerCapacityHalvesOnStaleRunning(t *testing.T) {
+func TestDecideSchedulerCapacityHalvesOnStalledRunning(t *testing.T) {
 	policy := SchedulerCapacityPolicy{Queue: "portscan", Artifact: "gogo", Min: 1, Initial: 4, Max: 8, SlowMs: 180_000, ErrorLimit: 30}
 	got := decideSchedulerCapacity(
 		SchedulerCapacityUpdateRequest{CampaignID: "c1", BatchID: "b1"},
 		policy,
 		SchedulerCapacity{EffectiveCapacity: 8},
-		WorkItemGroupSummary{Pending: 20, Running: 8, StaleRunning: 1},
+		WorkItemGroupSummary{Pending: 20, Running: 8, StalledRunning: 1},
 		ArtifactStatSummary{},
 	)
 	if got.EffectiveCapacity != 4 || got.LastDecision != "decrease" {

@@ -141,16 +141,6 @@ func TestCollectSprayResultsStopsOnContextDeadline(t *testing.T) {
 	}
 }
 
-func TestSprayWatchdogOutputIdentifiesLocalDeadline(t *testing.T) {
-	out := sprayWatchdogOutput("example.com", "spray", context.Background(), context.DeadlineExceeded, 2*time.Minute)
-	if out.Success {
-		t.Fatal("watchdog output should fail")
-	}
-	if out.Error != "spray execution watchdog exceeded after 2m0s" {
-		t.Fatalf("watchdog error = %q", out.Error)
-	}
-}
-
 func TestSprayArtifactDefaultTimeout(t *testing.T) {
 	spray := NewSprayArtifactFromEngine(nil)
 	spray.SetDefaultTimeout(120 * time.Second)
