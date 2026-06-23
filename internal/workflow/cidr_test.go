@@ -407,6 +407,28 @@ func TestFullSprayShardWorkItemsUseSingleBaseURLChunks(t *testing.T) {
 	}
 }
 
+func TestSprayShardWorkItemsSkipEmptyInput(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:  "camp-1",
+			MaxAttempts: 2,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: "115.236.38.192/26", Schedule: data.ScheduleBatch}
+	node := planner.DAGPlanNode{
+		ID:       "node-empty-spray",
+		Artifact: "spray",
+		Target:   "115.236.38.192/26",
+		Input:    map[string]any{},
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
+	}
+
+	if items := sprayShardWorkItemsFromDAGNode(input, parent, node, 1, 3); len(items) != 0 {
+		t.Fatalf("empty spray input created work items: %#v", items)
+	}
+}
+
 func TestArtifactWorkItemChildWorkflowIDIsStablePerAttempt(t *testing.T) {
 	target := "202.205.161.0/24"
 	first := artifactWorkItemChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1)

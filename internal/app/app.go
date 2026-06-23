@@ -101,6 +101,13 @@ func configureArtifactDefaults(reg *artifact.Registry, cfg *config.Config) {
 			}
 		}
 	}
+	if cfg.Artifacts.Spray.Timeout > 0 {
+		if a, err := reg.Get("spray"); err == nil {
+			if sprayArtifact, ok := a.(*artifact.SprayArtifact); ok {
+				sprayArtifact.SetDefaultTimeout(cfg.Artifacts.Spray.Timeout)
+			}
+		}
+	}
 }
 
 func buildSDKClient(cfg *config.Config) *sdkclient.Client {

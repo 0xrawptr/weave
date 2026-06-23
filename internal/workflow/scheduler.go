@@ -1395,11 +1395,7 @@ func sprayShardWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.Wo
 		}
 		return items
 	}
-	item := actionWorkItemFromDAGNodeInput(input, parent, node, baseInput, iteration, maxIterations, 0)
-	if item.ID == "" {
-		return nil
-	}
-	return []data.WorkItem{item}
+	return nil
 }
 
 func chunkWordlistRanges(total, size int) []wordlistRange {

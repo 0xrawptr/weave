@@ -1,7 +1,9 @@
 package artifact
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/chainreactors/fingers/common"
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
@@ -111,5 +113,48 @@ func TestFullSprayWordlistUsesDefaultDictionary(t *testing.T) {
 	}
 	if len(words) != len(defaultSprayWordlist()) {
 		t.Fatalf("full wordlist should map to default dictionary, got %d", len(words))
+	}
+}
+
+func TestCollectSprayResultsReturnsWhenChannelCloses(t *testing.T) {
+	ch := make(chan sdktypes.Result)
+	close(ch)
+
+	called := false
+	if err := collectSprayResults(context.Background(), ch, func(sdktypes.Result) {
+		called = true
+	}); err != nil {
+		t.Fatalf("collectSprayResults returned error: %v", err)
+	}
+	if called {
+		t.Fatal("handler should not be called for closed channel")
+	}
+}
+
+func TestCollectSprayResultsStopsOnContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := collectSprayResults(ctx, make(chan sdktypes.Result), func(sdktypes.Result) {})
+	if err != context.DeadlineExceeded {
+		t.Fatalf("collectSprayResults error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestSprayWatchdogOutputIdentifiesLocalDeadline(t *testing.T) {
+	out := sprayWatchdogOutput("example.com", "spray", context.Background(), context.DeadlineExceeded, 2*time.Minute)
+	if out.Success {
+		t.Fatal("watchdog output should fail")
+	}
+	if out.Error != "spray execution watchdog exceeded after 2m0s" {
+		t.Fatalf("watchdog error = %q", out.Error)
+	}
+}
+
+func TestSprayArtifactDefaultTimeout(t *testing.T) {
+	spray := NewSprayArtifactFromEngine(nil)
+	spray.SetDefaultTimeout(120 * time.Second)
+	if spray.defaultTimeout != 120 {
+		t.Fatalf("default timeout = %d, want 120", spray.defaultTimeout)
 	}
 }

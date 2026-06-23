@@ -15,10 +15,14 @@ import (
 
 // SprayArtifact wraps the SDK spray engine for HTTP path fuzzing and URL discovery.
 type SprayArtifact struct {
-	engine         *sdkspray.Engine
-	defaultThreads int
-	resultHandler  func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result SprayResultItem)
+	engine                  *sdkspray.Engine
+	defaultThreads          int
+	defaultTimeout          int
+	defaultExecutionTimeout time.Duration
+	resultHandler           func(ctx context.Context, target, campaignID string, sdkResult sdktypes.Result, result SprayResultItem)
 }
+
+const defaultSprayExecutionTimeout = 15 * time.Minute
 
 // SprayInput defines the input for spray operations.
 type SprayInput struct {
@@ -105,12 +109,27 @@ type SprayExtractItem struct {
 
 // NewSprayArtifactFromEngine wraps an already-initialized SDK engine.
 func NewSprayArtifactFromEngine(engine *sdkspray.Engine) *SprayArtifact {
-	return &SprayArtifact{engine: engine}
+	return &SprayArtifact{engine: engine, defaultExecutionTimeout: defaultSprayExecutionTimeout}
 }
 
 func (s *SprayArtifact) SetDefaultThreads(threads int) {
 	if threads > 0 {
 		s.defaultThreads = threads
+	}
+}
+
+func (s *SprayArtifact) SetDefaultTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		s.defaultTimeout = int(timeout.Seconds())
+		if s.defaultTimeout <= 0 {
+			s.defaultTimeout = 1
+		}
+	}
+}
+
+func (s *SprayArtifact) SetDefaultExecutionTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		s.defaultExecutionTimeout = timeout
 	}
 }
 
@@ -209,6 +228,9 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 	if sprayIn.Threads <= 0 {
 		sprayIn.Threads = s.defaultThreads
 	}
+	if sprayIn.Timeout <= 0 {
+		sprayIn.Timeout = s.defaultTimeout
+	}
 
 	if len(sprayIn.BaseURLs) > 0 && strings.EqualFold(sprayIn.WordlistMode, "full") {
 		if len(sprayIn.Wordlist) == 0 {
@@ -225,7 +247,9 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 		return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: "default spray wordlist is empty"}, nil
 	}
 
-	sprayCtx := configureSprayContext(sdkspray.NewContext().WithContext(ctx).SetStatsHandler(collector.Handler()), sprayIn)
+	execCtx, cancel := sprayExecutionContext(ctx, s.defaultExecutionTimeout)
+	defer cancel()
+	sprayCtx := configureSprayContext(sdkspray.NewContext().WithContext(execCtx).SetStatsHandler(collector.Handler()), sprayIn)
 
 	var items []SprayResultItem
 
@@ -240,14 +264,17 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 		if err != nil {
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 		}
-		for r := range resultCh {
+		if err := collectSprayResults(execCtx, resultCh, func(r sdktypes.Result) {
 			data, ok := sdktypes.ResultData[*sdktypes.SprayResult](r)
 			if !ok || data == nil {
-				continue
+				return
 			}
 			item := sprayResultItem(data)
 			items = append(items, item)
 			s.emitResult(ctx, input, r, item)
+			recordArtifactHeartbeat(ctx, s.Name(), input.Target, "sdk_result", started, map[string]interface{}{"results": len(items)})
+		}); err != nil {
+			return sprayWatchdogOutput(input.Target, s.Name(), ctx, err, s.defaultExecutionTimeout), nil
 		}
 	} else if len(sprayIn.URLs) > 0 {
 		recordArtifactHeartbeat(ctx, s.Name(), input.Target, "check", started, map[string]interface{}{
@@ -258,14 +285,17 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 		if err != nil {
 			return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: err.Error()}, nil
 		}
-		for r := range resultCh {
+		if err := collectSprayResults(execCtx, resultCh, func(r sdktypes.Result) {
 			data, ok := sdktypes.ResultData[*sdktypes.SprayResult](r)
 			if !ok || data == nil {
-				continue
+				return
 			}
 			item := sprayResultItem(data)
 			items = append(items, item)
 			s.emitResult(ctx, input, r, item)
+			recordArtifactHeartbeat(ctx, s.Name(), input.Target, "sdk_result", started, map[string]interface{}{"results": len(items)})
+		}); err != nil {
+			return sprayWatchdogOutput(input.Target, s.Name(), ctx, err, s.defaultExecutionTimeout), nil
 		}
 	} else {
 		return Output{Artifact: s.Name(), Target: input.Target, Success: false, Error: "no valid input: provide urls or base_urls+wordlist"}, nil
@@ -284,6 +314,35 @@ func (s *SprayArtifact) Execute(ctx context.Context, input Input) (Output, error
 		FullData: fullData,
 		Stats:    collector.Stats(),
 	}, nil
+}
+
+func sprayExecutionContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func collectSprayResults(ctx context.Context, resultCh <-chan sdktypes.Result, handle func(sdktypes.Result)) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case r, ok := <-resultCh:
+			if !ok {
+				return nil
+			}
+			handle(r)
+		}
+	}
+}
+
+func sprayWatchdogOutput(target, artifactName string, parent context.Context, err error, timeout time.Duration) Output {
+	message := err.Error()
+	if err == context.DeadlineExceeded && parent.Err() == nil && timeout > 0 {
+		message = fmt.Sprintf("spray execution watchdog exceeded after %s", timeout)
+	}
+	return Output{Artifact: artifactName, Target: target, Success: false, Error: message}
 }
 
 func (s *SprayArtifact) Close() error {
