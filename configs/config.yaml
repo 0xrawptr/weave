@@ -104,7 +104,7 @@ knowledge:
 
 artifacts:
   gogo:
-    capacity: 6000
+    capacity: 2000
     timeout: 300s
   spray:
     threads: 50

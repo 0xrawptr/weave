@@ -177,7 +177,7 @@ func (g *GogoArtifact) Execute(ctx context.Context, input Input) (Output, error)
 
 func gogoThreads() int {
 	if iutils.IsWin() || iutils.IsMac() {
-		return 6000
+		return 2000
 	}
 	n := 10000
 	if fdlimit := iutils.GetFdLimit(); n > fdlimit {

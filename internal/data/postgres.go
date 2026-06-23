@@ -1,6 +1,7 @@
 package data
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -634,6 +635,7 @@ func (p *PostgresStore) InsertAsset(ctx context.Context, asset *Asset) error {
 	if asset.Confidence == 0 {
 		asset.Confidence = 1.0
 	}
+	asset.RawData = jsonbSafeBytes(asset.RawData)
 	asset.RawHash = rawDataHash(asset.RawData)
 	var previousHash string
 	err := p.pool.QueryRow(ctx, `SELECT raw_hash FROM assets WHERE id = $1`, asset.ID).Scan(&previousHash)
@@ -716,6 +718,7 @@ func (p *PostgresStore) InsertAssetEvidence(ctx context.Context, evidence *Asset
 	if evidence.Confidence == 0 {
 		evidence.Confidence = 1.0
 	}
+	evidence.RawData = jsonbSafeBytes(evidence.RawData)
 	_, err := p.pool.Exec(ctx,
 		`INSERT INTO asset_evidence (id, campaign_id, target_id, subject_id, type, value, source, raw_data, confidence, severity, status, reason, source_run_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -742,6 +745,7 @@ func (p *PostgresStore) InsertAssetEvent(ctx context.Context, event AssetEvent) 
 	if event.ID == "" {
 		event.ID = GenerateID("asset_event", event.AssetID, event.CampaignID, event.EventType, fmt.Sprintf("%d", time.Now().UnixNano()))
 	}
+	event.Details = jsonbSafeBytes(event.Details)
 	_, err := p.pool.Exec(ctx,
 		`INSERT INTO asset_events (id, asset_id, campaign_id, event_type, previous_hash, new_hash, source, target_id, details)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -791,6 +795,7 @@ func (p *PostgresStore) QueryAssetEvents(ctx context.Context, assetID, campaignI
 }
 
 func (p *PostgresStore) InsertRawEvent(ctx context.Context, e *RawEvent) error {
+	e.Data = jsonbSafeBytes(e.Data)
 	_, err := p.pool.Exec(ctx,
 		`INSERT INTO raw_events (id, campaign_id, artifact, target_id, target_value, target_type, workflow_id, data)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
@@ -1261,17 +1266,24 @@ func upsertWorkItemWith(ctx context.Context, exec sqlExecutor, item WorkItem) er
 					ELSE 'batch'
 				END,
 			status = CASE
-				WHEN work_items.status IN ('starting', 'running', 'completed') AND EXCLUDED.status = 'pending' THEN work_items.status
+				WHEN work_items.status IN ('starting', 'running', 'completed', 'skipped', 'cancelled', 'dead') AND EXCLUDED.status = 'pending' THEN work_items.status
 				ELSE EXCLUDED.status
 			END,
 			attempts = CASE
-				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('starting', 'running', 'completed') THEN EXCLUDED.attempts
+				WHEN EXCLUDED.status = 'pending' AND work_items.status NOT IN ('starting', 'running', 'completed', 'skipped', 'cancelled', 'dead') THEN EXCLUDED.attempts
 				WHEN EXCLUDED.attempts > work_items.attempts THEN EXCLUDED.attempts
 				ELSE work_items.attempts
 			END,
 			max_attempts = EXCLUDED.max_attempts,
-			workflow_id = CASE WHEN EXCLUDED.workflow_id <> '' THEN EXCLUDED.workflow_id ELSE work_items.workflow_id END,
-			error = EXCLUDED.error,
+			workflow_id = CASE
+				WHEN work_items.status IN ('completed', 'skipped', 'cancelled', 'dead') AND EXCLUDED.status = 'pending' THEN work_items.workflow_id
+				WHEN EXCLUDED.workflow_id <> '' THEN EXCLUDED.workflow_id
+				ELSE work_items.workflow_id
+			END,
+			error = CASE
+				WHEN work_items.status IN ('completed', 'skipped', 'cancelled', 'dead') AND EXCLUDED.status = 'pending' THEN work_items.error
+				ELSE EXCLUDED.error
+			END,
 			updated_at = NOW()`,
 		item.ID, item.CampaignID, item.BatchID, item.ParentID, item.Type, item.Target, item.Artifact, item.Queue, item.Input, item.Schedule,
 		item.Status, item.Attempts, item.MaxAttempts, item.WorkflowID, item.Error)
@@ -1946,31 +1958,27 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 	if limit <= 0 {
 		limit = 1000
 	}
+	// Do not reclaim starting/running rows by DB lease alone. Temporal may have
+	// accepted the child workflow while its activity is still queued.
 	query := `WITH stale AS (
 		SELECT id FROM work_items
-		WHERE (
-			(status IN ('starting', 'running')
-			  AND lease_expires_at IS NOT NULL
-			  AND lease_expires_at < NOW())
-			OR
-			(status IN ('failed', 'dead')
-			  AND (
-				LOWER(error) LIKE '%heartbeat timeout%' OR
-				LOWER(error) LIKE '%context canceled%' OR
-				LOWER(error) LIKE '%worker shutdown%' OR
-				LOWER(error) LIKE '%activity canceled%' OR
-				LOWER(error) LIKE '%child workflow execution already started%' OR
-				LOWER(error) LIKE '%workflow execution already started%'
-			  ))
-		)`
+		WHERE status IN ('failed', 'dead')
+		  AND (
+			LOWER(error) LIKE '%heartbeat timeout%' OR
+			LOWER(error) LIKE '%context canceled%' OR
+			LOWER(error) LIKE '%worker shutdown%' OR
+			LOWER(error) LIKE '%activity canceled%' OR
+			LOWER(error) LIKE '%child workflow execution already started%' OR
+			LOWER(error) LIKE '%workflow execution already started%'
+		  )`
 	args := []interface{}{}
 	argIdx := 1
 	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
-	query += fmt.Sprintf(` ORDER BY lease_expires_at ASC LIMIT $%d
+	query += fmt.Sprintf(` ORDER BY updated_at ASC LIMIT $%d
 	)
 	UPDATE work_items SET
 		status = 'pending',
-		error = 'lease expired; work item reclaimed',
+		error = 'recoverable execution failure; work item reclaimed',
 		workflow_id = '',
 		attempts = GREATEST(attempts - 1, 0),
 		heartbeat_at = NULL,
@@ -2014,6 +2022,42 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 		affected = append(affected, batch)
 	}
 	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
+}
+
+func (p *PostgresStore) ListExpiredRunningWorkItems(ctx context.Context, filter WorkItemFilter, limit int) ([]WorkItem, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	query := `SELECT id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
+		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz),
+		tail, COALESCE(tail_at, '0001-01-01'::timestamptz), tail_reason
+	FROM work_items
+	WHERE status IN ('starting', 'running')
+	  AND workflow_id <> ''
+	  AND lease_expires_at IS NOT NULL
+	  AND lease_expires_at < NOW()`
+	args := []interface{}{}
+	argIdx := 1
+	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
+	query += fmt.Sprintf(` ORDER BY lease_expires_at ASC LIMIT $%d`, argIdx)
+	args = append(args, limit)
+
+	rows, err := p.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []WorkItem
+	for rows.Next() {
+		var item WorkItem
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt, &item.Tail, &item.TailAt, &item.TailReason); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (p *PostgresStore) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
@@ -2501,6 +2545,47 @@ func rawDataHash(raw []byte) string {
 	}
 	hash := sha256.Sum256(canonical)
 	return hex.EncodeToString(hash[:])
+}
+
+func jsonbSafeBytes(raw []byte) []byte {
+	if len(raw) == 0 {
+		return raw
+	}
+	if !bytes.Contains(raw, []byte(`\u0000`)) && !bytes.Contains(raw, []byte{0}) {
+		return raw
+	}
+	var value interface{}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return bytes.ReplaceAll(raw, []byte{0}, nil)
+	}
+	value = jsonbSafeValue(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return bytes.ReplaceAll(raw, []byte{0}, nil)
+	}
+	return encoded
+}
+
+func jsonbSafeValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case string:
+		return strings.ReplaceAll(v, "\x00", "")
+	case []interface{}:
+		for i := range v {
+			v[i] = jsonbSafeValue(v[i])
+		}
+		return v
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for key, item := range v {
+			out[strings.ReplaceAll(key, "\x00", "")] = jsonbSafeValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func assetEventType(existed bool, previousHash, newHash string) string {

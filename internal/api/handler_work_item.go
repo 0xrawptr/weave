@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/recovery"
 	"github.com/gin-gonic/gin"
 )
 
@@ -279,12 +280,17 @@ func (s *Server) RecoverStaleWorkItems(c *gin.Context) {
 	if c.Request.Body != nil {
 		_ = c.ShouldBindJSON(&req)
 	}
-	result, err := s.repo.RecoverStaleWorkItems(c.Request.Context(), mergeWorkItemFilter(req), req.Limit)
+	result, expiredStatus, err := recovery.RecoverStaleAndExpiredRunning(c.Request.Context(), s.repo, s.temporal, mergeWorkItemFilter(req), req.Limit, nil)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusOK, gin.H{
+		"matched":                  result.Matched,
+		"updated":                  result.Updated,
+		"batches":                  result.Batches,
+		"expired_running_recovery": expiredStatus,
+	})
 }
 
 func mergeWorkItemRetryFilter(req WorkItemRetryAPIRequest) data.WorkItemFilter {

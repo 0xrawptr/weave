@@ -97,6 +97,13 @@ func (r *Repository) RecoverStaleWorkItems(ctx context.Context, filter WorkItemF
 	return r.Postgres.RecoverStaleWorkItems(ctx, filter, limit)
 }
 
+func (r *Repository) ListExpiredRunningWorkItems(ctx context.Context, filter WorkItemFilter, limit int) ([]WorkItem, error) {
+	if r == nil || r.Postgres == nil {
+		return nil, nil
+	}
+	return r.Postgres.ListExpiredRunningWorkItems(ctx, filter, limit)
+}
+
 func (r *Repository) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
 	if r == nil || r.Postgres == nil || len(workflowIDs) == 0 {
 		return WorkItemBulkResult{}, nil

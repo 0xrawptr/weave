@@ -225,6 +225,25 @@ func TestPlanFromStateFiltersPendingActions(t *testing.T) {
 	}
 }
 
+func TestPlanFromStateFiltersSkippedActions(t *testing.T) {
+	base := State{
+		Target:      "example.com",
+		URLs:        []string{"https://example.com"},
+		TemplateIDs: []string{"CVE-2020-14882"},
+	}
+	actions := PlanFromState(base)
+	nuclei := findAction(actions, "nuclei")
+	if nuclei == nil {
+		t.Fatalf("missing nuclei action: %#v", actions)
+	}
+
+	base.Actions = []data.ActionRecord{{ID: nuclei.ID, Status: data.WorkItemStatusSkipped}}
+	actions = PlanFromState(base)
+	if findAction(actions, "nuclei") != nil {
+		t.Fatalf("skipped action should be filtered: %#v", actions)
+	}
+}
+
 func TestPlanFromStateFiltersCoveredActionInputs(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"base_urls":     []string{"https://example.com"},

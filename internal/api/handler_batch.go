@@ -237,8 +237,12 @@ func statusFromWorkItemCounts(total int, counts map[string]int) string {
 	if len(counts) == 0 {
 		return ""
 	}
+	tailRunning := counts["tail_running"]
 	pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
-	running := counts[data.WorkItemStatusStarting] + counts[data.WorkItemStatusRunning]
+	running := counts[data.WorkItemStatusStarting] + counts[data.WorkItemStatusRunning] - tailRunning
+	if running < 0 {
+		running = 0
+	}
 	completed := counts[data.WorkItemStatusCompleted]
 	failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
 	cancelled := counts[data.WorkItemStatusCancelled]
@@ -252,7 +256,7 @@ func statusFromWorkItemCounts(total int, counts map[string]int) string {
 	if failed > 0 && completed == 0 {
 		return "failed"
 	}
-	if total > 0 && completed+failed+cancelled+skipped >= total {
+	if total > 0 && completed+failed+cancelled+skipped+tailRunning >= total {
 		return "completed"
 	}
 	return "running"

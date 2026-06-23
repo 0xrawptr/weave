@@ -107,6 +107,9 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 	if err := recoverStaleScheduledWorkItems(stateCtx, input); err != nil {
 		return result, err
 	}
+	if err := recoverExpiredRunningScheduledWorkItems(stateCtx, input); err != nil {
+		return result, err
+	}
 	if err := requeueRetryWaitingScheduledWorkItems(stateCtx, input); err != nil {
 		return result, err
 	}
@@ -1080,27 +1083,27 @@ func loadSchedulerSummaryFromSnapshot(snapshot data.WorkItemProgressSummary, inp
 	result.PreflightDone = preflight.ByStatus["completed"]
 	result.PreflightFailed = preflight.ByStatus["failed"] + preflight.ByStatus["dead"]
 	result.PreflightPending = preflight.ByStatus["pending"] + preflight.ByStatus["retry_waiting"] + preflight.ByStatus["paused"]
-	result.PreflightRunning = preflight.ByStatus["starting"] + preflight.ByStatus["running"]
+	result.PreflightRunning = preflight.ByStatus["starting"] + nonTailRunning(preflight.ByStatus)
 	portscan := schedulerSummaryForType(snapshot, "portscan_chunk")
 	result.PortScanTotal = portscan.Total
 	result.PortScanDone = portscan.ByStatus["completed"]
 	result.PortScanFailed = portscan.ByStatus["failed"] + portscan.ByStatus["dead"]
 	result.PortScanPending = portscan.ByStatus["pending"] + portscan.ByStatus["retry_waiting"] + portscan.ByStatus["paused"]
-	result.PortScanRunning = portscan.ByStatus["starting"] + portscan.ByStatus["running"]
+	result.PortScanRunning = portscan.ByStatus["starting"] + nonTailRunning(portscan.ByStatus)
 	if input.BatchInput.RunPlannedDAG {
 		followUp := schedulerSummaryForType(snapshot, "planned_dag_followup")
 		result.FollowUpTotal = followUp.Total
 		result.FollowUpDone = followUp.ByStatus["completed"]
 		result.FollowUpFailed = followUp.ByStatus["failed"] + followUp.ByStatus["dead"]
 		result.FollowUpPending = followUp.ByStatus["pending"] + followUp.ByStatus["retry_waiting"] + followUp.ByStatus["paused"]
-		result.FollowUpRunning = followUp.ByStatus["starting"] + followUp.ByStatus["running"]
+		result.FollowUpRunning = followUp.ByStatus["starting"] + nonTailRunning(followUp.ByStatus)
 		for _, itemType := range scheduledActionItemTypes() {
 			phaseSummary := schedulerSummaryForType(snapshot, itemType)
 			result.ActionTotal += phaseSummary.Total
 			result.ActionDone += phaseSummary.ByStatus["completed"] + phaseSummary.ByStatus["skipped"]
 			result.ActionFailed += phaseSummary.ByStatus["failed"] + phaseSummary.ByStatus["dead"]
 			result.ActionPending += phaseSummary.ByStatus["pending"] + phaseSummary.ByStatus["retry_waiting"] + phaseSummary.ByStatus["paused"]
-			result.ActionRunning += phaseSummary.ByStatus["starting"] + phaseSummary.ByStatus["running"]
+			result.ActionRunning += phaseSummary.ByStatus["starting"] + nonTailRunning(phaseSummary.ByStatus)
 		}
 	}
 }
@@ -1137,6 +1140,17 @@ func schedulerArtifactForType(itemType string) string {
 func recoverStaleScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
 	var result data.WorkItemBulkResult
 	return workflow.ExecuteActivity(ctx, planner.RecoverStaleWorkItemsActivityName, planner.RecoverStaleWorkItemsRequest{
+		Filter: data.WorkItemFilter{
+			CampaignID: input.BatchInput.CampaignID,
+			BatchID:    input.BatchID,
+		},
+		Limit: 1000,
+	}).Get(ctx, &result)
+}
+
+func recoverExpiredRunningScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInput) error {
+	var result data.WorkItemBulkResult
+	return workflow.ExecuteActivity(ctx, planner.RecoverExpiredRunningWorkItemsActivityName, planner.RecoverStaleWorkItemsRequest{
 		Filter: data.WorkItemFilter{
 			CampaignID: input.BatchInput.CampaignID,
 			BatchID:    input.BatchID,

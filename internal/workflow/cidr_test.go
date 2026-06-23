@@ -256,6 +256,17 @@ func TestSchedulerPhaseIgnoresBackgroundTailWork(t *testing.T) {
 	}
 }
 
+func TestScheduledBatchStatusIgnoresTailOnlyRunning(t *testing.T) {
+	result := &SchedulerWorkflowResult{
+		PortScanTotal:   10,
+		PortScanDone:    10,
+		PortScanRunning: 0,
+	}
+	if got := scheduledBatchStatus(result); got != "completed" {
+		t.Fatalf("status = %q, want completed", got)
+	}
+}
+
 func TestNormalizeCampaignPhase(t *testing.T) {
 	tests := map[string]string{
 		"":             CampaignPhaseAuto,

@@ -13,6 +13,7 @@ import (
 	"github.com/0xrawptr/weave/internal/app"
 	"github.com/0xrawptr/weave/internal/config"
 	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/recovery"
 	appruntime "github.com/0xrawptr/weave/internal/runtime"
 	"github.com/0xrawptr/weave/internal/workflow"
 
@@ -42,7 +43,6 @@ func main() {
 	}
 	defer c.Close()
 	lastReconciled := map[string]time.Time{}
-	cleanupOpenSchedulerWorkflows(ctx, runtimeApp, c, cfg, lastReconciled)
 	recoverExpiredRunningItems(ctx, runtimeApp, c, cfg, lastReconciled)
 	reconcileOpenBatchSchedulers(ctx, runtimeApp, c, cfg, lastReconciled, "startup_reconcile")
 	recoveryCtx, stopRecovery := context.WithCancel(ctx)
@@ -51,7 +51,7 @@ func main() {
 
 	var workers []sdkworker.Worker
 	controlWorker := sdkworker.New(c, cfg.Temporal.TaskQueue, workerOptions(cfg.Temporal.Workers.Control, false))
-	appruntime.ConfigureControlWorker(controlWorker, runtimeApp)
+	appruntime.ConfigureControlWorker(controlWorker, runtimeApp, c)
 	workers = append(workers, controlWorker)
 
 	for _, info := range runtimeApp.Registry.List() {
@@ -84,7 +84,7 @@ func recoverExpiredRunningItems(ctx context.Context, runtimeApp *app.App, tempor
 	if runtimeApp == nil || runtimeApp.Repo == nil {
 		return
 	}
-	result, err := runtimeApp.Repo.RecoverStaleWorkItems(ctx, data.WorkItemFilter{}, 10000)
+	result, err := recoverExpiredRunningItemsOnce(ctx, runtimeApp, temporalClient)
 	if err != nil {
 		log.Printf("WARNING: startup stale work item recovery failed: %v", err)
 		return
@@ -169,7 +169,7 @@ func runWorkItemRecoveryController(ctx context.Context, runtimeApp *app.App, tem
 			return
 		case <-ticker.C:
 			ticks++
-			result, err := recoverExpiredRunningItemsOnce(ctx, runtimeApp)
+			result, err := recoverExpiredRunningItemsOnce(ctx, runtimeApp, temporalClient)
 			if err != nil {
 				log.Printf("WARNING: work item recovery controller failed: %v", err)
 				continue
@@ -185,11 +185,14 @@ func runWorkItemRecoveryController(ctx context.Context, runtimeApp *app.App, tem
 	}
 }
 
-func recoverExpiredRunningItemsOnce(ctx context.Context, runtimeApp *app.App) (data.WorkItemBulkResult, error) {
+func recoverExpiredRunningItemsOnce(ctx context.Context, runtimeApp *app.App, temporalClient client.Client) (data.WorkItemBulkResult, error) {
 	if runtimeApp == nil || runtimeApp.Repo == nil {
 		return data.WorkItemBulkResult{}, nil
 	}
-	return runtimeApp.Repo.RecoverStaleWorkItems(ctx, data.WorkItemFilter{}, 10000)
+	result, _, err := recovery.RecoverStaleAndExpiredRunning(ctx, runtimeApp.Repo, temporalClient, data.WorkItemFilter{}, 10000, func(workflowID, workItemID string, err error) {
+		log.Printf("WARNING: temporal orphan check failed: workflow=%s work_item=%s err=%v", workflowID, workItemID, err)
+	})
+	return result, err
 }
 
 func resumeRecoveredSchedulers(ctx context.Context, runtimeApp *app.App, temporalClient client.Client, cfg *config.Config, batches []data.WorkItemBulkBatch, reason string, last map[string]time.Time) {

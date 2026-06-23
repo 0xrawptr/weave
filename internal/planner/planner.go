@@ -631,7 +631,7 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 
 func blocksActionStatus(status string) bool {
 	switch status {
-	case data.WorkItemStatusPending, data.WorkItemStatusStarting, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused:
+	case data.WorkItemStatusPending, data.WorkItemStatusStarting, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused, data.WorkItemStatusSkipped:
 		return true
 	default:
 		return false

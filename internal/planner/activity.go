@@ -6,7 +6,9 @@ import (
 
 	"github.com/0xrawptr/weave/internal/admission"
 	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/recovery"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
 )
 
 const PlanDAGTargetActivityName = "plan_dag_target"
@@ -25,12 +27,14 @@ const GetCampaignStatusActivityName = "get_campaign_status"
 const SchedulerSnapshotActivityName = "scheduler_snapshot"
 const UpdateSchedulerCapacityActivityName = "update_scheduler_capacity"
 const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
+const RecoverExpiredRunningWorkItemsActivityName = "recover_expired_running_work_items"
 const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_items"
 const MarkTailWorkItemsActivityName = "mark_tail_work_items"
 
 type Activity struct {
 	planner         *Planner
 	syncSDKCapacity func([]data.SchedulerCapacity)
+	temporal        client.Client
 }
 
 func NewActivity(repo *data.Repository) *Activity {
@@ -39,6 +43,10 @@ func NewActivity(repo *data.Repository) *Activity {
 
 func NewActivityWithSDKCapacitySync(repo *data.Repository, sync func([]data.SchedulerCapacity)) *Activity {
 	return &Activity{planner: New(repo), syncSDKCapacity: sync}
+}
+
+func NewActivityWithRuntime(repo *data.Repository, sync func([]data.SchedulerCapacity), temporalClient client.Client) *Activity {
+	return &Activity{planner: New(repo), syncSDKCapacity: sync, temporal: temporalClient}
 }
 
 type PlanDAGRequest struct {
@@ -333,6 +341,17 @@ func (a *Activity) RecoverStaleWorkItems(ctx context.Context, request RecoverSta
 		return data.WorkItemBulkResult{}, nil
 	}
 	return a.planner.repo.RecoverStaleWorkItems(ctx, request.Filter, request.Limit)
+}
+
+func (a *Activity) RecoverExpiredRunningWorkItems(ctx context.Context, request RecoverStaleWorkItemsRequest) (data.WorkItemBulkResult, error) {
+	if a == nil || a.planner == nil || a.planner.repo == nil || a.temporal == nil {
+		return data.WorkItemBulkResult{}, nil
+	}
+	logger := activity.GetLogger(ctx)
+	result, _, err := recovery.RecoverExpiredRunningOrphans(ctx, a.planner.repo, a.temporal, request.Filter, request.Limit, func(workflowID, workItemID string, err error) {
+		logger.Warn("temporal orphan check failed", "workflow_id", workflowID, "work_item_id", workItemID, "error", err)
+	})
+	return result, err
 }
 
 type RequeueRetryWaitingWorkItemsRequest struct {

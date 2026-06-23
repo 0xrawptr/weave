@@ -1,6 +1,10 @@
 package api
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/0xrawptr/weave/internal/data"
+)
 
 func TestSplitTargetList(t *testing.T) {
 	got := splitTargetList("114.247.80.0/23\n111.205.118.32/27, 127.0.0.1 127.0.0.1")
@@ -25,5 +29,16 @@ func TestCleanStringSlice(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("cleanStringSlice[%d] = %q, want %q: %#v", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestStatusFromWorkItemCountsIgnoresTailRunning(t *testing.T) {
+	counts := map[string]int{
+		data.WorkItemStatusCompleted: 9,
+		data.WorkItemStatusRunning:   1,
+		"tail_running":               1,
+	}
+	if got := statusFromWorkItemCounts(10, counts); got != "completed" {
+		t.Fatalf("status = %q, want completed", got)
 	}
 }

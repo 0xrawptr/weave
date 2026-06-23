@@ -1,6 +1,8 @@
 package data
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -168,6 +170,36 @@ func TestRawDataHashEmpty(t *testing.T) {
 	}
 	if got := rawDataHash([]byte{}); got != "" {
 		t.Fatalf("expected empty hash for empty raw data, got %q", got)
+	}
+}
+
+func TestJSONBSafeBytesKeepsChineseText(t *testing.T) {
+	raw := []byte(`{"title":"\u4e2d\u6587\u6807\u9898"}`)
+	got := jsonbSafeBytes(raw)
+	if string(got) != string(raw) {
+		t.Fatalf("expected unchanged JSON without NUL, got %s", got)
+	}
+}
+
+func TestJSONBSafeBytesRemovesNULFromStrings(t *testing.T) {
+	raw := []byte(`{"title":"嘉华\u0000在线","nested":["云\u0000资源"],"bad\u0000key":"ok"}`)
+	got := jsonbSafeBytes(raw)
+	if string(got) == string(raw) {
+		t.Fatal("expected JSON to be sanitized")
+	}
+	if bytes.Contains(got, []byte(`\u0000`)) {
+		t.Fatalf("expected no escaped NUL in %s", got)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("expected sanitized JSON to decode: %v", err)
+	}
+	if decoded["title"] != "嘉华在线" {
+		t.Fatalf("unexpected title: %#v", decoded["title"])
+	}
+	if _, ok := decoded["badkey"]; !ok {
+		t.Fatalf("expected sanitized key in %#v", decoded)
 	}
 }
 

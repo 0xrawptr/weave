@@ -16,12 +16,13 @@ import (
 	"github.com/0xrawptr/weave/internal/workflow"
 	sdktypes "github.com/chainreactors/sdk/pkg/types"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
 	sdkworker "go.temporal.io/sdk/worker"
 )
 
-func ConfigureControlWorker(w sdkworker.Worker, runtimeApp *app.App) {
+func ConfigureControlWorker(w sdkworker.Worker, runtimeApp *app.App, temporalClient client.Client) {
 	repo := runtimeApp.Repo
-	registerPlannerActivities(w, repo, runtimeApp.SyncSDKCapacityWithLog)
+	registerPlannerActivities(w, repo, runtimeApp.SyncSDKCapacityWithLog, temporalClient)
 	registerWorkflows(w)
 }
 
@@ -344,8 +345,8 @@ func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target, 
 	}
 }
 
-func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSDKCapacity func([]data.SchedulerCapacity)) {
-	planActivity := planner.NewActivityWithSDKCapacitySync(repo, syncSDKCapacity)
+func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSDKCapacity func([]data.SchedulerCapacity), temporalClient client.Client) {
+	planActivity := planner.NewActivityWithRuntime(repo, syncSDKCapacity, temporalClient)
 	w.RegisterActivityWithOptions(planActivity.PlanDAGTarget, activity.RegisterOptions{Name: planner.PlanDAGTargetActivityName})
 	w.RegisterActivityWithOptions(planActivity.ClaimAction, activity.RegisterOptions{Name: planner.ClaimActionActivityName})
 	w.RegisterActivityWithOptions(planActivity.CompleteAction, activity.RegisterOptions{Name: planner.CompleteActionActivityName})
@@ -362,6 +363,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSD
 	w.RegisterActivityWithOptions(planActivity.SchedulerSnapshot, activity.RegisterOptions{Name: planner.SchedulerSnapshotActivityName})
 	w.RegisterActivityWithOptions(planActivity.UpdateSchedulerCapacity, activity.RegisterOptions{Name: planner.UpdateSchedulerCapacityActivityName})
 	w.RegisterActivityWithOptions(planActivity.RecoverStaleWorkItems, activity.RegisterOptions{Name: planner.RecoverStaleWorkItemsActivityName})
+	w.RegisterActivityWithOptions(planActivity.RecoverExpiredRunningWorkItems, activity.RegisterOptions{Name: planner.RecoverExpiredRunningWorkItemsActivityName})
 	w.RegisterActivityWithOptions(planActivity.RequeueRetryWaitingWorkItems, activity.RegisterOptions{Name: planner.RequeueRetryWaitingWorkItemsActivityName})
 	w.RegisterActivityWithOptions(planActivity.MarkTailWorkItems, activity.RegisterOptions{Name: planner.MarkTailWorkItemsActivityName})
 	log.Printf("registered activity: %s", planner.PlanDAGTargetActivityName)
@@ -380,6 +382,7 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSD
 	log.Printf("registered activity: %s", planner.SchedulerSnapshotActivityName)
 	log.Printf("registered activity: %s", planner.UpdateSchedulerCapacityActivityName)
 	log.Printf("registered activity: %s", planner.RecoverStaleWorkItemsActivityName)
+	log.Printf("registered activity: %s", planner.RecoverExpiredRunningWorkItemsActivityName)
 	log.Printf("registered activity: %s", planner.RequeueRetryWaitingWorkItemsActivityName)
 	log.Printf("registered activity: %s", planner.MarkTailWorkItemsActivityName)
 }
