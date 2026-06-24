@@ -106,14 +106,9 @@ func actionWorkItemInputFromDAGNode(node planner.DAGPlanNode, target string, act
 }
 
 func actionWorkItemType(artifactName string) string {
-	switch artifactName {
-	case "fingers":
-		return "fingers_action"
-	case "spray":
-		return "spray_shard"
-	case "nuclei":
-		return "nuclei_group"
-	default:
+	def, ok := data.WorkItemDefinitionForArtifact(artifactName)
+	if !ok || !def.Action {
 		return ""
 	}
+	return def.Type
 }

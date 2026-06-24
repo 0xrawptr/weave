@@ -34,8 +34,8 @@ type Decision struct {
 }
 
 const (
-	ScheduleNow   = "now"
-	ScheduleBatch = "batch"
+	ScheduleNow   = data.ScheduleNow
+	ScheduleBatch = data.ScheduleBatch
 )
 
 type Planner struct {
@@ -43,7 +43,6 @@ type Planner struct {
 }
 
 type ActionSpec struct {
-	Artifact      string
 	Stage         int
 	DefaultReason string
 	DefaultNow    func(Action) (string, bool)
@@ -51,19 +50,12 @@ type ActionSpec struct {
 }
 
 var actionSpecs = map[string]ActionSpec{
-	"gogo": {
-		Artifact:      "gogo",
-		Stage:         10,
-		DefaultReason: "surface discovery",
-	},
 	"fingers": {
-		Artifact:      "fingers",
 		Stage:         20,
 		DefaultReason: "fingerprint enrichment",
 		ValidateInput: requireActionInput("urls", "fingers requires urls"),
 	},
 	"spray": {
-		Artifact:      "spray",
 		Stage:         30,
 		DefaultReason: "surface discovery",
 		ValidateInput: func(action Action) string {
@@ -74,17 +66,10 @@ var actionSpecs = map[string]ActionSpec{
 		},
 	},
 	"nuclei": {
-		Artifact:      "nuclei",
 		Stage:         40,
 		DefaultReason: "verification can run in batch",
 		DefaultNow:    vulnerabilityEvidenceSchedule,
 		ValidateInput: validateNucleiActionInput,
-	},
-	"neutron": {
-		Artifact:      "neutron",
-		Stage:         40,
-		DefaultReason: "verification can run in batch",
-		DefaultNow:    vulnerabilityEvidenceSchedule,
 	},
 }
 
@@ -444,7 +429,7 @@ func actionDependsOn(action Action, byArtifact map[string][]string) []string {
 		} else {
 			add(byArtifact["gogo"])
 		}
-	case "nuclei", "neutron":
+	case "nuclei":
 		add(byArtifact["fingers"])
 		add(byArtifact["spray"])
 	}
@@ -464,7 +449,7 @@ func actionRunIf(action Action) *ConditionRequest {
 		}
 	case "spray":
 		return nil
-	case "nuclei", "neutron":
+	case "nuclei":
 		return &ConditionRequest{
 			Target:     action.Target,
 			CampaignID: action.CampaignID,
@@ -527,14 +512,14 @@ func decisionForAction(action Action) Decision {
 	if spec, ok := actionSpecs[action.Artifact]; ok {
 		if spec.DefaultNow != nil {
 			if reason, ok := spec.DefaultNow(action); ok {
-				return Decision{Schedule: ScheduleNow, Reason: reason}
+				return Decision{Schedule: data.ScheduleNow, Reason: reason}
 			}
 		}
 		if spec.DefaultReason != "" {
-			return Decision{Schedule: ScheduleBatch, Reason: spec.DefaultReason}
+			return Decision{Schedule: data.ScheduleBatch, Reason: spec.DefaultReason}
 		}
 	}
-	return Decision{Schedule: ScheduleBatch, Reason: "default batch schedule"}
+	return Decision{Schedule: data.ScheduleBatch, Reason: "default batch schedule"}
 }
 
 func requireActionInput(field, reason string) func(Action) string {
@@ -568,9 +553,9 @@ func vulnerabilityEvidenceSchedule(action Action) (string, bool) {
 
 func scheduleRank(schedule string) int {
 	switch schedule {
-	case ScheduleNow:
+	case data.ScheduleNow:
 		return 1
-	case ScheduleBatch, "":
+	case data.ScheduleBatch, "":
 		return 0
 	default:
 		return 0
@@ -615,7 +600,7 @@ func filterBlockedActions(actions []Action, records []data.ActionRecord) []Actio
 	blocked := make(map[string]bool, len(records))
 	blockedDedup := make(map[string]bool, len(records))
 	for _, record := range records {
-		if blocksActionStatus(record.Status) {
+		if data.PlannerBlockingActionStatus(record.Status) {
 			blocked[record.ID] = true
 			if dedup := recordDedupKey(record); dedup != "" {
 				blockedDedup[dedup] = true
@@ -656,7 +641,7 @@ func withoutCoveredValues(values []string, records []data.ActionRecord, artifact
 	}
 	covered := make(map[string]bool)
 	for _, record := range records {
-		if record.Artifact != artifact || !blocksActionStatus(record.Status) {
+		if record.Artifact != artifact || !data.PlannerBlockingActionStatus(record.Status) {
 			continue
 		}
 		for _, value := range recordInputStrings(record, field) {
@@ -703,15 +688,6 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 	return data.ActionInputStrings(nested, field)
 }
 
-func blocksActionStatus(status string) bool {
-	switch status {
-	case data.WorkItemStatusPending, data.WorkItemStatusRunning, data.WorkItemStatusCompleted, data.WorkItemStatusRetryWaiting, data.WorkItemStatusPaused, data.WorkItemStatusSkipped:
-		return true
-	default:
-		return false
-	}
-}
-
 func actionRecordsFromWorkItems(items []data.WorkItem) []data.ActionRecord {
 	records := make([]data.ActionRecord, 0, len(items))
 	for _, item := range items {
@@ -724,7 +700,7 @@ func actionRecordsFromWorkItems(items []data.WorkItem) []data.ActionRecord {
 }
 
 func actionRecordFromWorkItem(item data.WorkItem) (data.ActionRecord, bool) {
-	if !blocksActionStatus(item.Status) || item.Artifact == "" || len(item.Input) == 0 {
+	if !data.PlannerBlockingActionStatus(item.Status) || item.Artifact == "" || len(item.Input) == 0 {
 		return data.ActionRecord{}, false
 	}
 	var envelope struct {

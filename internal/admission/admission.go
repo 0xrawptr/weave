@@ -108,7 +108,7 @@ func parseEnvelope(item data.WorkItem) workItemEnvelope {
 func blockingKeys(items []data.WorkItem) map[string]bool {
 	seen := make(map[string]bool, len(items)*2)
 	for _, item := range items {
-		if !blocks(item.Status) {
+		if !data.AdmissionBlockingWorkItemStatus(item.Status) {
 			continue
 		}
 		rememberExistingBlockingKeys(seen, item)
@@ -149,21 +149,6 @@ func actionPreciseKey(item data.WorkItem, envelope workItemEnvelope) string {
 		return base
 	}
 	return strings.Join([]string{base, "shard", strconv.Itoa(envelope.ShardIndex)}, "\x00")
-}
-
-func blocks(status string) bool {
-	switch status {
-	case data.WorkItemStatusPending,
-		data.WorkItemStatusRunning,
-		// Completed work blocks the same action dedup key so a successful
-		// action is not repeated by later scheduler reconciliation.
-		data.WorkItemStatusCompleted,
-		data.WorkItemStatusRetryWaiting,
-		data.WorkItemStatusPaused:
-		return true
-	default:
-		return false
-	}
 }
 
 func requiresApproval(item data.WorkItem, envelope workItemEnvelope) bool {

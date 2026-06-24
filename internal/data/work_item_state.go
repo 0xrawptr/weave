@@ -66,3 +66,43 @@ func TerminalWorkItemStatus(status string) bool {
 		return false
 	}
 }
+
+func OpenWorkItemStatus(status string) bool {
+	switch status {
+	case WorkItemStatusPending, WorkItemStatusRunning, WorkItemStatusRetryWaiting, WorkItemStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Admission blocking statuses prevent duplicate work from being admitted once
+// equivalent work is queued, active, retryable, paused, or already completed.
+func AdmissionBlockingWorkItemStatus(status string) bool {
+	switch status {
+	case WorkItemStatusPending,
+		WorkItemStatusRunning,
+		WorkItemStatusCompleted,
+		WorkItemStatusRetryWaiting,
+		WorkItemStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Planner blocking statuses suppress equivalent follow-up actions that are
+// already planned, active, completed, retryable, paused, or intentionally skipped.
+func PlannerBlockingActionStatus(status string) bool {
+	switch status {
+	case WorkItemStatusPending,
+		WorkItemStatusRunning,
+		WorkItemStatusCompleted,
+		WorkItemStatusRetryWaiting,
+		WorkItemStatusPaused,
+		WorkItemStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}

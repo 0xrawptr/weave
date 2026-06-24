@@ -40,6 +40,27 @@ func TestValidWorkItemStatus(t *testing.T) {
 	}
 }
 
+func TestWorkItemStatusPredicates(t *testing.T) {
+	if !OpenWorkItemStatus(WorkItemStatusPending) || !OpenWorkItemStatus(WorkItemStatusRunning) || !OpenWorkItemStatus(WorkItemStatusRetryWaiting) || !OpenWorkItemStatus(WorkItemStatusPaused) {
+		t.Fatalf("expected pending/running/retry_waiting/paused to be open")
+	}
+	if OpenWorkItemStatus(WorkItemStatusCompleted) || OpenWorkItemStatus(WorkItemStatusSkipped) {
+		t.Fatalf("completed/skipped should not be open")
+	}
+	if !AdmissionBlockingWorkItemStatus(WorkItemStatusCompleted) {
+		t.Fatalf("completed work should block admission dedup")
+	}
+	if AdmissionBlockingWorkItemStatus(WorkItemStatusSkipped) {
+		t.Fatalf("skipped work should not block admission dedup")
+	}
+	if !PlannerBlockingActionStatus(WorkItemStatusSkipped) {
+		t.Fatalf("skipped action should block planner coverage")
+	}
+	if PlannerBlockingActionStatus(WorkItemStatusDead) {
+		t.Fatalf("dead action should not block planner coverage")
+	}
+}
+
 func TestRecoverableWorkItemExecutionError(t *testing.T) {
 	for _, message := range []string{
 		"activity heartbeat timeout",

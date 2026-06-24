@@ -111,7 +111,7 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 	out := make([]RuntimePlanItem, 0, len(runtimePlanDefinitions()))
 	for _, def := range runtimePlanDefinitions() {
 		group := groups[def.Type]
-		allowed := runtimeTypeAllowedInPhase(phase, def.Type)
+		allowed := WorkItemTypeAllowedInPhase(phase, def.Type)
 		item := RuntimePlanItem{
 			Type:              def.Type,
 			Queue:             def.Queue,
@@ -121,7 +121,7 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 			Allowed:           allowed,
 		}
 		item.State, item.Reason = runtimePlanState(item, group, phase)
-		if !allowed && openWorkItemGroup(group) > 0 {
+		if !allowed && OpenWorkItemGroup(group) > 0 {
 			item.NextPhase = def.Phase
 			item.BlockingReason = "waiting for " + def.Phase + " phase"
 		}
@@ -130,12 +130,8 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 	return out
 }
 
-func runtimeTypeAllowedInPhase(phase, itemType string) bool {
-	return WorkItemTypeAllowedInPhase(phase, itemType)
-}
-
 func runtimePlanState(item RuntimePlanItem, group WorkItemGroupSummary, phase string) (string, string) {
-	open := openWorkItemGroup(group)
+	open := OpenWorkItemGroup(group)
 	if item.StalledRunning > 0 {
 		return "blocked", "running work has no valid progress heartbeat"
 	}
@@ -208,7 +204,7 @@ func runtimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePlanItem)
 		if len(allowedQueues) > 0 && !allowedQueues[group.Key] {
 			continue
 		}
-		open := openWorkItemGroup(group)
+		open := OpenWorkItemGroup(group)
 		if open == 0 {
 			continue
 		}
@@ -264,7 +260,7 @@ func capacityDecisionSnapshots(capacities []SchedulerCapacity) []SchedulerCapaci
 func slowRuntimeTargets(groups []WorkItemGroupSummary) []TargetRuntimeState {
 	candidates := make([]WorkItemGroupSummary, 0, len(groups))
 	for _, group := range groups {
-		if openWorkItemGroup(group) > 0 || group.Error > 0 {
+		if OpenWorkItemGroup(group) > 0 || group.Error > 0 {
 			candidates = append(candidates, group)
 		}
 	}
@@ -517,8 +513,4 @@ func runtimeETA(summary WorkItemProgressSummary) ETARuntimeState {
 		return ETARuntimeState{Seconds: summary.ETASeconds, Confidence: "low", Reason: "based on average duration and active worker count"}
 	}
 	return ETARuntimeState{Seconds: summary.ETASeconds, Confidence: "low", Reason: "limited runtime history"}
-}
-
-func openWorkItemGroup(group WorkItemGroupSummary) int {
-	return group.Pending + group.Running + group.RetryWaiting + group.Paused
 }

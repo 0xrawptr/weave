@@ -216,14 +216,15 @@ func campaignPaused(ctx workflow.Context, campaignID string) (bool, error) {
 }
 
 func portScanChunkWorkItem(batchID string, input BatchPortScanInput, chunk batchPortScanChunk, workflowID, status, errorMessage string, schedule string) data.WorkItem {
+	itemType := data.WorkItemTypePortscanChunk
 	return data.WorkItem{
 		ID:          portScanChunkWorkItemID(batchID, chunk.Chunk),
 		CampaignID:  input.CampaignID,
 		BatchID:     batchID,
-		Type:        "portscan_chunk",
+		Type:        itemType,
 		Target:      chunk.Chunk,
-		Artifact:    "gogo",
-		Queue:       "portscan",
+		Artifact:    data.WorkItemArtifactForType(itemType),
+		Queue:       data.WorkItemQueueForType(itemType),
 		Input:       mustMarshal(map[string]interface{}{"ip": chunk.Chunk, "ports": input.Ports, "source_target": chunk.Target}),
 		Schedule:    data.NormalizeSchedule(schedule),
 		Status:      status,
@@ -234,14 +235,15 @@ func portScanChunkWorkItem(batchID string, input BatchPortScanInput, chunk batch
 }
 
 func dnsPreflightWorkItem(batchID string, input BatchPortScanInput, chunk batchPortScanChunk, workflowID, status, errorMessage string, schedule string) data.WorkItem {
+	itemType := data.WorkItemTypeDNSPreflight
 	return data.WorkItem{
 		ID:          dnsPreflightWorkItemID(batchID, chunk.Chunk),
 		CampaignID:  input.CampaignID,
 		BatchID:     batchID,
-		Type:        "dns_preflight",
+		Type:        itemType,
 		Target:      chunk.Chunk,
-		Artifact:    "dns_preflight",
-		Queue:       "dns",
+		Artifact:    data.WorkItemArtifactForType(itemType),
+		Queue:       data.WorkItemQueueForType(itemType),
 		Input:       mustMarshal(map[string]interface{}{"target": chunk.Chunk, "source_target": chunk.Target}),
 		Schedule:    data.NormalizeSchedule(schedule),
 		Status:      status,
@@ -252,18 +254,18 @@ func dnsPreflightWorkItem(batchID string, input BatchPortScanInput, chunk batchP
 }
 
 func portScanChunkWorkItemID(batchID, chunk string) string {
-	return data.GenerateID("work_item", batchID, "portscan_chunk", chunk)
+	return data.GenerateID("work_item", batchID, data.WorkItemTypePortscanChunk, chunk)
 }
 
 func dnsPreflightWorkItemID(batchID, chunk string) string {
-	return data.GenerateID("work_item", batchID, "dns_preflight", chunk)
+	return data.GenerateID("work_item", batchID, data.WorkItemTypeDNSPreflight, chunk)
 }
 
 func plannedDAGFollowUpWorkItemID(batchID, chunk string, iteration int) string {
 	if iteration <= 0 {
 		iteration = 1
 	}
-	return data.GenerateID("work_item", batchID, "planned_dag_followup", chunk, fmt.Sprintf("%d", iteration))
+	return data.GenerateID("work_item", batchID, data.WorkItemTypePlannedDAGFollowUp, chunk, fmt.Sprintf("%d", iteration))
 }
 
 func shouldRunDNSPreflight(chunk batchPortScanChunk) bool {

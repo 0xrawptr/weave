@@ -177,6 +177,27 @@ func TestApplyDecisionSuppressesInvalidArtifactInputs(t *testing.T) {
 	}
 }
 
+func TestActionSpecsMatchSchedulableWorkItemDefinitions(t *testing.T) {
+	for artifact := range actionSpecs {
+		def, ok := data.WorkItemDefinitionForArtifact(artifact)
+		if !ok {
+			t.Fatalf("action spec %q has no work item definition", artifact)
+		}
+		if !def.Action {
+			t.Fatalf("action spec %q maps to non-action work item type %q", artifact, def.Type)
+		}
+	}
+
+	for _, def := range data.WorkItemDefinitions() {
+		if !def.Action {
+			continue
+		}
+		if _, ok := actionSpecs[def.Artifact]; !ok {
+			t.Fatalf("action work item type %q artifact %q has no planner action spec", def.Type, def.Artifact)
+		}
+	}
+}
+
 func TestPlanFromStateKeepsNonHTTPServicesForNucleiOnly(t *testing.T) {
 	actions := PlanFromState(State{
 		Target:       "127.0.0.1",
