@@ -180,7 +180,7 @@ func TestRuntimeRunningWorkIsVisibleAndBlocking(t *testing.T) {
 func TestNoProgressRunningUsesDurationThreshold(t *testing.T) {
 	stalled := WorkItemGroupSummary{
 		Running:                1,
-		OldestRunningStartedAt: time.Now().Add(-20 * time.Minute).Format(time.RFC3339),
+		OldestRunningStartedAt: time.Now().Add(-3 * time.Minute).Format(time.RFC3339),
 		AvgDurationMs:          1000,
 	}
 	if got := noProgressRunning(stalled); got != 1 {

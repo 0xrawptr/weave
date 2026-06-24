@@ -42,6 +42,29 @@ func TestDecideSchedulerCapacityHalvesOnArtifactErrorRate(t *testing.T) {
 	if got.EffectiveCapacity != 2 || got.ErrorRatePercent != 60 || got.LastDecision != "decrease" {
 		t.Fatalf("capacity = %#v, want error-rate decrease to 2", got)
 	}
+	if got.DecisionReason != "artifact stat error rate above policy" {
+		t.Fatalf("reason = %q, want artifact stat error rate", got.DecisionReason)
+	}
+	if got.SnapshotKind == "" || got.SnapshotNote == "" {
+		t.Fatalf("snapshot metadata missing: %#v", got)
+	}
+}
+
+func TestDecideSchedulerCapacityHalvesOnWorkItemErrorRate(t *testing.T) {
+	policy := SchedulerCapacityPolicy{Queue: "spray", Artifact: "spray", Min: 1, Initial: 3, Max: 6, SlowMs: 120_000, ErrorLimit: 25}
+	got := decideSchedulerCapacity(
+		SchedulerCapacityUpdateRequest{CampaignID: "c1", BatchID: "b1"},
+		policy,
+		SchedulerCapacity{EffectiveCapacity: 4},
+		WorkItemGroupSummary{Pending: 20, Running: 4, Completed: 1, Failed: 1, Dead: 1},
+		ArtifactStatSummary{Requests: 0, Errors: 10},
+	)
+	if got.EffectiveCapacity != 2 || got.LastDecision != "decrease" {
+		t.Fatalf("capacity = %#v, want work item error-rate decrease to 2", got)
+	}
+	if got.DecisionReason != "work item error rate above policy" {
+		t.Fatalf("reason = %q, want work item error rate", got.DecisionReason)
+	}
 }
 
 func TestSchedulerCapacityPoliciesComeFromProfiles(t *testing.T) {

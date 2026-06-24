@@ -11,20 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type WorkItemRetryAPIRequest struct {
-	ID            string              `json:"id,omitempty"`
-	CampaignID    string              `json:"campaign_id,omitempty"`
-	BatchID       string              `json:"batch_id,omitempty"`
-	Status        string              `json:"status,omitempty"`
-	Type          string              `json:"type,omitempty"`
-	Artifact      string              `json:"artifact,omitempty"`
-	Target        string              `json:"target,omitempty"`
-	FromStatuses  []string            `json:"from_statuses,omitempty"`
-	ResetAttempts bool                `json:"reset_attempts,omitempty"`
-	Filter        data.WorkItemFilter `json:"filter,omitempty"`
-}
-
-type WorkItemFilterAPIRequest struct {
+type WorkItemFilterAPIFields struct {
 	ID         string              `json:"id,omitempty"`
 	CampaignID string              `json:"campaign_id,omitempty"`
 	BatchID    string              `json:"batch_id,omitempty"`
@@ -32,8 +19,18 @@ type WorkItemFilterAPIRequest struct {
 	Type       string              `json:"type,omitempty"`
 	Artifact   string              `json:"artifact,omitempty"`
 	Target     string              `json:"target,omitempty"`
-	Limit      int                 `json:"limit,omitempty"`
 	Filter     data.WorkItemFilter `json:"filter,omitempty"`
+}
+
+type WorkItemRetryAPIRequest struct {
+	WorkItemFilterAPIFields
+	FromStatuses  []string `json:"from_statuses,omitempty"`
+	ResetAttempts bool     `json:"reset_attempts,omitempty"`
+}
+
+type WorkItemFilterAPIRequest struct {
+	WorkItemFilterAPIFields
+	Limit int `json:"limit,omitempty"`
 }
 
 type WorkItemResponse struct {
@@ -292,33 +289,15 @@ func (s *Server) RecoverWorkItems(c *gin.Context) {
 	})
 }
 
-func mergeWorkItemRetryFilter(req WorkItemRetryAPIRequest) data.WorkItemFilter {
-	filter := req.Filter
-	if req.ID != "" {
-		filter.ID = req.ID
-	}
-	if req.CampaignID != "" {
-		filter.CampaignID = req.CampaignID
-	}
-	if req.BatchID != "" {
-		filter.BatchID = req.BatchID
-	}
-	if req.Status != "" {
-		filter.Status = req.Status
-	}
-	if req.Type != "" {
-		filter.Type = req.Type
-	}
-	if req.Artifact != "" {
-		filter.Artifact = req.Artifact
-	}
-	if req.Target != "" {
-		filter.Target = req.Target
-	}
-	return filter
+func mergeWorkItemFilter(req WorkItemFilterAPIRequest) data.WorkItemFilter {
+	return mergeWorkItemFilterFields(req.WorkItemFilterAPIFields)
 }
 
-func mergeWorkItemFilter(req WorkItemFilterAPIRequest) data.WorkItemFilter {
+func mergeWorkItemRetryFilter(req WorkItemRetryAPIRequest) data.WorkItemFilter {
+	return mergeWorkItemFilterFields(req.WorkItemFilterAPIFields)
+}
+
+func mergeWorkItemFilterFields(req WorkItemFilterAPIFields) data.WorkItemFilter {
 	filter := req.Filter
 	if req.ID != "" {
 		filter.ID = req.ID

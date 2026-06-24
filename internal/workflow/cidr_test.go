@@ -318,11 +318,11 @@ func TestSprayShardWorkItemsFromDAGNode(t *testing.T) {
 		if parsed.ShardIndex != i+1 {
 			t.Fatalf("shard index = %d, want %d", parsed.ShardIndex, i+1)
 		}
-		baseURLs := stringSliceFromActionInput(parsed.ActionInput, "base_urls")
+		baseURLs := data.ActionInputStrings(parsed.ActionInput, "base_urls")
 		if len(baseURLs) != 1 {
 			t.Fatalf("base url shard size = %d, want 1: %#v", len(baseURLs), parsed.ActionInput)
 		}
-		words := stringSliceFromActionInput(parsed.ActionInput, "wordlist")
+		words := data.ActionInputStrings(parsed.ActionInput, "wordlist")
 		if len(words) == 0 || len(words) > 2 {
 			t.Fatalf("word shard size = %d, want 1..2: %#v", len(words), parsed.ActionInput)
 		}
@@ -400,7 +400,7 @@ func TestFullSprayShardWorkItemsUseSingleBaseURLChunks(t *testing.T) {
 	}
 	for _, item := range items {
 		parsed := parseSchedulerWorkItemInput(item)
-		baseURLs := stringSliceFromActionInput(parsed.ActionInput, "base_urls")
+		baseURLs := data.ActionInputStrings(parsed.ActionInput, "base_urls")
 		if len(baseURLs) != 1 {
 			t.Fatalf("full spray shard must contain one base URL, got %#v", parsed.ActionInput)
 		}
@@ -595,8 +595,8 @@ func TestNucleiGroupWorkItemsFromDAGNode(t *testing.T) {
 		if parsed.ShardIndex != i+1 {
 			t.Fatalf("shard index = %d, want %d", parsed.ShardIndex, i+1)
 		}
-		targets := stringSliceFromActionInput(parsed.ActionInput, "targets")
-		ids := stringSliceFromActionInput(parsed.ActionInput, "ids")
+		targets := data.ActionInputStrings(parsed.ActionInput, "targets")
+		ids := data.ActionInputStrings(parsed.ActionInput, "ids")
 		if len(targets) == 0 || len(targets) > 2 {
 			t.Fatalf("target group size = %d, want 1..2: %#v", len(targets), parsed.ActionInput)
 		}

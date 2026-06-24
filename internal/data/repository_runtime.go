@@ -313,8 +313,8 @@ func blockedRuntimeQueues(queues []QueueRuntimeState) []QueueRuntimeState {
 func capacityDecisionSnapshots(capacities []SchedulerCapacity) []SchedulerCapacity {
 	out := make([]SchedulerCapacity, 0, len(capacities))
 	for _, capacity := range capacities {
-		capacity.SnapshotKind = "capacity_controller_decision"
-		capacity.SnapshotNote = "last scheduler capacity controller decision; runtime_queues is the live work_items state"
+		capacity.SnapshotKind = schedulerCapacitySnapshotKind
+		capacity.SnapshotNote = schedulerCapacitySnapshotNote
 		out = append(out, capacity)
 	}
 	return out
@@ -450,7 +450,8 @@ func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
 			}
 		}
 	}
-	for _, queue := range view.BlockedQueues {
+	if len(view.BlockedQueues) > 0 {
+		queue := view.BlockedQueues[0]
 		return &RuntimeBottleneck{
 			Kind:           "queue",
 			Key:            queue.Queue,
@@ -549,9 +550,9 @@ func noProgressRunning(group WorkItemGroupSummary) int {
 	if !ok {
 		return 0
 	}
-	threshold := time.Duration(group.AvgDurationMs) * time.Millisecond * 3
-	if threshold < 10*time.Minute {
-		threshold = 10 * time.Minute
+	threshold := time.Duration(group.AvgDurationMs) * time.Millisecond * 10
+	if threshold < 2*time.Minute {
+		threshold = 2 * time.Minute
 	}
 	if time.Since(startedAt) <= threshold {
 		return 0

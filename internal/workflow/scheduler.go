@@ -970,7 +970,7 @@ func claimScheduledWorkItem(ctx workflow.Context, input SchedulerWorkflowInput, 
 		Artifact:     artifactName,
 		Queue:        queue,
 		WorkflowID:   workflow.GetInfo(ctx).WorkflowExecution.ID,
-		LeaseSeconds: schedulerLeaseSeconds(input),
+		LeaseSeconds: schedulerLeaseSeconds(),
 		Schedule:     data.NormalizeSchedule(schedule),
 		MaxRunning:   maxRunning,
 	}).Get(ctx, &item)
@@ -1084,7 +1084,7 @@ func loadSchedulerSummaryFromSnapshot(snapshot data.WorkItemProgressSummary, inp
 	}
 }
 
-func schedulerLeaseSeconds(input SchedulerWorkflowInput) int {
+func schedulerLeaseSeconds() int {
 	return schedulerRunningLeaseSeconds
 }
 
@@ -1267,26 +1267,6 @@ func copyActionInput(input map[string]interface{}) map[string]interface{} {
 		out[key] = value
 	}
 	return out
-}
-
-func stringSliceFromActionInput(input map[string]interface{}, key string) []string {
-	if input == nil {
-		return nil
-	}
-	switch value := input[key].(type) {
-	case []string:
-		return append([]string{}, value...)
-	case []interface{}:
-		out := make([]string, 0, len(value))
-		for _, item := range value {
-			if s, ok := item.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func stringFromActionInput(input map[string]interface{}, key string) string {

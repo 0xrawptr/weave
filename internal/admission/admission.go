@@ -155,6 +155,8 @@ func blocks(status string) bool {
 	switch status {
 	case data.WorkItemStatusPending,
 		data.WorkItemStatusRunning,
+		// Completed work blocks the same action dedup key so a successful
+		// action is not repeated by later scheduler reconciliation.
 		data.WorkItemStatusCompleted,
 		data.WorkItemStatusRetryWaiting,
 		data.WorkItemStatusPaused:

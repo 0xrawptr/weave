@@ -44,6 +44,7 @@ func main() {
 	defer c.Close()
 	lastReconciled := map[string]time.Time{}
 	recoverWorkItems(ctx, runtimeApp, c, cfg, lastReconciled)
+	cleanupOpenSchedulerWorkflows(ctx, runtimeApp, c, cfg, lastReconciled)
 	reconcileOpenBatchSchedulers(ctx, runtimeApp, c, cfg, lastReconciled, "startup_reconcile")
 	recoveryCtx, stopRecovery := context.WithCancel(ctx)
 	defer stopRecovery()

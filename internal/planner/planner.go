@@ -67,7 +67,7 @@ var actionSpecs = map[string]ActionSpec{
 		Stage:         30,
 		DefaultReason: "surface discovery",
 		ValidateInput: func(action Action) string {
-			if len(actionInputStrings(action.Input, "base_urls")) == 0 && len(actionInputStrings(action.Input, "urls")) == 0 {
+			if len(data.ActionInputStrings(action.Input, "base_urls")) == 0 && len(data.ActionInputStrings(action.Input, "urls")) == 0 {
 				return "spray requires base_urls or urls"
 			}
 			return ""
@@ -539,7 +539,7 @@ func decisionForAction(action Action) Decision {
 
 func requireActionInput(field, reason string) func(Action) string {
 	return func(action Action) string {
-		if len(actionInputStrings(action.Input, field)) == 0 {
+		if len(data.ActionInputStrings(action.Input, field)) == 0 {
 			return reason
 		}
 		return ""
@@ -547,10 +547,10 @@ func requireActionInput(field, reason string) func(Action) string {
 }
 
 func validateNucleiActionInput(action Action) string {
-	if len(actionInputStrings(action.Input, "targets")) == 0 {
+	if len(data.ActionInputStrings(action.Input, "targets")) == 0 {
 		return "nuclei requires targets"
 	}
-	if len(actionInputStrings(action.Input, "ids")) == 0 && len(actionInputStrings(action.Input, "tags")) == 0 {
+	if len(data.ActionInputStrings(action.Input, "ids")) == 0 && len(data.ActionInputStrings(action.Input, "tags")) == 0 {
 		return "nuclei requires ids or tags"
 	}
 	return ""
@@ -564,32 +564,6 @@ func vulnerabilityEvidenceSchedule(action Action) (string, bool) {
 		return "high severity evidence", true
 	}
 	return "", false
-}
-
-func actionInputStrings(input map[string]interface{}, field string) []string {
-	if len(input) == 0 {
-		return nil
-	}
-	switch values := input[field].(type) {
-	case []string:
-		out := make([]string, 0, len(values))
-		for _, value := range values {
-			if strings.TrimSpace(value) != "" {
-				out = append(out, value)
-			}
-		}
-		return out
-	case []interface{}:
-		out := make([]string, 0, len(values))
-		for _, value := range values {
-			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func scheduleRank(schedule string) int {

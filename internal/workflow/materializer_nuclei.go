@@ -9,8 +9,8 @@ func nucleiActionMaterializer() actionMaterializer {
 	return actionMaterializerFunc{
 		validate: func(node planner.DAGPlanNode) bool {
 			baseInput := mapAnyToInterface(node.Input)
-			return len(stringSliceFromActionInput(baseInput, "targets")) > 0 &&
-				(len(stringSliceFromActionInput(baseInput, "ids")) > 0 || len(stringSliceFromActionInput(baseInput, "tags")) > 0)
+			return len(data.ActionInputStrings(baseInput, "targets")) > 0 &&
+				(len(data.ActionInputStrings(baseInput, "ids")) > 0 || len(data.ActionInputStrings(baseInput, "tags")) > 0)
 		},
 		materialize: nucleiGroupWorkItemsFromDAGNode,
 	}
@@ -18,9 +18,9 @@ func nucleiActionMaterializer() actionMaterializer {
 
 func nucleiGroupWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
 	baseInput := mapAnyToInterface(node.Input)
-	targets := stringSliceFromActionInput(baseInput, "targets")
-	ids := stringSliceFromActionInput(baseInput, "ids")
-	tags := stringSliceFromActionInput(baseInput, "tags")
+	targets := data.ActionInputStrings(baseInput, "targets")
+	ids := data.ActionInputStrings(baseInput, "ids")
+	tags := data.ActionInputStrings(baseInput, "tags")
 	targetChunks := chunkStrings(targets, nucleiGroupTargetSize(input))
 	if len(targetChunks) == 0 {
 		targetChunks = [][]string{nil}

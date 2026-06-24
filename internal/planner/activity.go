@@ -38,10 +38,6 @@ func NewActivity(repo *data.Repository) *Activity {
 	return &Activity{planner: New(repo)}
 }
 
-func NewActivityWithSDKCapacitySync(repo *data.Repository, sync func([]data.SchedulerCapacity)) *Activity {
-	return &Activity{planner: New(repo), syncSDKCapacity: sync}
-}
-
 func NewActivityWithRuntime(repo *data.Repository, sync func([]data.SchedulerCapacity), temporalClient client.Client) *Activity {
 	return &Activity{planner: New(repo), syncSDKCapacity: sync, temporal: temporalClient}
 }

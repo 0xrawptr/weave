@@ -95,6 +95,22 @@ func TestAdmitSkipsExistingPendingItem(t *testing.T) {
 	}
 }
 
+func TestAdmitSkipsActionCoveredByExistingCompletedItem(t *testing.T) {
+	existing := testWorkItem("completed", "spray", map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}})
+	existing.Input = testEnvelope(map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}}, "same-action", 0)
+	existing.Status = data.WorkItemStatusCompleted
+	next := testWorkItem("next", "spray", map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}})
+	next.Input = testEnvelope(map[string]interface{}{"base_urls": []string{"http://10.0.0.1:8080"}}, "same-action", 0)
+
+	result := Admit(Request{ScopeTargets: []string{"10.0.0.0/24"}, Items: []data.WorkItem{next}, Existing: []data.WorkItem{existing}})
+	if len(result.Admitted) != 0 {
+		t.Fatalf("completed duplicate should not be admitted: %#v", result.Admitted)
+	}
+	if result.Decisions[0].Status != StatusSkipped || result.Decisions[0].Reason != "action already planned" {
+		t.Fatalf("decision = %#v, want skipped duplicate", result.Decisions[0])
+	}
+}
+
 func TestAdmitRequiresApprovalForDangerousActions(t *testing.T) {
 	item := testWorkItem("zombie", "zombie", map[string]interface{}{"mode": "login_bruteforce"})
 	result := Admit(Request{ScopeTargets: []string{"10.0.0.0/24"}, Items: []data.WorkItem{item}})

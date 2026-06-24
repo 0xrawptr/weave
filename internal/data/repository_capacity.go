@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+const schedulerCapacitySnapshotKind = "capacity_controller_decision"
+const schedulerCapacitySnapshotNote = "last scheduler capacity controller decision; runtime_queues is the live work_items state"
+
 type CapacityProfile struct {
 	Queue               string
 	Artifact            string
@@ -296,7 +299,7 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 	workErrors := group.Failed + group.Dead
 	workDone := group.Completed + group.Failed + group.Dead
 	workErrorRate := percentageInt(workErrors, workDone)
-	errorRate := maxFloat64(workErrorRate, statErrorRate)
+	errorRate := maxFloat64(statErrorRate, workErrorRate)
 
 	next := current
 	decision := "hold"
@@ -306,10 +309,14 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
 		reason = "stalled running work detected"
-	case errorRate >= float64(policy.ErrorLimit) && errorRate > 0:
+	case statErrorRate >= float64(policy.ErrorLimit) && statErrorRate > 0:
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
-		reason = "recent error rate above policy"
+		reason = "artifact stat error rate above policy"
+	case workErrorRate >= float64(policy.ErrorLimit) && workErrorRate > 0:
+		next = maxInt(policy.Min, current/2)
+		decision = "decrease"
+		reason = "work item error rate above policy"
 	case policy.SlowMs > 0 && group.AvgDurationMs > policy.SlowMs && group.Running >= current:
 		next = maxInt(policy.Min, current/2)
 		decision = "decrease"
@@ -327,6 +334,7 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 	return SchedulerCapacity{
 		CampaignID:          request.CampaignID,
 		BatchID:             request.BatchID,
+		SnapshotKind:        schedulerCapacitySnapshotKind,
 		Queue:               policy.Queue,
 		Artifact:            policy.Artifact,
 		MinCapacity:         policy.Min,
@@ -348,6 +356,7 @@ func decideSchedulerCapacity(request SchedulerCapacityUpdateRequest, policy Sche
 		ErrorRatePercent:    errorRate,
 		LastDecision:        decision,
 		DecisionReason:      reason,
+		SnapshotNote:        schedulerCapacitySnapshotNote,
 		UpdatedAt:           time.Now(),
 	}
 }
@@ -359,7 +368,7 @@ func defaultSchedulerCapacities(request SchedulerCapacityUpdateRequest) []Schedu
 		out = append(out, SchedulerCapacity{
 			CampaignID:          request.CampaignID,
 			BatchID:             request.BatchID,
-			SnapshotKind:        "capacity_controller_decision",
+			SnapshotKind:        schedulerCapacitySnapshotKind,
 			Queue:               policy.Queue,
 			Artifact:            policy.Artifact,
 			MinCapacity:         policy.Min,
@@ -368,7 +377,7 @@ func defaultSchedulerCapacities(request SchedulerCapacityUpdateRequest) []Schedu
 			RecommendedCapacity: policy.Initial,
 			LastDecision:        "initial",
 			DecisionReason:      "default capacity policy",
-			SnapshotNote:        "last scheduler capacity controller decision; runtime_queues is the live work_items state",
+			SnapshotNote:        schedulerCapacitySnapshotNote,
 			UpdatedAt:           time.Now(),
 		})
 	}

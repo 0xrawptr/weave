@@ -15,7 +15,7 @@ func sprayActionMaterializer() actionMaterializer {
 	return actionMaterializerFunc{
 		validate: func(node planner.DAGPlanNode) bool {
 			baseInput := mapAnyToInterface(node.Input)
-			return len(stringSliceFromActionInput(baseInput, "base_urls")) > 0 || len(stringSliceFromActionInput(baseInput, "urls")) > 0
+			return len(data.ActionInputStrings(baseInput, "base_urls")) > 0 || len(data.ActionInputStrings(baseInput, "urls")) > 0
 		},
 		materialize: sprayShardWorkItemsFromDAGNode,
 	}
@@ -23,9 +23,9 @@ func sprayActionMaterializer() actionMaterializer {
 
 func sprayShardWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
 	baseInput := mapAnyToInterface(node.Input)
-	baseURLs := stringSliceFromActionInput(baseInput, "base_urls")
-	checkURLs := stringSliceFromActionInput(baseInput, "urls")
-	wordlist := stringSliceFromActionInput(baseInput, "wordlist")
+	baseURLs := data.ActionInputStrings(baseInput, "base_urls")
+	checkURLs := data.ActionInputStrings(baseInput, "urls")
+	wordlist := data.ActionInputStrings(baseInput, "wordlist")
 	fullWordlistMode := len(wordlist) == 0 && stringFromActionInput(baseInput, "wordlist_mode") == "full"
 	var wordRanges []wordlistRange
 	if fullWordlistMode {

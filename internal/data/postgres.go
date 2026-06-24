@@ -19,6 +19,11 @@ type sqlExecutor interface {
 	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
 }
 
+type sqlQueryExecutor interface {
+	sqlExecutor
+	QueryRow(context.Context, string, ...interface{}) pgx.Row
+}
+
 type PostgresConfig struct {
 	Host     string
 	Port     int
@@ -420,7 +425,12 @@ func (p *PostgresStore) UpsertCampaign(ctx context.Context, campaign Campaign) e
 	if campaign.Phase == "" {
 		campaign.Phase = "bootstrap"
 	}
-	_, err := p.pool.Exec(ctx,
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO campaigns (id, name, description, status, phase, phase_reason, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 		 ON CONFLICT (id) DO UPDATE SET
@@ -430,8 +440,7 @@ func (p *PostgresStore) UpsertCampaign(ctx context.Context, campaign Campaign) e
 			phase = EXCLUDED.phase,
 			phase_reason = EXCLUDED.phase_reason,
 			updated_at = NOW()`,
-		campaign.ID, campaign.Name, campaign.Description, campaign.Status, campaign.Phase, campaign.PhaseReason)
-	if err != nil {
+		campaign.ID, campaign.Name, campaign.Description, campaign.Status, campaign.Phase, campaign.PhaseReason); err != nil {
 		return err
 	}
 	for _, target := range campaign.Targets {
@@ -439,7 +448,7 @@ func (p *PostgresStore) UpsertCampaign(ctx context.Context, campaign Campaign) e
 		if target == "" {
 			continue
 		}
-		if err := p.UpsertCampaignTarget(ctx, CampaignTarget{
+		if err := upsertCampaignTarget(ctx, tx, CampaignTarget{
 			ID:         GenerateID("campaign_target", campaign.ID, target),
 			CampaignID: campaign.ID,
 			Type:       TargetType(target),
@@ -449,17 +458,21 @@ func (p *PostgresStore) UpsertCampaign(ctx context.Context, campaign Campaign) e
 			return err
 		}
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (p *PostgresStore) UpsertCampaignTarget(ctx context.Context, target CampaignTarget) error {
+	return upsertCampaignTarget(ctx, p.pool, target)
+}
+
+func upsertCampaignTarget(ctx context.Context, exec sqlExecutor, target CampaignTarget) error {
 	if target.Status == "" {
 		target.Status = "active"
 	}
 	if target.Type == "" {
 		target.Type = TargetType(target.Value)
 	}
-	_, err := p.pool.Exec(ctx,
+	_, err := exec.Exec(ctx,
 		`INSERT INTO campaign_targets (id, campaign_id, type, value, status)
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (campaign_id, value) DO UPDATE SET
@@ -870,64 +883,69 @@ func (p *PostgresStore) QueryArtifactStats(ctx context.Context, campaignID, work
 }
 
 func (p *PostgresStore) QueryArtifactStatSummary(ctx context.Context, campaignID, workflowID, artifactName, target string) ([]ArtifactStatSummary, error) {
-	query := `SELECT s.artifact,
-		COUNT(*)::INT AS stat_records,
-		COALESCE((
-			SELECT COUNT(*)::INT FROM work_items wi
-			WHERE wi.artifact = s.artifact`
 	args := []interface{}{}
 	argIdx := 1
+	statFilters := ""
+	workItemFilters := ""
 	if campaignID != "" {
-		query += fmt.Sprintf(" AND wi.campaign_id = $%d", argIdx)
+		statFilters += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
+		workItemFilters += fmt.Sprintf(" AND campaign_id = $%d", argIdx)
 		args = append(args, campaignID)
 		argIdx++
 	}
 	if workflowID != "" {
-		query += fmt.Sprintf(" AND wi.workflow_id = $%d", argIdx)
+		statFilters += fmt.Sprintf(" AND workflow_id = $%d", argIdx)
+		workItemFilters += fmt.Sprintf(" AND workflow_id = $%d", argIdx)
 		args = append(args, workflowID)
 		argIdx++
 	}
 	if artifactName != "" {
-		query += fmt.Sprintf(" AND wi.artifact = $%d", argIdx)
+		statFilters += fmt.Sprintf(" AND artifact = $%d", argIdx)
+		workItemFilters += fmt.Sprintf(" AND artifact = $%d", argIdx)
 		args = append(args, artifactName)
 		argIdx++
 	}
 	if target != "" {
-		query += fmt.Sprintf(" AND wi.target = $%d", argIdx)
-		args = append(args, target)
-		argIdx++
-	}
-	query += `), 0)::INT AS work_item_runs,
-		COALESCE(SUM(targets), 0)::BIGINT,
-		COALESCE(SUM(tasks), 0)::BIGINT,
-		COALESCE(SUM(requests), 0)::BIGINT,
-		COALESCE(SUM(results), 0)::BIGINT,
-		COALESCE(SUM(errors), 0)::BIGINT,
-		COALESCE(SUM(duration_ms), 0)::BIGINT,
-		COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0)::BIGINT,
-		MIN(created_at),
-		MAX(created_at)
-	FROM artifact_stats s WHERE 1=1`
-	if campaignID != "" {
-		query += fmt.Sprintf(" AND s.campaign_id = $%d", argIdx)
-		args = append(args, campaignID)
-		argIdx++
-	}
-	if workflowID != "" {
-		query += fmt.Sprintf(" AND s.workflow_id = $%d", argIdx)
-		args = append(args, workflowID)
-		argIdx++
-	}
-	if artifactName != "" {
-		query += fmt.Sprintf(" AND s.artifact = $%d", argIdx)
-		args = append(args, artifactName)
-		argIdx++
-	}
-	if target != "" {
-		query += fmt.Sprintf(" AND s.target = $%d", argIdx)
+		statFilters += fmt.Sprintf(" AND target = $%d", argIdx)
+		workItemFilters += fmt.Sprintf(" AND target = $%d", argIdx)
 		args = append(args, target)
 	}
-	query += " GROUP BY s.artifact ORDER BY COALESCE(SUM(errors), 0) DESC, COALESCE(SUM(results), 0) DESC, COUNT(*) DESC"
+	query := fmt.Sprintf(`WITH stat_summary AS (
+		SELECT artifact,
+			COUNT(*)::INT AS stat_records,
+			COALESCE(SUM(targets), 0)::BIGINT AS targets,
+			COALESCE(SUM(tasks), 0)::BIGINT AS tasks,
+			COALESCE(SUM(requests), 0)::BIGINT AS requests,
+			COALESCE(SUM(results), 0)::BIGINT AS results,
+			COALESCE(SUM(errors), 0)::BIGINT AS errors,
+			COALESCE(SUM(duration_ms), 0)::BIGINT AS duration_ms,
+			COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0)::BIGINT AS avg_duration_ms,
+			MIN(created_at) AS first_seen,
+			MAX(created_at) AS last_seen
+		FROM artifact_stats
+		WHERE 1=1%s
+		GROUP BY artifact
+	), work_item_runs AS (
+		SELECT artifact, COUNT(*)::INT AS work_item_runs
+		FROM work_items
+		WHERE 1=1%s
+		GROUP BY artifact
+	)
+	SELECT s.artifact,
+		s.stat_records,
+		COALESCE(w.work_item_runs, 0)::INT AS work_item_runs,
+		s.targets,
+		s.tasks,
+		s.requests,
+		s.results,
+		s.errors,
+		s.duration_ms,
+		s.avg_duration_ms,
+		s.first_seen,
+		s.last_seen
+	FROM stat_summary s
+	LEFT JOIN work_item_runs w ON w.artifact = s.artifact
+	ORDER BY s.errors DESC, s.results DESC, s.stat_records DESC`, statFilters, workItemFilters)
 
 	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -1302,6 +1320,42 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 	if request.LeaseSeconds <= 0 {
 		request.LeaseSeconds = 24 * 60 * 60
 	}
+	if request.MaxRunning > 0 {
+		if strings.TrimSpace(request.Queue) == "" {
+			return nil, fmt.Errorf("queue is required when max_running is set")
+		}
+		tx, err := p.pool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, "work_items_queue", request.Queue); err != nil {
+			return nil, err
+		}
+		var running int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*)::INT FROM work_items WHERE status = 'running' AND queue = $1`, request.Queue).Scan(&running); err != nil {
+			return nil, err
+		}
+		if running >= request.MaxRunning {
+			return nil, nil
+		}
+		request.MaxRunning = 0
+		item, err := claimWorkItem(ctx, tx, request)
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			return nil, nil
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return item, nil
+	}
+	return claimWorkItem(ctx, p.pool, request)
+}
+
+func claimWorkItem(ctx context.Context, exec sqlQueryExecutor, request WorkItemClaimRequest) (*WorkItem, error) {
 	query := `WITH candidate AS (
 		SELECT wi.id FROM work_items wi
 		WHERE wi.status = 'pending' AND wi.attempts < wi.max_attempts`
@@ -1368,7 +1422,7 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 	args = append(args, request.WorkflowID, request.LeaseSeconds)
 
 	var item WorkItem
-	err := p.pool.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
+	err := exec.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -1450,14 +1504,23 @@ func canTransferWorkItemLease(from, to string) bool {
 	return false
 }
 
+var recoverableWorkItemExecutionErrorPatterns = []string{
+	"heartbeat timeout",
+	"context canceled",
+	"worker shutdown",
+	"activity canceled",
+	"child workflow execution already started",
+	"workflow execution already started",
+}
+
 func recoverableWorkItemExecutionError(message string) bool {
 	value := strings.ToLower(message)
-	return strings.Contains(value, "heartbeat timeout") ||
-		strings.Contains(value, "context canceled") ||
-		strings.Contains(value, "worker shutdown") ||
-		strings.Contains(value, "activity canceled") ||
-		strings.Contains(value, "child workflow execution already started") ||
-		strings.Contains(value, "workflow execution already started")
+	for _, pattern := range recoverableWorkItemExecutionErrorPatterns {
+		if strings.Contains(value, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *PostgresStore) HeartbeatWorkItem(ctx context.Context, request WorkItemHeartbeatRequest) error {
@@ -1942,16 +2005,18 @@ func (p *PostgresStore) RecoverFailedWorkItems(ctx context.Context, filter WorkI
 	query := `WITH recoverable AS (
 		SELECT id FROM work_items
 		WHERE status IN ('failed', 'dead')
-		  AND (
-			LOWER(error) LIKE '%heartbeat timeout%' OR
-			LOWER(error) LIKE '%context canceled%' OR
-			LOWER(error) LIKE '%worker shutdown%' OR
-			LOWER(error) LIKE '%activity canceled%' OR
-			LOWER(error) LIKE '%child workflow execution already started%' OR
-			LOWER(error) LIKE '%workflow execution already started%'
-		  )`
+		  AND (`
 	args := []interface{}{}
 	argIdx := 1
+	for i, pattern := range recoverableWorkItemExecutionErrorPatterns {
+		if i > 0 {
+			query += " OR "
+		}
+		query += fmt.Sprintf("LOWER(error) LIKE $%d", argIdx)
+		args = append(args, "%"+pattern+"%")
+		argIdx++
+	}
+	query += `)`
 	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
 	query += fmt.Sprintf(` ORDER BY updated_at ASC LIMIT $%d
 	)
