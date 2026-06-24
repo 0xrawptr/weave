@@ -267,13 +267,17 @@ func plannerPhaseItemType(itemType string) bool {
 func dispatchPhaseWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType string, capacity schedulerCapacityMap, schedule string, remaining int) (int, error) {
 	switch itemType {
 	case "dns_preflight":
-		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, "dns", remaining), startScheduledDNSPreflightWorkItem)
+		queue := "dns"
+		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, queue, remaining), schedulerQueueCapacity(capacity, queue), startScheduledDNSPreflightWorkItem)
 	case "portscan_chunk":
-		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, "portscan", remaining), startScheduledPortScanWorkItem)
+		queue := "portscan"
+		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, queue, remaining), schedulerQueueCapacity(capacity, queue), startScheduledPortScanWorkItem)
 	case "planned_dag_followup":
-		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, "planner", remaining), startScheduledPlannedDAGWorkItem)
+		queue := "planner"
+		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, queue, remaining), schedulerQueueCapacity(capacity, queue), startScheduledPlannedDAGWorkItem)
 	case "fingers_action", "spray_shard", "nuclei_group":
-		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, schedulerQueueForType(itemType), remaining), startScheduledArtifactActionWorkItem)
+		queue := schedulerQueueForType(itemType)
+		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, queue, remaining), schedulerQueueCapacity(capacity, queue), startScheduledArtifactActionWorkItem)
 	default:
 		return 0, nil
 	}
@@ -370,13 +374,13 @@ func NormalizeCampaignPhase(phase string) string {
 	return data.NormalizeCampaignPhase(phase)
 }
 
-func dispatchScheduledWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType, schedule string, maxStarts int, start func(workflow.Context, workflow.Context, SchedulerWorkflowInput, data.WorkItem) error) (int, error) {
+func dispatchScheduledWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType, schedule string, maxStarts, maxRunning int, start func(workflow.Context, workflow.Context, SchedulerWorkflowInput, data.WorkItem) error) (int, error) {
 	if maxStarts <= 0 {
 		return 0, nil
 	}
 	started := 0
 	for started < maxStarts {
-		item, err := claimScheduledWorkItem(stateCtx, input, itemType, schedule, maxStarts)
+		item, err := claimScheduledWorkItem(stateCtx, input, itemType, schedule, maxRunning)
 		if err != nil {
 			return started, err
 		}
@@ -391,14 +395,19 @@ func dispatchScheduledWorkItems(ctx, stateCtx workflow.Context, input SchedulerW
 	return started, nil
 }
 
+func schedulerQueueCapacity(capacity schedulerCapacityMap, queue string) int {
+	limit := capacity[queue]
+	if limit <= 0 {
+		return 1
+	}
+	return limit
+}
+
 func schedulerPipelineBurst(capacity schedulerCapacityMap, queue string, remaining int) int {
 	if remaining <= 0 {
 		return 0
 	}
-	limit := capacity[queue]
-	if limit <= 0 {
-		limit = 1
-	}
+	limit := schedulerQueueCapacity(capacity, queue)
 	if limit > remaining {
 		return remaining
 	}

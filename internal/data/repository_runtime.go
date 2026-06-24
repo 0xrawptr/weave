@@ -123,6 +123,104 @@ type runtimePlanDefinition struct {
 	Phase    string
 }
 
+type runtimeCounts struct {
+	Pending           int
+	Running           int
+	Completed         int
+	Failed            int
+	Dead              int
+	RetryWaiting      int
+	Paused            int
+	StalledRunning    int
+	NoProgressRunning int
+	ProgressPercent   int
+	ETASeconds        int64
+	LastError         string
+}
+
+func runtimeCountsFromGroup(group WorkItemGroupSummary) runtimeCounts {
+	return runtimeCounts{
+		Pending:           group.Pending,
+		Running:           group.Running,
+		Completed:         group.Completed,
+		Failed:            group.Failed,
+		Dead:              group.Dead,
+		RetryWaiting:      group.RetryWaiting,
+		Paused:            group.Paused,
+		StalledRunning:    group.StalledRunning,
+		NoProgressRunning: noProgressRunning(group),
+		ProgressPercent:   group.ProgressPercent,
+		ETASeconds:        group.ETASeconds,
+		LastError:         group.LastError,
+	}
+}
+
+func runtimeCountsFromPlan(item RuntimePlanItem) runtimeCounts {
+	return runtimeCounts{
+		Pending:           item.Pending,
+		Running:           item.Running,
+		Completed:         item.Completed,
+		Failed:            item.Failed,
+		Dead:              item.Dead,
+		RetryWaiting:      item.RetryWaiting,
+		Paused:            item.Paused,
+		StalledRunning:    item.StalledRunning,
+		NoProgressRunning: item.NoProgressRunning,
+		ProgressPercent:   item.ProgressPercent,
+		ETASeconds:        item.ETASeconds,
+		LastError:         item.LastError,
+	}
+}
+
+func runtimeCountsFromQueue(queue QueueRuntimeState) runtimeCounts {
+	return runtimeCounts{
+		Pending:           queue.Pending,
+		Running:           queue.Running,
+		RetryWaiting:      queue.RetryWaiting,
+		Paused:            queue.Paused,
+		StalledRunning:    queue.StalledRunning,
+		NoProgressRunning: queue.NoProgressRunning,
+		LastError:         queue.LastError,
+	}
+}
+
+func applyRuntimeCountsToPlanItem(item *RuntimePlanItem, counts runtimeCounts) {
+	item.Pending = counts.Pending
+	item.Running = counts.Running
+	item.Completed = counts.Completed
+	item.Failed = counts.Failed
+	item.Dead = counts.Dead
+	item.RetryWaiting = counts.RetryWaiting
+	item.Paused = counts.Paused
+	item.StalledRunning = counts.StalledRunning
+	item.NoProgressRunning = counts.NoProgressRunning
+	item.ProgressPercent = counts.ProgressPercent
+	item.ETASeconds = counts.ETASeconds
+	item.LastError = counts.LastError
+}
+
+func applyRuntimeCountsToQueueState(state *QueueRuntimeState, counts runtimeCounts) {
+	state.Pending = counts.Pending
+	state.Running = counts.Running
+	state.RetryWaiting = counts.RetryWaiting
+	state.Paused = counts.Paused
+	state.StalledRunning = counts.StalledRunning
+	state.NoProgressRunning = counts.NoProgressRunning
+	state.LastError = counts.LastError
+}
+
+func applyRuntimeCountsToBottleneck(bottleneck *RuntimeBottleneck, counts runtimeCounts) {
+	bottleneck.Pending = counts.Pending
+	bottleneck.Running = counts.Running
+	bottleneck.RetryWaiting = counts.RetryWaiting
+	bottleneck.Paused = counts.Paused
+	bottleneck.Failed = counts.Failed
+	bottleneck.Dead = counts.Dead
+	bottleneck.StalledRunning = counts.StalledRunning
+	bottleneck.ETASeconds = counts.ETASeconds
+	bottleneck.LastError = counts.LastError
+}
+
 func runtimePlanDefinitions() []runtimePlanDefinition {
 	defs := WorkItemDefinitions()
 	out := make([]runtimePlanDefinition, 0, len(defs))
@@ -152,24 +250,13 @@ func runtimeExecutionPlan(phase string, summary WorkItemProgressSummary) []Runti
 		group := groups[def.Type]
 		allowed := runtimeTypeAllowedInPhase(phase, def.Type)
 		item := RuntimePlanItem{
-			Type:              def.Type,
-			Queue:             def.Queue,
-			Artifact:          def.Artifact,
-			Phase:             def.Phase,
-			Allowed:           allowed,
-			Pending:           group.Pending,
-			Running:           group.Running,
-			Completed:         group.Completed,
-			Failed:            group.Failed,
-			Dead:              group.Dead,
-			RetryWaiting:      group.RetryWaiting,
-			Paused:            group.Paused,
-			StalledRunning:    group.StalledRunning,
-			NoProgressRunning: noProgressRunning(group),
-			ProgressPercent:   group.ProgressPercent,
-			ETASeconds:        group.ETASeconds,
-			LastError:         group.LastError,
+			Type:     def.Type,
+			Queue:    def.Queue,
+			Artifact: def.Artifact,
+			Phase:    def.Phase,
+			Allowed:  allowed,
 		}
+		applyRuntimeCountsToPlanItem(&item, runtimeCountsFromGroup(group))
 		item.State, item.Reason = runtimePlanState(item, group, phase)
 		if !allowed && openWorkItemGroup(group) > 0 {
 			item.NextPhase = def.Phase
@@ -262,16 +349,8 @@ func runtimeQueuesForPlan(groups []WorkItemGroupSummary, plan []RuntimePlanItem)
 		if open == 0 {
 			continue
 		}
-		state := QueueRuntimeState{
-			Queue:             group.Key,
-			Pending:           group.Pending,
-			Running:           group.Running,
-			RetryWaiting:      group.RetryWaiting,
-			Paused:            group.Paused,
-			StalledRunning:    group.StalledRunning,
-			NoProgressRunning: noProgressRunning(group),
-			LastError:         group.LastError,
-		}
+		state := QueueRuntimeState{Queue: group.Key}
+		applyRuntimeCountsToQueueState(&state, runtimeCountsFromGroup(group))
 		switch {
 		case state.StalledRunning > 0:
 			state.Reason = "running work has no valid progress heartbeat"
@@ -436,34 +515,26 @@ func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
 	}
 	for _, queue := range view.BlockedQueues {
 		if queue.StalledRunning > 0 {
-			return &RuntimeBottleneck{
-				Kind:           "queue",
-				Key:            queue.Queue,
-				Queue:          queue.Queue,
-				Reason:         queue.Reason,
-				Pending:        queue.Pending,
-				Running:        queue.Running,
-				RetryWaiting:   queue.RetryWaiting,
-				Paused:         queue.Paused,
-				StalledRunning: queue.StalledRunning,
-				LastError:      queue.LastError,
+			bottleneck := &RuntimeBottleneck{
+				Kind:   "queue",
+				Key:    queue.Queue,
+				Queue:  queue.Queue,
+				Reason: queue.Reason,
 			}
+			applyRuntimeCountsToBottleneck(bottleneck, runtimeCountsFromQueue(queue))
+			return bottleneck
 		}
 	}
 	if len(view.BlockedQueues) > 0 {
 		queue := view.BlockedQueues[0]
-		return &RuntimeBottleneck{
-			Kind:           "queue",
-			Key:            queue.Queue,
-			Queue:          queue.Queue,
-			Reason:         queue.Reason,
-			Pending:        queue.Pending,
-			Running:        queue.Running,
-			RetryWaiting:   queue.RetryWaiting,
-			Paused:         queue.Paused,
-			StalledRunning: queue.StalledRunning,
-			LastError:      queue.LastError,
+		bottleneck := &RuntimeBottleneck{
+			Kind:   "queue",
+			Key:    queue.Queue,
+			Queue:  queue.Queue,
+			Reason: queue.Reason,
 		}
+		applyRuntimeCountsToBottleneck(bottleneck, runtimeCountsFromQueue(queue))
+		return bottleneck
 	}
 	for _, item := range view.ExecutionPlan {
 		if item.Allowed && openRuntimePlanItem(item) > 0 {
@@ -490,24 +561,17 @@ func runtimeCurrentBottleneck(view CampaignRuntimeView) *RuntimeBottleneck {
 }
 
 func bottleneckFromPlan(kind string, item RuntimePlanItem, reason string) *RuntimeBottleneck {
-	return &RuntimeBottleneck{
-		Kind:           kind,
-		Key:            item.Type,
-		Phase:          item.Phase,
-		Queue:          item.Queue,
-		Type:           item.Type,
-		Artifact:       item.Artifact,
-		Reason:         reason,
-		Pending:        item.Pending,
-		Running:        item.Running,
-		RetryWaiting:   item.RetryWaiting,
-		Paused:         item.Paused,
-		Failed:         item.Failed,
-		Dead:           item.Dead,
-		StalledRunning: item.StalledRunning,
-		ETASeconds:     item.ETASeconds,
-		LastError:      item.LastError,
+	bottleneck := &RuntimeBottleneck{
+		Kind:     kind,
+		Key:      item.Type,
+		Phase:    item.Phase,
+		Queue:    item.Queue,
+		Type:     item.Type,
+		Artifact: item.Artifact,
+		Reason:   reason,
 	}
+	applyRuntimeCountsToBottleneck(bottleneck, runtimeCountsFromPlan(item))
+	return bottleneck
 }
 
 func openRuntimePlanItem(item RuntimePlanItem) int {

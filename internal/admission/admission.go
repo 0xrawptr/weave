@@ -254,7 +254,7 @@ func (s scopeSet) allowsWorkItem(item data.WorkItem, envelope workItemEnvelope) 
 	}
 	values := make([]string, 0, 8)
 	for _, key := range []string{"base_urls", "urls", "targets"} {
-		values = append(values, stringSlice(envelope.ActionInput, key)...)
+		values = append(values, data.ActionInputStrings(envelope.ActionInput, key)...)
 	}
 	if len(values) == 0 {
 		values = []string{item.Target, envelope.Target}
@@ -340,26 +340,4 @@ func isLoopbackHost(host string) bool {
 	}
 	addr, err := netip.ParseAddr(host)
 	return err == nil && addr.IsLoopback()
-}
-
-func stringSlice(input map[string]interface{}, key string) []string {
-	if input == nil {
-		return nil
-	}
-	switch value := input[key].(type) {
-	case []string:
-		return append([]string{}, value...)
-	case []interface{}:
-		out := make([]string, 0, len(value))
-		for _, item := range value {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case string:
-		return []string{value}
-	default:
-		return nil
-	}
 }

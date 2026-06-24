@@ -8,7 +8,6 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
-	workflowservice "go.temporal.io/api/workflowservice/v1"
 
 	"github.com/0xrawptr/weave/internal/app"
 	"github.com/0xrawptr/weave/internal/config"
@@ -44,7 +43,6 @@ func main() {
 	defer c.Close()
 	lastReconciled := map[string]time.Time{}
 	recoverWorkItems(ctx, runtimeApp, c, cfg, lastReconciled)
-	cleanupOpenSchedulerWorkflows(ctx, runtimeApp, c, cfg, lastReconciled)
 	reconcileOpenBatchSchedulers(ctx, runtimeApp, c, cfg, lastReconciled, "startup_reconcile")
 	recoveryCtx, stopRecovery := context.WithCancel(ctx)
 	defer stopRecovery()
@@ -94,69 +92,6 @@ func recoverWorkItems(ctx context.Context, runtimeApp *app.App, temporalClient c
 		log.Printf("startup work item recovery updated %d item(s)", result.Updated)
 		resumeRecoveredSchedulers(ctx, runtimeApp, temporalClient, cfg, result.Batches, "startup_recovery", last)
 	}
-}
-
-func cleanupOpenSchedulerWorkflows(ctx context.Context, runtimeApp *app.App, temporalClient client.Client, cfg *config.Config, last map[string]time.Time) {
-	if runtimeApp == nil || runtimeApp.Repo == nil || temporalClient == nil || cfg == nil {
-		return
-	}
-	workflowTypes := []string{
-		"SchedulerWorkflow",
-	}
-	terminated := 0
-	terminatedWorkflowIDs := []string{}
-	for _, workflowType := range workflowTypes {
-		count, workflowIDs := cleanupOpenWorkflowsByType(ctx, temporalClient, cfg, workflowType)
-		terminated += count
-		terminatedWorkflowIDs = append(terminatedWorkflowIDs, workflowIDs...)
-	}
-	if terminated > 0 {
-		log.Printf("scheduler workflow cleanup terminated %d open scheduler workflow(s)", terminated)
-	}
-	reclaimed, err := runtimeApp.Repo.ReclaimWorkItemsByWorkflowIDs(ctx, terminatedWorkflowIDs)
-	if err != nil {
-		log.Printf("WARNING: scheduler workflow cleanup DB reclaim failed: %v", err)
-		return
-	}
-	if reclaimed.Updated > 0 {
-		log.Printf("scheduler workflow cleanup reclaimed %d work item(s)", reclaimed.Updated)
-		resumeRecoveredSchedulers(ctx, runtimeApp, temporalClient, cfg, reclaimed.Batches, "scheduler_cleanup", last)
-	}
-}
-
-func cleanupOpenWorkflowsByType(ctx context.Context, temporalClient client.Client, cfg *config.Config, workflowType string) (int, []string) {
-	req := &workflowservice.ListWorkflowExecutionsRequest{
-		Namespace: cfg.Temporal.Namespace,
-		PageSize:  100,
-		Query:     fmt.Sprintf(`WorkflowType="%s" AND ExecutionStatus="Running"`, workflowType),
-	}
-	terminated := 0
-	terminatedWorkflowIDs := []string{}
-	for {
-		resp, err := temporalClient.ListWorkflow(ctx, req)
-		if err != nil {
-			log.Printf("WARNING: scheduler workflow cleanup list failed: workflow_type=%s err=%v", workflowType, err)
-			return terminated, terminatedWorkflowIDs
-		}
-		for _, execution := range resp.Executions {
-			workflowID := execution.Execution.GetWorkflowId()
-			runID := execution.Execution.GetRunId()
-			if strings.TrimSpace(workflowID) == "" {
-				continue
-			}
-			if err := temporalClient.TerminateWorkflow(ctx, workflowID, runID, "scheduler controller cleanup before DB-led recovery"); err != nil {
-				log.Printf("WARNING: scheduler workflow cleanup terminate failed: workflow_type=%s workflow=%s run=%s err=%v", workflowType, workflowID, runID, err)
-				continue
-			}
-			terminatedWorkflowIDs = append(terminatedWorkflowIDs, workflowID)
-			terminated++
-		}
-		if len(resp.NextPageToken) == 0 {
-			break
-		}
-		req.NextPageToken = resp.NextPageToken
-	}
-	return terminated, terminatedWorkflowIDs
 }
 
 func runWorkItemRecoveryController(ctx context.Context, runtimeApp *app.App, temporalClient client.Client, cfg *config.Config) {

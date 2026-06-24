@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/planner"
@@ -141,6 +142,7 @@ func uniqueNonEmpty(values []string) []string {
 	seen := make(map[string]bool, len(values))
 	out := make([]string, 0, len(values))
 	for _, value := range values {
+		value = strings.TrimSpace(value)
 		if value == "" || seen[value] {
 			continue
 		}

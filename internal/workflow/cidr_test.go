@@ -561,6 +561,35 @@ func TestChunkWorkItems(t *testing.T) {
 	}
 }
 
+func TestSchedulerBurstUsesRemainingButCapacityRemainsSeparate(t *testing.T) {
+	capacity := schedulerCapacityMap{"portscan": 4}
+	if got := schedulerPipelineBurst(capacity, "portscan", 1); got != 1 {
+		t.Fatalf("schedulerPipelineBurst = %d, want remaining-limited start budget 1", got)
+	}
+	if got := schedulerQueueCapacity(capacity, "portscan"); got != 4 {
+		t.Fatalf("schedulerQueueCapacity = %d, want full queue capacity 4", got)
+	}
+}
+
+func TestSchedulerQueueCapacityDefaultsToOne(t *testing.T) {
+	if got := schedulerPipelineBurst(schedulerCapacityMap{}, "missing", 10); got != 1 {
+		t.Fatalf("schedulerPipelineBurst default = %d, want 1", got)
+	}
+	if got := schedulerQueueCapacity(schedulerCapacityMap{"dns": 0}, "dns"); got != 1 {
+		t.Fatalf("schedulerQueueCapacity default = %d, want 1", got)
+	}
+}
+
+func TestChunkStringsTrimsBeforeDedup(t *testing.T) {
+	chunks := chunkStrings([]string{" a ", "a", "", " b "}, 10)
+	if len(chunks) != 1 {
+		t.Fatalf("len(chunks) = %d, want 1: %#v", len(chunks), chunks)
+	}
+	if len(chunks[0]) != 2 || chunks[0][0] != "a" || chunks[0][1] != "b" {
+		t.Fatalf("chunkStrings = %#v, want trimmed unique values", chunks)
+	}
+}
+
 func TestNucleiGroupWorkItemsFromDAGNode(t *testing.T) {
 	input := SchedulerWorkflowInput{
 		BatchID: "batch-1",

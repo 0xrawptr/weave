@@ -30,6 +30,16 @@ func TestAdmitAllowsFirstPartySubdomain(t *testing.T) {
 	}
 }
 
+func TestAdmitUsesNormalizedScalarActionInput(t *testing.T) {
+	item := testWorkItem("a", "spray", map[string]interface{}{
+		"base_urls": " https://api.example.com/login ",
+	})
+	result := Admit(Request{ScopeTargets: []string{"example.com"}, Items: []data.WorkItem{item}})
+	if len(result.Admitted) != 1 {
+		t.Fatalf("normalized scalar action input not admitted: %#v", result.Decisions)
+	}
+}
+
 func TestAdmitAllowsLoopbackOnlyWhenInScope(t *testing.T) {
 	item := testWorkItem("a", "spray", map[string]interface{}{
 		"base_urls": []string{"http://127.0.0.1:8080"},

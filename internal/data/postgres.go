@@ -1451,7 +1451,7 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 	if workflowID != "" && currentWorkflowID == "" {
 		return nil
 	}
-	if workflowID != "" && currentWorkflowID != "" && currentWorkflowID != workflowID && !canTransferWorkItemLease(current, status) {
+	if workflowID != "" && currentWorkflowID != "" && currentWorkflowID != workflowID {
 		return nil
 	}
 	recoverableExecutionFailure := recoverableWorkItemExecutionError(errorMessage) &&
@@ -1498,10 +1498,6 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 		return nil
 	}
 	return err
-}
-
-func canTransferWorkItemLease(from, to string) bool {
-	return false
 }
 
 var recoverableWorkItemExecutionErrorPatterns = []string{

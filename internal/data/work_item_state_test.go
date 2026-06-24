@@ -40,15 +40,6 @@ func TestValidWorkItemStatus(t *testing.T) {
 	}
 }
 
-func TestCanTransferWorkItemLease(t *testing.T) {
-	if canTransferWorkItemLease(WorkItemStatusRunning, WorkItemStatusCompleted) {
-		t.Fatalf("running -> completed should not allow workflow ownership transfer")
-	}
-	if canTransferWorkItemLease(WorkItemStatusPending, WorkItemStatusRunning) {
-		t.Fatalf("pending -> running should not allow workflow ownership transfer")
-	}
-}
-
 func TestRecoverableWorkItemExecutionError(t *testing.T) {
 	for _, message := range []string{
 		"activity heartbeat timeout",
