@@ -12,32 +12,32 @@ import (
 )
 
 const (
-	ExpiredRunningRecovered                  = "recovered"
-	ExpiredRunningSkippedTemporalUnavailable = "skipped_temporal_unavailable"
+	ExpiredLeaseRecovered                  = "recovered"
+	ExpiredLeaseSkippedTemporalUnavailable = "skipped_temporal_unavailable"
 )
 
 type CheckErrorHandler func(workflowID, workItemID string, err error)
 
 type RecoveryPolicy struct {
-	Filter                data.WorkItemFilter
-	Limit                 int
-	RecoverFailures       bool
-	RecoverExpiredRunning bool
-	RequeueRetryWaiting   bool
-	RetryDelaySeconds     int
-	OnCheckError          CheckErrorHandler `json:"-"`
+	Filter               data.WorkItemFilter
+	Limit                int
+	RecoverFailures      bool
+	RecoverExpiredLeases bool
+	RequeueRetryWaiting  bool
+	RetryDelaySeconds    int
+	OnCheckError         CheckErrorHandler `json:"-"`
 }
 
 type RecoveryResult struct {
-	RecoverableFailures  data.WorkItemBulkResult  `json:"recoverable_failures"`
-	ExpiredRunning       data.WorkItemBulkResult  `json:"expired_running"`
-	RetryRequeued        data.WorkItemBulkResult  `json:"retry_requeued"`
-	Batches              []data.WorkItemBulkBatch `json:"batches,omitempty"`
-	ExpiredRunningStatus string                   `json:"expired_running_status,omitempty"`
+	RecoveredFailures      data.WorkItemBulkResult  `json:"recovered_failures"`
+	RecoveredExpiredLeases data.WorkItemBulkResult  `json:"recovered_expired_leases"`
+	RequeuedRetries        data.WorkItemBulkResult  `json:"requeued_retries"`
+	Batches                []data.WorkItemBulkBatch `json:"batches,omitempty"`
+	ExpiredLeaseStatus     string                   `json:"expired_lease_status,omitempty"`
 }
 
 func (r RecoveryResult) BulkResult() data.WorkItemBulkResult {
-	return MergeWorkItemBulkResults(MergeWorkItemBulkResults(r.RecoverableFailures, r.ExpiredRunning), r.RetryRequeued)
+	return MergeWorkItemBulkResults(MergeWorkItemBulkResults(r.RecoveredFailures, r.RecoveredExpiredLeases), r.RequeuedRetries)
 }
 
 func RecoverWorkItems(ctx context.Context, repo *data.Repository, temporalClient client.Client, policy RecoveryPolicy) (RecoveryResult, error) {
@@ -50,57 +50,39 @@ func RecoverWorkItems(ctx context.Context, repo *data.Repository, temporalClient
 		limit = 1000
 	}
 	if policy.RecoverFailures {
-		recovered, err := repo.RecoverStaleWorkItems(ctx, policy.Filter, limit)
+		recovered, err := repo.RecoverFailedWorkItems(ctx, policy.Filter, limit)
 		if err != nil {
 			return result, err
 		}
-		result.RecoverableFailures = recovered
+		result.RecoveredFailures = recovered
 	}
-	if policy.RecoverExpiredRunning {
-		recovered, status, err := recoverExpiredRunningOrphans(ctx, repo, temporalClient, policy.Filter, limit, policy.OnCheckError)
+	if policy.RecoverExpiredLeases {
+		recovered, status, err := recoverExpiredLeaseOrphans(ctx, repo, temporalClient, policy.Filter, limit, policy.OnCheckError)
 		if err != nil {
 			return result, err
 		}
-		result.ExpiredRunning = recovered
-		result.ExpiredRunningStatus = status
+		result.RecoveredExpiredLeases = recovered
+		result.ExpiredLeaseStatus = status
 	}
 	if policy.RequeueRetryWaiting {
-		requeued, err := repo.RequeueRetryWaitingWorkItems(ctx, policy.Filter, policy.RetryDelaySeconds, limit)
+		requeued, err := repo.RequeueEligibleRetryWorkItems(ctx, policy.Filter, policy.RetryDelaySeconds, limit)
 		if err != nil {
 			return result, err
 		}
-		result.RetryRequeued = requeued
+		result.RequeuedRetries = requeued
 	}
 	result.Batches = result.BulkResult().Batches
 	return result, nil
 }
 
-func RecoverStaleAndExpiredRunning(ctx context.Context, repo *data.Repository, temporalClient client.Client, filter data.WorkItemFilter, limit int, onCheckError CheckErrorHandler) (data.WorkItemBulkResult, string, error) {
-	result, err := RecoverWorkItems(ctx, repo, temporalClient, RecoveryPolicy{
-		Filter:                filter,
-		Limit:                 limit,
-		RecoverFailures:       true,
-		RecoverExpiredRunning: true,
-		OnCheckError:          onCheckError,
-	})
-	if err != nil {
-		return result.BulkResult(), result.ExpiredRunningStatus, err
-	}
-	return result.BulkResult(), result.ExpiredRunningStatus, nil
-}
-
-func RecoverExpiredRunningOrphans(ctx context.Context, repo *data.Repository, temporalClient client.Client, filter data.WorkItemFilter, limit int, onCheckError CheckErrorHandler) (data.WorkItemBulkResult, string, error) {
-	return recoverExpiredRunningOrphans(ctx, repo, temporalClient, filter, limit, onCheckError)
-}
-
-func recoverExpiredRunningOrphans(ctx context.Context, repo *data.Repository, temporalClient client.Client, filter data.WorkItemFilter, limit int, onCheckError CheckErrorHandler) (data.WorkItemBulkResult, string, error) {
+func recoverExpiredLeaseOrphans(ctx context.Context, repo *data.Repository, temporalClient client.Client, filter data.WorkItemFilter, limit int, onCheckError CheckErrorHandler) (data.WorkItemBulkResult, string, error) {
 	if repo == nil {
 		return data.WorkItemBulkResult{}, "", nil
 	}
 	if temporalClient == nil {
-		return data.WorkItemBulkResult{}, ExpiredRunningSkippedTemporalUnavailable, nil
+		return data.WorkItemBulkResult{}, ExpiredLeaseSkippedTemporalUnavailable, nil
 	}
-	items, err := repo.ListExpiredRunningWorkItems(ctx, filter, limit)
+	items, err := repo.ListExpiredLeaseWorkItems(ctx, filter, limit)
 	if err != nil {
 		return data.WorkItemBulkResult{}, "", err
 	}
@@ -123,11 +105,11 @@ func recoverExpiredRunningOrphans(ctx context.Context, repo *data.Repository, te
 			workflowIDs = append(workflowIDs, workflowID)
 		}
 	}
-	result, err := repo.RecoverWorkItemsByWorkflowIDs(ctx, workflowIDs)
+	result, err := repo.ReclaimWorkItemsByWorkflowIDs(ctx, workflowIDs)
 	if err != nil {
 		return data.WorkItemBulkResult{}, "", err
 	}
-	return result, ExpiredRunningRecovered, nil
+	return result, ExpiredLeaseRecovered, nil
 }
 
 func TemporalWorkflowClosedOrMissing(ctx context.Context, temporalClient client.Client, workflowID string) (bool, error) {

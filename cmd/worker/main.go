@@ -43,7 +43,7 @@ func main() {
 	}
 	defer c.Close()
 	lastReconciled := map[string]time.Time{}
-	recoverExpiredRunningItems(ctx, runtimeApp, c, cfg, lastReconciled)
+	recoverWorkItems(ctx, runtimeApp, c, cfg, lastReconciled)
 	reconcileOpenBatchSchedulers(ctx, runtimeApp, c, cfg, lastReconciled, "startup_reconcile")
 	recoveryCtx, stopRecovery := context.WithCancel(ctx)
 	defer stopRecovery()
@@ -76,21 +76,21 @@ func main() {
 		w.Stop()
 	}
 	stopRecovery()
-	recoverExpiredRunningItems(ctx, runtimeApp, c, cfg, nil)
+	recoverWorkItems(ctx, runtimeApp, c, cfg, nil)
 	runtimeApp.Close()
 }
 
-func recoverExpiredRunningItems(ctx context.Context, runtimeApp *app.App, temporalClient client.Client, cfg *config.Config, last map[string]time.Time) {
+func recoverWorkItems(ctx context.Context, runtimeApp *app.App, temporalClient client.Client, cfg *config.Config, last map[string]time.Time) {
 	if runtimeApp == nil || runtimeApp.Repo == nil {
 		return
 	}
-	result, err := recoverExpiredRunningItemsOnce(ctx, runtimeApp, temporalClient)
+	result, err := recoverWorkItemsOnce(ctx, runtimeApp, temporalClient)
 	if err != nil {
-		log.Printf("WARNING: startup stale work item recovery failed: %v", err)
+		log.Printf("WARNING: startup work item recovery failed: %v", err)
 		return
 	}
 	if result.Updated > 0 {
-		log.Printf("startup stale work item recovery updated %d item(s)", result.Updated)
+		log.Printf("startup work item recovery updated %d item(s)", result.Updated)
 		resumeRecoveredSchedulers(ctx, runtimeApp, temporalClient, cfg, result.Batches, "startup_recovery", last)
 	}
 }
@@ -112,7 +112,7 @@ func cleanupOpenSchedulerWorkflows(ctx context.Context, runtimeApp *app.App, tem
 	if terminated > 0 {
 		log.Printf("scheduler workflow cleanup terminated %d open scheduler workflow(s)", terminated)
 	}
-	reclaimed, err := runtimeApp.Repo.RecoverWorkItemsByWorkflowIDs(ctx, terminatedWorkflowIDs)
+	reclaimed, err := runtimeApp.Repo.ReclaimWorkItemsByWorkflowIDs(ctx, terminatedWorkflowIDs)
 	if err != nil {
 		log.Printf("WARNING: scheduler workflow cleanup DB reclaim failed: %v", err)
 		return
@@ -169,13 +169,13 @@ func runWorkItemRecoveryController(ctx context.Context, runtimeApp *app.App, tem
 			return
 		case <-ticker.C:
 			ticks++
-			result, err := recoverExpiredRunningItemsOnce(ctx, runtimeApp, temporalClient)
+			result, err := recoverWorkItemsOnce(ctx, runtimeApp, temporalClient)
 			if err != nil {
 				log.Printf("WARNING: work item recovery controller failed: %v", err)
 				continue
 			}
 			if result.Updated > 0 {
-				log.Printf("work item recovery controller reclaimed %d stale item(s)", result.Updated)
+				log.Printf("work item recovery controller reclaimed %d item(s)", result.Updated)
 				resumeRecoveredSchedulers(ctx, runtimeApp, temporalClient, cfg, result.Batches, "lease_recovery", lastReconciled)
 			}
 			if ticks%4 == 0 {
@@ -185,14 +185,14 @@ func runWorkItemRecoveryController(ctx context.Context, runtimeApp *app.App, tem
 	}
 }
 
-func recoverExpiredRunningItemsOnce(ctx context.Context, runtimeApp *app.App, temporalClient client.Client) (data.WorkItemBulkResult, error) {
+func recoverWorkItemsOnce(ctx context.Context, runtimeApp *app.App, temporalClient client.Client) (data.WorkItemBulkResult, error) {
 	if runtimeApp == nil || runtimeApp.Repo == nil {
 		return data.WorkItemBulkResult{}, nil
 	}
 	recoveryResult, err := recovery.RecoverWorkItems(ctx, runtimeApp.Repo, temporalClient, recovery.RecoveryPolicy{
-		Limit:                 10000,
-		RecoverFailures:       true,
-		RecoverExpiredRunning: true,
+		Limit:                10000,
+		RecoverFailures:      true,
+		RecoverExpiredLeases: true,
 		OnCheckError: func(workflowID, workItemID string, err error) {
 			log.Printf("WARNING: temporal orphan check failed: workflow=%s work_item=%s err=%v", workflowID, workItemID, err)
 		},

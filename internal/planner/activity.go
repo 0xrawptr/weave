@@ -27,9 +27,6 @@ const GetCampaignStatusActivityName = "get_campaign_status"
 const SchedulerSnapshotActivityName = "scheduler_snapshot"
 const UpdateSchedulerCapacityActivityName = "update_scheduler_capacity"
 const RecoverWorkItemsActivityName = "recover_work_items"
-const RecoverStaleWorkItemsActivityName = "recover_stale_work_items"
-const RecoverExpiredRunningWorkItemsActivityName = "recover_expired_running_work_items"
-const RequeueRetryWaitingWorkItemsActivityName = "requeue_retry_waiting_work_items"
 
 type Activity struct {
 	planner         *Planner
@@ -331,11 +328,6 @@ func (a *Activity) UpdateSchedulerCapacity(ctx context.Context, request data.Sch
 	return capacities, err
 }
 
-type RecoverStaleWorkItemsRequest struct {
-	Filter data.WorkItemFilter `json:"filter"`
-	Limit  int                 `json:"limit,omitempty"`
-}
-
 func (a *Activity) RecoverWorkItems(ctx context.Context, policy recovery.RecoveryPolicy) (recovery.RecoveryResult, error) {
 	if a == nil || a.planner == nil || a.planner.repo == nil {
 		return recovery.RecoveryResult{}, nil
@@ -345,45 +337,4 @@ func (a *Activity) RecoverWorkItems(ctx context.Context, policy recovery.Recover
 		logger.Warn("temporal orphan check failed", "workflow_id", workflowID, "work_item_id", workItemID, "error", err)
 	}
 	return recovery.RecoverWorkItems(ctx, a.planner.repo, a.temporal, policy)
-}
-
-func (a *Activity) RecoverStaleWorkItems(ctx context.Context, request RecoverStaleWorkItemsRequest) (data.WorkItemBulkResult, error) {
-	if a == nil || a.planner == nil || a.planner.repo == nil {
-		return data.WorkItemBulkResult{}, nil
-	}
-	result, err := recovery.RecoverWorkItems(ctx, a.planner.repo, a.temporal, recovery.RecoveryPolicy{
-		Filter:          request.Filter,
-		Limit:           request.Limit,
-		RecoverFailures: true,
-	})
-	return result.BulkResult(), err
-}
-
-func (a *Activity) RecoverExpiredRunningWorkItems(ctx context.Context, request RecoverStaleWorkItemsRequest) (data.WorkItemBulkResult, error) {
-	if a == nil || a.planner == nil || a.planner.repo == nil || a.temporal == nil {
-		return data.WorkItemBulkResult{}, nil
-	}
-	logger := activity.GetLogger(ctx)
-	result, err := recovery.RecoverWorkItems(ctx, a.planner.repo, a.temporal, recovery.RecoveryPolicy{
-		Filter:                request.Filter,
-		Limit:                 request.Limit,
-		RecoverExpiredRunning: true,
-		OnCheckError: func(workflowID, workItemID string, err error) {
-			logger.Warn("temporal orphan check failed", "workflow_id", workflowID, "work_item_id", workItemID, "error", err)
-		},
-	})
-	return result.BulkResult(), err
-}
-
-type RequeueRetryWaitingWorkItemsRequest struct {
-	Filter        data.WorkItemFilter `json:"filter"`
-	MinAgeSeconds int                 `json:"min_age_seconds,omitempty"`
-	Limit         int                 `json:"limit,omitempty"`
-}
-
-func (a *Activity) RequeueRetryWaitingWorkItems(ctx context.Context, request RequeueRetryWaitingWorkItemsRequest) (data.WorkItemBulkResult, error) {
-	if a == nil || a.planner == nil || a.planner.repo == nil {
-		return data.WorkItemBulkResult{}, nil
-	}
-	return a.planner.repo.RequeueRetryWaitingWorkItems(ctx, request.Filter, request.MinAgeSeconds, request.Limit)
 }

@@ -194,7 +194,7 @@ func (p *PostgresStore) UpdateSchedulerCapacity(ctx context.Context, request Sch
 
 func (p *PostgresStore) GetSchedulerCapacities(ctx context.Context, campaignID, batchID string) ([]SchedulerCapacity, error) {
 	query := `SELECT campaign_id, batch_id, queue, artifact, min_capacity, max_capacity, effective_capacity,
-		recommended_capacity, running, pending, retry_waiting, stale_running, completed, failed, dead, avg_duration_ms,
+		recommended_capacity, running, pending, retry_waiting, stalled_running, completed, failed, dead, avg_duration_ms,
 		throughput_per_min, stat_requests, stat_results, stat_errors, error_rate_percent, last_decision, decision_reason, updated_at
 	FROM scheduler_capacity
 	WHERE campaign_id = $1 AND batch_id = $2
@@ -202,7 +202,7 @@ func (p *PostgresStore) GetSchedulerCapacities(ctx context.Context, campaignID, 
 	args := []interface{}{campaignID, batchID}
 	if batchID == "" {
 		query = `SELECT DISTINCT ON (queue) campaign_id, batch_id, queue, artifact, min_capacity, max_capacity, effective_capacity,
-			recommended_capacity, running, pending, retry_waiting, stale_running, completed, failed, dead, avg_duration_ms,
+			recommended_capacity, running, pending, retry_waiting, stalled_running, completed, failed, dead, avg_duration_ms,
 			throughput_per_min, stat_requests, stat_results, stat_errors, error_rate_percent, last_decision, decision_reason, updated_at
 		FROM scheduler_capacity
 		WHERE campaign_id = $1
@@ -246,7 +246,7 @@ func (p *PostgresStore) EffectiveSchedulerCapacity(ctx context.Context, campaign
 func (p *PostgresStore) upsertSchedulerCapacity(ctx context.Context, capacity SchedulerCapacity) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO scheduler_capacity (
 		campaign_id, batch_id, queue, artifact, min_capacity, max_capacity, effective_capacity, recommended_capacity,
-		running, pending, retry_waiting, stale_running, completed, failed, dead, avg_duration_ms, throughput_per_min,
+		running, pending, retry_waiting, stalled_running, completed, failed, dead, avg_duration_ms, throughput_per_min,
 		stat_requests, stat_results, stat_errors, error_rate_percent, last_decision, decision_reason, updated_at
 	) VALUES (
 		$1, $2, $3, $4, $5, $6, $7, $8,
@@ -262,7 +262,7 @@ func (p *PostgresStore) upsertSchedulerCapacity(ctx context.Context, capacity Sc
 		running = EXCLUDED.running,
 		pending = EXCLUDED.pending,
 		retry_waiting = EXCLUDED.retry_waiting,
-		stale_running = EXCLUDED.stale_running,
+		stalled_running = EXCLUDED.stalled_running,
 		completed = EXCLUDED.completed,
 		failed = EXCLUDED.failed,
 		dead = EXCLUDED.dead,

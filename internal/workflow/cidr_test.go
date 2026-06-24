@@ -451,6 +451,76 @@ func TestActionWorkItemsFromDAGNodeUsesSharderRegistry(t *testing.T) {
 	}
 }
 
+func TestCIDRWithoutHTTPDoesNotCreateSprayShardWork(t *testing.T) {
+	target := "115.236.38.192/26"
+	actions := planner.PlanFromState(planner.State{
+		Target:     target,
+		CampaignID: "camp-1",
+	})
+	for _, action := range actions {
+		if action.Artifact == "spray" {
+			t.Fatalf("CIDR without HTTP services created spray action: %#v", actions)
+		}
+	}
+
+	plan := planner.PlanDAGFromActions(target, "camp-1", actions)
+	for _, node := range plan.Nodes {
+		if node.Artifact == "spray" {
+			t.Fatalf("CIDR without HTTP services created spray DAG node: %#v", plan.Nodes)
+		}
+	}
+
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:  "camp-1",
+			MaxAttempts: 2,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: target, Schedule: data.ScheduleBatch}
+	var items []data.WorkItem
+	for _, node := range plan.Nodes {
+		items = append(items, actionWorkItemsFromDAGNode(input, parent, node, 1, 3)...)
+	}
+	for _, item := range items {
+		if item.Type == data.WorkItemTypeSprayShard || item.Artifact == "spray" || item.Queue == "spray" {
+			t.Fatalf("CIDR without HTTP services materialized spray work item: %#v", item)
+		}
+	}
+}
+
+func TestInvalidSprayActionDoesNotReachPendingWorkItem(t *testing.T) {
+	target := "115.236.38.192/26"
+	plan := planner.PlanDAGFromActions(target, "camp-1", []planner.Action{{
+		ID:       "spray-empty",
+		Target:   target,
+		Artifact: "spray",
+		Input:    map[string]interface{}{},
+	}})
+	if len(plan.Nodes) != 0 || len(plan.Actions) != 0 {
+		t.Fatalf("invalid spray action reached DAG: nodes=%#v actions=%#v", plan.Nodes, plan.Actions)
+	}
+
+	input := SchedulerWorkflowInput{
+		BatchID: "batch-1",
+		BatchInput: BatchPortScanInput{
+			CampaignID:  "camp-1",
+			MaxAttempts: 2,
+		},
+	}
+	parent := data.WorkItem{ID: "parent-1", Target: target, Schedule: data.ScheduleBatch}
+	node := planner.DAGPlanNode{
+		ID:       "node-empty-spray",
+		Artifact: "spray",
+		Target:   target,
+		Input:    map[string]any{},
+		Decision: planner.Decision{Schedule: data.ScheduleBatch},
+	}
+	if items := actionWorkItemsFromDAGNode(input, parent, node, 1, 3); len(items) != 0 {
+		t.Fatalf("empty spray DAG node reached pending work item: %#v", items)
+	}
+}
+
 func TestArtifactWorkItemChildWorkflowIDIsStablePerAttempt(t *testing.T) {
 	target := "202.205.161.0/24"
 	first := artifactWorkItemChildWorkflowID("batch-1", "spray_shard", target, "item-a", 1)

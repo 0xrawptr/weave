@@ -90,30 +90,30 @@ func (r *Repository) PauseWorkItems(ctx context.Context, filter WorkItemFilter) 
 	return r.Postgres.PauseWorkItems(ctx, filter)
 }
 
-func (r *Repository) RecoverStaleWorkItems(ctx context.Context, filter WorkItemFilter, limit int) (WorkItemBulkResult, error) {
+func (r *Repository) RecoverFailedWorkItems(ctx context.Context, filter WorkItemFilter, limit int) (WorkItemBulkResult, error) {
 	if r == nil || r.Postgres == nil {
 		return WorkItemBulkResult{}, nil
 	}
-	return r.Postgres.RecoverStaleWorkItems(ctx, filter, limit)
+	return r.Postgres.RecoverFailedWorkItems(ctx, filter, limit)
 }
 
-func (r *Repository) ListExpiredRunningWorkItems(ctx context.Context, filter WorkItemFilter, limit int) ([]WorkItem, error) {
+func (r *Repository) ListExpiredLeaseWorkItems(ctx context.Context, filter WorkItemFilter, limit int) ([]WorkItem, error) {
 	if r == nil || r.Postgres == nil {
 		return nil, nil
 	}
-	return r.Postgres.ListExpiredRunningWorkItems(ctx, filter, limit)
+	return r.Postgres.ListExpiredLeaseWorkItems(ctx, filter, limit)
 }
 
-func (r *Repository) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
+func (r *Repository) ReclaimWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
 	if r == nil || r.Postgres == nil || len(workflowIDs) == 0 {
 		return WorkItemBulkResult{}, nil
 	}
-	return r.Postgres.RecoverWorkItemsByWorkflowIDs(ctx, workflowIDs)
+	return r.Postgres.ReclaimWorkItemsByWorkflowIDs(ctx, workflowIDs)
 }
 
-func (r *Repository) RequeueRetryWaitingWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {
+func (r *Repository) RequeueEligibleRetryWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {
 	if r == nil || r.Postgres == nil {
 		return WorkItemBulkResult{}, nil
 	}
-	return r.Postgres.RequeueRetryWaitingWorkItems(ctx, filter, minAgeSeconds, limit)
+	return r.Postgres.RequeueEligibleRetryWorkItems(ctx, filter, minAgeSeconds, limit)
 }

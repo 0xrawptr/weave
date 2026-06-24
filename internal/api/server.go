@@ -76,7 +76,7 @@ func (s *Server) setupRoutes() {
 		v1.POST("/work-items/retry", s.RetryWorkItems)
 		v1.POST("/work-items/pause", s.PauseWorkItems)
 		v1.POST("/work-items/resume", s.ResumeWorkItems)
-		v1.POST("/work-items/recover-stale", s.RecoverStaleWorkItems)
+		v1.POST("/work-items/recover", s.RecoverWorkItems)
 		v1.GET("/stats/summary", s.ArtifactStatsSummary)
 
 		// Planner endpoints

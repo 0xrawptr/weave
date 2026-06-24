@@ -1,0 +1,151 @@
+package workflow
+
+import (
+	"fmt"
+
+	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/planner"
+)
+
+type actionMaterializer interface {
+	ValidateShardableInput(planner.DAGPlanNode) bool
+	MaterializeWorkItems(SchedulerWorkflowInput, data.WorkItem, planner.DAGPlanNode, int, int) []data.WorkItem
+}
+
+type actionMaterializerFunc struct {
+	validate    func(planner.DAGPlanNode) bool
+	materialize func(SchedulerWorkflowInput, data.WorkItem, planner.DAGPlanNode, int, int) []data.WorkItem
+}
+
+func (m actionMaterializerFunc) ValidateShardableInput(node planner.DAGPlanNode) bool {
+	if m.validate == nil {
+		return true
+	}
+	return m.validate(node)
+}
+
+func (m actionMaterializerFunc) MaterializeWorkItems(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
+	if !m.ValidateShardableInput(node) {
+		return nil
+	}
+	return m.materialize(input, parent, node, iteration, maxIterations)
+}
+
+var actionMaterializers = map[string]actionMaterializer{
+	"spray":  sprayActionMaterializer(),
+	"nuclei": nucleiActionMaterializer(),
+}
+
+func actionWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
+	materializer := actionMaterializers[node.Artifact]
+	if materializer == nil {
+		materializer = actionMaterializerFunc{materialize: singleActionWorkItemFromDAGNode}
+	}
+	return materializer.MaterializeWorkItems(input, parent, node, iteration, maxIterations)
+}
+
+func singleActionWorkItemFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
+	item := actionWorkItemFromDAGNode(input, parent, node, iteration, maxIterations)
+	if item.ID == "" {
+		return nil
+	}
+	return []data.WorkItem{item}
+}
+
+func actionWorkItemFromDAGNode(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) data.WorkItem {
+	itemType := actionWorkItemType(node.Artifact)
+	if itemType == "" {
+		return data.WorkItem{}
+	}
+	return actionWorkItemFromDAGNodeInput(input, parent, node, mapAnyToInterface(node.Input), iteration, maxIterations, 0)
+}
+
+func actionWorkItemFromDAGNodeInput(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, actionInput map[string]interface{}, iteration, maxIterations, shardIndex int) data.WorkItem {
+	itemType := actionWorkItemType(node.Artifact)
+	if itemType == "" {
+		return data.WorkItem{}
+	}
+	target := node.Target
+	if target == "" {
+		target = parent.Target
+	}
+	idParts := []string{"work_item", input.BatchID, itemType, node.ID}
+	if shardIndex > 0 {
+		idParts = append(idParts, fmt.Sprintf("shard-%d", shardIndex))
+	}
+	return data.WorkItem{
+		ID:          data.GenerateID(idParts...),
+		CampaignID:  input.BatchInput.CampaignID,
+		BatchID:     input.BatchID,
+		ParentID:    parent.ID,
+		Type:        itemType,
+		Target:      target,
+		Artifact:    node.Artifact,
+		Queue:       schedulerQueueForType(itemType),
+		Input:       mustMarshal(actionWorkItemInputFromDAGNode(node, target, actionInput, iteration, maxIterations, shardIndex)),
+		Schedule:    mergeSchedule(node.Decision.Schedule, parent.Schedule),
+		Status:      "pending",
+		MaxAttempts: input.BatchInput.MaxAttempts,
+	}
+}
+
+func actionWorkItemInputFromDAGNode(node planner.DAGPlanNode, target string, actionInput map[string]interface{}, iteration, maxIterations, shardIndex int) schedulerWorkItemInput {
+	return schedulerWorkItemInput{
+		Target:        target,
+		ActionInput:   actionInput,
+		NodeID:        node.ID,
+		Reason:        node.Reason,
+		Risk:          node.Risk,
+		Cost:          node.Cost,
+		DedupKey:      node.DedupKey,
+		RunIf:         node.RunIf,
+		Iteration:     iteration,
+		MaxIterations: maxIterations,
+		ShardIndex:    shardIndex,
+	}
+}
+
+func actionWorkItemType(artifactName string) string {
+	switch artifactName {
+	case "fingers":
+		return "fingers_action"
+	case "spray":
+		return "spray_shard"
+	case "nuclei":
+		return "nuclei_group"
+	default:
+		return ""
+	}
+}
+
+func chunkStrings(values []string, size int) [][]string {
+	values = uniqueNonEmpty(values)
+	if len(values) == 0 {
+		return nil
+	}
+	if size <= 0 || size >= len(values) {
+		return [][]string{values}
+	}
+	chunks := make([][]string, 0, (len(values)+size-1)/size)
+	for start := 0; start < len(values); start += size {
+		end := start + size
+		if end > len(values) {
+			end = len(values)
+		}
+		chunks = append(chunks, append([]string{}, values[start:end]...))
+	}
+	return chunks
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}

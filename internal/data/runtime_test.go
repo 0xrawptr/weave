@@ -86,6 +86,35 @@ func TestRuntimeExecutionPlanExplainsAllowedAndWaitingPhase(t *testing.T) {
 	}
 }
 
+func TestRuntimeWithoutSprayShardHasNoPendingSprayQueue(t *testing.T) {
+	summary := WorkItemProgressSummary{
+		Total: 1,
+		ByType: []WorkItemGroupSummary{
+			{Key: "portscan_chunk", Total: 1, Completed: 1, Done: 1, ProgressPercent: 100},
+		},
+		ByQueue: []WorkItemGroupSummary{
+			{Key: "portscan", Total: 1, Completed: 1, Done: 1, ProgressPercent: 100},
+		},
+	}
+
+	plan := runtimeExecutionPlan(CampaignPhaseExpansion, summary)
+	for _, item := range plan {
+		if item.Type == WorkItemTypeSprayShard && (item.Pending > 0 || item.Running > 0 || item.RetryWaiting > 0 || item.Paused > 0) {
+			t.Fatalf("spray runtime plan has open work: %#v", item)
+		}
+	}
+
+	queues := runtimeQueuesForPlan(summary.ByQueue, plan)
+	for _, queue := range queues {
+		if queue.Queue == "spray" {
+			t.Fatalf("runtime queues contain pending spray without spray_shard work: %#v", queues)
+		}
+	}
+	if blocked := blockedRuntimeQueues(queues); len(blocked) != 0 {
+		t.Fatalf("blocked queues = %#v, want none", blocked)
+	}
+}
+
 func TestBlockedRuntimeQueuesIgnoresQueuesWaitingForPhase(t *testing.T) {
 	groups := []WorkItemGroupSummary{
 		{Key: "spray", Pending: 4, Queued: 4},
@@ -149,13 +178,13 @@ func TestRuntimeRunningWorkIsVisibleAndBlocking(t *testing.T) {
 }
 
 func TestNoProgressRunningUsesDurationThreshold(t *testing.T) {
-	stale := WorkItemGroupSummary{
+	stalled := WorkItemGroupSummary{
 		Running:                1,
 		OldestRunningStartedAt: time.Now().Add(-20 * time.Minute).Format(time.RFC3339),
 		AvgDurationMs:          1000,
 	}
-	if got := noProgressRunning(stale); got != 1 {
-		t.Fatalf("noProgressRunning(stale) = %d, want 1", got)
+	if got := noProgressRunning(stalled); got != 1 {
+		t.Fatalf("noProgressRunning(stalled) = %d, want 1", got)
 	}
 
 	recent := WorkItemGroupSummary{

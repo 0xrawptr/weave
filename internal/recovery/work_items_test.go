@@ -31,21 +31,24 @@ func TestMergeWorkItemBulkResultsDeduplicatesBatches(t *testing.T) {
 	}
 }
 
-func TestRecoverExpiredRunningOrphansSkipsWithoutTemporal(t *testing.T) {
-	result, status, err := RecoverExpiredRunningOrphans(context.Background(), &data.Repository{}, nil, data.WorkItemFilter{}, 100, nil)
+func TestRecoverWorkItemsSkipsExpiredLeasesWithoutTemporal(t *testing.T) {
+	result, err := RecoverWorkItems(context.Background(), &data.Repository{}, nil, RecoveryPolicy{
+		RecoverExpiredLeases: true,
+		Limit:                100,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Updated != 0 || status != ExpiredRunningSkippedTemporalUnavailable {
-		t.Fatalf("result=%#v status=%q, want skipped temporal unavailable", result, status)
+	if result.BulkResult().Updated != 0 || result.ExpiredLeaseStatus != ExpiredLeaseSkippedTemporalUnavailable {
+		t.Fatalf("result=%#v, want skipped temporal unavailable", result)
 	}
 }
 
 func TestRecoverWorkItemsReturnsEmptyWithoutRepo(t *testing.T) {
 	result, err := RecoverWorkItems(context.Background(), nil, nil, RecoveryPolicy{
-		RecoverFailures:       true,
-		RecoverExpiredRunning: true,
-		RequeueRetryWaiting:   true,
+		RecoverFailures:      true,
+		RecoverExpiredLeases: true,
+		RequeueRetryWaiting:  true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -57,9 +60,9 @@ func TestRecoverWorkItemsReturnsEmptyWithoutRepo(t *testing.T) {
 
 func TestRecoveryResultBulkResultMergesAllSources(t *testing.T) {
 	result := RecoveryResult{
-		RecoverableFailures: data.WorkItemBulkResult{Matched: 1, Updated: 1, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b1"}}},
-		ExpiredRunning:      data.WorkItemBulkResult{Matched: 2, Updated: 2, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b1"}}},
-		RetryRequeued:       data.WorkItemBulkResult{Matched: 3, Updated: 3, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b2"}}},
+		RecoveredFailures:      data.WorkItemBulkResult{Matched: 1, Updated: 1, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b1"}}},
+		RecoveredExpiredLeases: data.WorkItemBulkResult{Matched: 2, Updated: 2, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b1"}}},
+		RequeuedRetries:        data.WorkItemBulkResult{Matched: 3, Updated: 3, Batches: []data.WorkItemBulkBatch{{CampaignID: "c1", BatchID: "b2"}}},
 	}
 	bulk := result.BulkResult()
 	if bulk.Matched != 6 || bulk.Updated != 6 || len(bulk.Batches) != 2 {

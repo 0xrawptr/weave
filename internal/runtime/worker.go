@@ -363,9 +363,6 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSD
 	w.RegisterActivityWithOptions(planActivity.SchedulerSnapshot, activity.RegisterOptions{Name: planner.SchedulerSnapshotActivityName})
 	w.RegisterActivityWithOptions(planActivity.UpdateSchedulerCapacity, activity.RegisterOptions{Name: planner.UpdateSchedulerCapacityActivityName})
 	w.RegisterActivityWithOptions(planActivity.RecoverWorkItems, activity.RegisterOptions{Name: planner.RecoverWorkItemsActivityName})
-	w.RegisterActivityWithOptions(planActivity.RecoverStaleWorkItems, activity.RegisterOptions{Name: planner.RecoverStaleWorkItemsActivityName})
-	w.RegisterActivityWithOptions(planActivity.RecoverExpiredRunningWorkItems, activity.RegisterOptions{Name: planner.RecoverExpiredRunningWorkItemsActivityName})
-	w.RegisterActivityWithOptions(planActivity.RequeueRetryWaitingWorkItems, activity.RegisterOptions{Name: planner.RequeueRetryWaitingWorkItemsActivityName})
 	log.Printf("registered activity: %s", planner.PlanDAGTargetActivityName)
 	log.Printf("registered activity: %s", planner.ClaimActionActivityName)
 	log.Printf("registered activity: %s", planner.CompleteActionActivityName)
@@ -382,9 +379,6 @@ func registerPlannerActivities(w sdkworker.Worker, repo *data.Repository, syncSD
 	log.Printf("registered activity: %s", planner.SchedulerSnapshotActivityName)
 	log.Printf("registered activity: %s", planner.UpdateSchedulerCapacityActivityName)
 	log.Printf("registered activity: %s", planner.RecoverWorkItemsActivityName)
-	log.Printf("registered activity: %s", planner.RecoverStaleWorkItemsActivityName)
-	log.Printf("registered activity: %s", planner.RecoverExpiredRunningWorkItemsActivityName)
-	log.Printf("registered activity: %s", planner.RequeueRetryWaitingWorkItemsActivityName)
 }
 
 func registerWorkflows(w sdkworker.Worker) {

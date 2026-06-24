@@ -274,7 +274,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		running INTEGER NOT NULL DEFAULT 0,
 		pending INTEGER NOT NULL DEFAULT 0,
 		retry_waiting INTEGER NOT NULL DEFAULT 0,
-		stale_running INTEGER NOT NULL DEFAULT 0,
+		stalled_running INTEGER NOT NULL DEFAULT 0,
 		completed INTEGER NOT NULL DEFAULT 0,
 		failed INTEGER NOT NULL DEFAULT 0,
 		dead INTEGER NOT NULL DEFAULT 0,
@@ -316,6 +316,17 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE work_items DROP COLUMN IF EXISTS tail_at;
 	ALTER TABLE work_items DROP COLUMN IF EXISTS tail_reason;
 	ALTER TABLE asset_campaigns ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+	DO $$ BEGIN
+		IF EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'scheduler_capacity' AND column_name = 'stale_running'
+		) AND NOT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'scheduler_capacity' AND column_name = 'stalled_running'
+		) THEN
+			ALTER TABLE scheduler_capacity RENAME COLUMN stale_running TO stalled_running;
+		END IF;
+	END $$;
 	ALTER TABLE scheduler_capacity ALTER COLUMN error_rate_percent TYPE DOUBLE PRECISION USING error_rate_percent::DOUBLE PRECISION;
 	DROP INDEX IF EXISTS idx_assets_priority;
 	ALTER TABLE assets DROP COLUMN IF EXISTS priority;
@@ -1922,13 +1933,13 @@ func (p *PostgresStore) PauseWorkItems(ctx context.Context, filter WorkItemFilte
 	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
 }
 
-func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkItemFilter, limit int) (WorkItemBulkResult, error) {
+func (p *PostgresStore) RecoverFailedWorkItems(ctx context.Context, filter WorkItemFilter, limit int) (WorkItemBulkResult, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
 	// Do not reclaim running rows by DB lease alone. Temporal may have
 	// accepted the child workflow while its activity is still queued.
-	query := `WITH stale AS (
+	query := `WITH recoverable AS (
 		SELECT id FROM work_items
 		WHERE status IN ('failed', 'dead')
 		  AND (
@@ -1954,8 +1965,8 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 		started_at = NULL,
 		completed_at = NULL,
 		updated_at = NOW()
-	FROM stale
-	WHERE work_items.id = stale.id
+	FROM recoverable
+	WHERE work_items.id = recoverable.id
 	RETURNING work_items.id, work_items.campaign_id, work_items.batch_id`, argIdx)
 	args = append(args, limit)
 
@@ -1989,7 +2000,7 @@ func (p *PostgresStore) RecoverStaleWorkItems(ctx context.Context, filter WorkIt
 	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
 }
 
-func (p *PostgresStore) ListExpiredRunningWorkItems(ctx context.Context, filter WorkItemFilter, limit int) ([]WorkItem, error) {
+func (p *PostgresStore) ListExpiredLeaseWorkItems(ctx context.Context, filter WorkItemFilter, limit int) ([]WorkItem, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
@@ -2024,7 +2035,7 @@ func (p *PostgresStore) ListExpiredRunningWorkItems(ctx context.Context, filter 
 	return items, rows.Err()
 }
 
-func (p *PostgresStore) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
+func (p *PostgresStore) ReclaimWorkItemsByWorkflowIDs(ctx context.Context, workflowIDs []string) (WorkItemBulkResult, error) {
 	if len(workflowIDs) == 0 {
 		return WorkItemBulkResult{}, nil
 	}
@@ -2070,7 +2081,7 @@ func (p *PostgresStore) RecoverWorkItemsByWorkflowIDs(ctx context.Context, workf
 	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
 }
 
-func (p *PostgresStore) RequeueRetryWaitingWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {
+func (p *PostgresStore) RequeueEligibleRetryWorkItems(ctx context.Context, filter WorkItemFilter, minAgeSeconds, limit int) (WorkItemBulkResult, error) {
 	if minAgeSeconds < 0 {
 		minAgeSeconds = 0
 	}

@@ -263,7 +263,7 @@ func (s *Server) PauseWorkItems(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func (s *Server) RecoverStaleWorkItems(c *gin.Context) {
+func (s *Server) RecoverWorkItems(c *gin.Context) {
 	if s.repo == nil || s.repo.Postgres == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
 		return
@@ -273,10 +273,10 @@ func (s *Server) RecoverStaleWorkItems(c *gin.Context) {
 		_ = c.ShouldBindJSON(&req)
 	}
 	recoveryResult, err := recovery.RecoverWorkItems(c.Request.Context(), s.repo, s.temporal, recovery.RecoveryPolicy{
-		Filter:                mergeWorkItemFilter(req),
-		Limit:                 req.Limit,
-		RecoverFailures:       true,
-		RecoverExpiredRunning: true,
+		Filter:               mergeWorkItemFilter(req),
+		Limit:                req.Limit,
+		RecoverFailures:      true,
+		RecoverExpiredLeases: true,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -284,11 +284,11 @@ func (s *Server) RecoverStaleWorkItems(c *gin.Context) {
 	}
 	result := recoveryResult.BulkResult()
 	c.JSON(http.StatusOK, gin.H{
-		"matched":                  result.Matched,
-		"updated":                  result.Updated,
-		"batches":                  result.Batches,
-		"recovery":                 recoveryResult,
-		"expired_running_recovery": recoveryResult.ExpiredRunningStatus,
+		"matched":                result.Matched,
+		"updated":                result.Updated,
+		"batches":                result.Batches,
+		"recovery":               recoveryResult,
+		"expired_lease_recovery": recoveryResult.ExpiredLeaseStatus,
 	})
 }
 
