@@ -300,36 +300,8 @@ func desiredSchedulerCampaignPhaseFromSnapshot(input SchedulerWorkflowInput, sna
 	if phase != CampaignPhaseAuto {
 		return phase, "manual phase override"
 	}
-	derived := deriveSchedulerCampaignPhaseFromSnapshot(snapshot)
+	derived := data.InferCampaignPhaseFromSummary(snapshot)
 	return derived, campaignPhaseReason(derived)
-}
-
-func deriveSchedulerCampaignPhaseFromSnapshot(snapshot data.WorkItemProgressSummary) string {
-	preflight := schedulerSummaryForType(snapshot, "dns_preflight")
-	portscan := schedulerSummaryForType(snapshot, "portscan_chunk")
-	followUp := schedulerSummaryForType(snapshot, "planned_dag_followup")
-	if openWorkItems(preflight) > 0 {
-		return CampaignPhaseBootstrap
-	}
-	if openWorkItems(portscan) > 0 || openWorkItems(followUp) > 0 {
-		return CampaignPhaseDiscovery
-	}
-	spray := schedulerSummaryForType(snapshot, "spray_shard")
-	fingers := schedulerSummaryForType(snapshot, "fingers_action")
-	nuclei := schedulerSummaryForType(snapshot, "nuclei_group")
-	sprayOpen := openWorkItems(spray)
-	fingersOpen := openWorkItems(fingers)
-	nucleiOpen := openWorkItems(nuclei)
-	if nucleiOpen > 0 {
-		return CampaignPhaseVerification
-	}
-	if sprayOpen > 0 {
-		return CampaignPhaseExpansion
-	}
-	if fingersOpen > 0 {
-		return CampaignPhaseDiscovery
-	}
-	return CampaignPhaseSteady
 }
 
 func campaignPhaseReason(phase string) string {

@@ -5,22 +5,6 @@ import (
 	"encoding/json"
 )
 
-type contextKey string
-
-const campaignIDContextKey contextKey = "campaign_id"
-
-func WithCampaignID(ctx context.Context, campaignID string) context.Context {
-	if campaignID == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, campaignIDContextKey, campaignID)
-}
-
-func CampaignIDFromContext(ctx context.Context) string {
-	value, _ := ctx.Value(campaignIDContextKey).(string)
-	return value
-}
-
 // Input is the common input wrapper for all artifacts.
 type Input struct {
 	Target                string          `json:"target"`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/0xrawptr/weave/internal/contextx"
 	"github.com/0xrawptr/weave/internal/data"
 )
 
@@ -18,7 +19,7 @@ type dbLoader struct {
 }
 
 func (l *dbLoader) Save(ctx context.Context, r *ExtractResult) error {
-	campaignID := CampaignIDFromContext(ctx)
+	campaignID := contextx.CampaignIDFromContext(ctx)
 	for _, e := range r.Entities {
 		status := defaultStatus(e.Status, "observed")
 		if err := l.ensureEntityTarget(ctx, &e); err != nil {
@@ -236,7 +237,7 @@ func (l *dbLoader) saveEvidenceEntity(ctx context.Context, e Entity, subjectID s
 	status := defaultStatus(e.Status, "observed")
 	evidence := &data.AssetEvidence{
 		ID:          e.ID,
-		CampaignID:  CampaignIDFromContext(ctx),
+		CampaignID:  contextx.CampaignIDFromContext(ctx),
 		TargetID:    e.TargetID,
 		SubjectID:   subjectID,
 		Type:        e.Type,
@@ -278,7 +279,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 	productID := data.GenerateID("product", e.TargetID, productValue)
 	product := &data.AssetEvidence{
 		ID:         productID,
-		CampaignID: CampaignIDFromContext(ctx),
+		CampaignID: contextx.CampaignIDFromContext(ctx),
 		Type:       "product",
 		Value:      productValue,
 		Source:     e.Source,
@@ -300,7 +301,7 @@ func (l *dbLoader) saveProductContext(ctx context.Context, e Entity) (string, er
 	versionID := data.GenerateID("version", e.TargetID, productValue, e.Version)
 	version := &data.AssetEvidence{
 		ID:         versionID,
-		CampaignID: CampaignIDFromContext(ctx),
+		CampaignID: contextx.CampaignIDFromContext(ctx),
 		Type:       "version",
 		Value:      e.Version,
 		Source:     e.Source,
@@ -332,7 +333,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 		productID := data.GenerateID("product", e.TargetID, productValue)
 		product := &data.AssetEvidence{
 			ID:         productID,
-			CampaignID: CampaignIDFromContext(ctx),
+			CampaignID: contextx.CampaignIDFromContext(ctx),
 			Type:       "product",
 			Value:      productValue,
 			Source:     e.Source,
@@ -354,7 +355,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 		cpeID := data.GenerateID("cpe", e.TargetID, cpe)
 		cpeAsset := &data.AssetEvidence{
 			ID:         cpeID,
-			CampaignID: CampaignIDFromContext(ctx),
+			CampaignID: contextx.CampaignIDFromContext(ctx),
 			Type:       "cpe",
 			Value:      cpe,
 			Source:     e.Source,
@@ -375,7 +376,7 @@ func (l *dbLoader) saveCVEKnowledge(ctx context.Context, e Entity, cveID string,
 		cweID := data.GenerateID("cwe", e.TargetID, cwe)
 		cweAsset := &data.AssetEvidence{
 			ID:         cweID,
-			CampaignID: CampaignIDFromContext(ctx),
+			CampaignID: contextx.CampaignIDFromContext(ctx),
 			Type:       "cwe",
 			Value:      cwe,
 			Source:     e.Source,
@@ -417,7 +418,7 @@ func (l *dbLoader) saveCVEIntel(ctx context.Context, e Entity, cveID string, int
 	intelID := data.GenerateID("intel", e.TargetID, intel.ID)
 	intelAsset := &data.AssetEvidence{
 		ID:         intelID,
-		CampaignID: CampaignIDFromContext(ctx),
+		CampaignID: contextx.CampaignIDFromContext(ctx),
 		Type:       "intel",
 		Value:      intelSummary(intel),
 		Source:     e.Source,

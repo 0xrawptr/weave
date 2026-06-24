@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/0xrawptr/weave/internal/artifact"
 	"github.com/0xrawptr/weave/internal/config"
+	"github.com/0xrawptr/weave/internal/contextx"
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/etl"
 	"github.com/0xrawptr/weave/internal/knowledge"
@@ -22,18 +24,6 @@ import (
 	spraypkg "github.com/chainreactors/spray/pkg"
 )
 
-type Pipelines struct {
-	Gogo     *etl.Pipeline
-	Fingers  *etl.Pipeline
-	Neutron  *etl.Pipeline
-	Spray    *etl.Pipeline
-	Zombie   *etl.Pipeline
-	Proton   *etl.Pipeline
-	Cdncheck *etl.Pipeline
-	DNSX     *etl.Pipeline
-	Nuclei   *etl.Pipeline
-}
-
 type App struct {
 	Config    *config.Config
 	Repo      *data.Repository
@@ -41,14 +31,14 @@ type App struct {
 	Registry  *artifact.Registry
 	Knowledge *knowledge.Index
 	Enricher  etl.Enricher
-	Pipelines Pipelines
+	Pipelines map[string]*etl.Pipeline
 }
 
 func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	repo := initRepository(ctx, cfg)
 
 	sdkCli := buildSDKClient(cfg)
-	reg, err := artifact.NewRegistryFromClient(sdkCli)
+	reg, err := buildRegistry(sdkCli)
 	if err != nil {
 		sdkCli.Close()
 		repo.Close()
@@ -67,17 +57,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 		Registry:  reg,
 		Knowledge: kb,
 		Enricher:  enricher,
-		Pipelines: Pipelines{
-			Gogo:     etl.NewPipeline(&etl.GogoExtractor{}, loader).WithEnricher(enricher),
-			Fingers:  etl.NewPipeline(&etl.FingersExtractor{}, loader).WithEnricher(enricher),
-			Neutron:  etl.NewPipeline(&etl.NeutronExtractor{}, loader),
-			Spray:    etl.NewPipeline(&etl.SprayExtractor{}, loader).WithEnricher(enricher),
-			Zombie:   etl.NewPipeline(&etl.ZombieExtractor{}, loader),
-			Proton:   etl.NewPipeline(&etl.ProtonExtractor{}, loader),
-			Cdncheck: etl.NewPipeline(&etl.CdncheckExtractor{}, loader),
-			DNSX:     etl.NewPipeline(&etl.DNSXExtractor{}, loader),
-			Nuclei:   etl.NewPipeline(&etl.NucleiExtractor{}, loader),
-		},
+		Pipelines: buildPipelines(loader, enricher),
 	}
 	runtime.WireResolvers()
 	return runtime, nil
@@ -236,12 +216,28 @@ func (a *App) SyncSDKCapacityWithLog(capacities []data.SchedulerCapacity) {
 	}
 }
 
+func (a *App) PipelineFor(artifactName string) (*etl.Pipeline, bool) {
+	if a == nil || a.Pipelines == nil {
+		return nil, false
+	}
+	pipeline, ok := a.Pipelines[artifactName]
+	return pipeline, ok
+}
+
+func (a *App) ProcessArtifactETL(ctx context.Context, artifactName, target, campaignID string, eventData []byte) error {
+	pipeline, ok := a.PipelineFor(artifactName)
+	if !ok {
+		return fmt.Errorf("pipeline %q not found", artifactName)
+	}
+	return pipeline.Process(contextx.WithCampaignID(ctx, campaignID), target, eventData)
+}
+
 func (a *App) WireResolvers() {
 	if a == nil || a.Repo == nil || a.Repo.Postgres == nil || a.Registry == nil {
 		return
 	}
 	urlResolver := artifact.URLResolver(func(ctx context.Context, target string) ([]string, error) {
-		return a.Repo.GetWebURLsInCampaign(ctx, target, artifact.CampaignIDFromContext(ctx))
+		return a.Repo.GetWebURLsInCampaign(ctx, target, contextx.CampaignIDFromContext(ctx))
 	})
 	if artifactInstance, err := a.Registry.Get("fingers"); err == nil {
 		artifactInstance.(*artifact.FingersArtifact).SetURLResolver(urlResolver)
@@ -253,10 +249,10 @@ func (a *App) WireResolvers() {
 		nucleiArtifact := artifactInstance.(*artifact.NucleiArtifact)
 		nucleiArtifact.SetURLResolver(urlResolver)
 		nucleiArtifact.SetIDResolver(func(ctx context.Context, target string) ([]string, error) {
-			return a.Repo.GetTemplateIDsInCampaign(ctx, target, artifact.CampaignIDFromContext(ctx))
+			return a.Repo.GetTemplateIDsInCampaign(ctx, target, contextx.CampaignIDFromContext(ctx))
 		})
 		nucleiArtifact.SetTagResolver(func(ctx context.Context, target string) ([]string, error) {
-			campaignID := artifact.CampaignIDFromContext(ctx)
+			campaignID := contextx.CampaignIDFromContext(ctx)
 			tags, err := a.Repo.GetTagsInCampaign(ctx, target, campaignID)
 			if err != nil || len(tags) > 0 {
 				return tags, err

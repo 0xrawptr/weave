@@ -204,22 +204,12 @@ func resumeRecoveredScheduler(ctx context.Context, runtimeApp *app.App, temporal
 	if strings.TrimSpace(ports) == "" {
 		return fmt.Errorf("batch run has no ports")
 	}
-	workflowID := fmt.Sprintf("%s-recovery-scheduler", batchID)
-	wfRun, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       workflowID,
+	wfRun, err := workflow.StartSchedulerForBatchRun(ctx, temporalClient, *run, workflow.SchedulerStartOptions{
+		WorkflowID:               fmt.Sprintf("%s-recovery-scheduler", batchID),
 		TaskQueue:                cfg.Temporal.TaskQueue,
-		WorkflowTaskTimeout:      workflow.ControlWorkflowTaskTimeout,
 		WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
-	}, workflow.SchedulerWorkflow, workflow.SchedulerWorkflowInput{
-		BatchID: batchID,
-		BatchInput: workflow.BatchPortScanInput{
-			Targets:       data.SplitList(run.Target, true),
-			CampaignID:    run.CampaignID,
-			Ports:         ports,
-			RunPlannedDAG: true,
-		},
-		TotalChunks: run.TotalChunks,
+		RunPlannedDAG:            true,
 	})
 	if err != nil {
 		return err

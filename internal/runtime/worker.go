@@ -29,9 +29,10 @@ func ConfigureControlWorker(w sdkworker.Worker, runtimeApp *app.App, temporalCli
 func ConfigureArtifactWorker(w sdkworker.Worker, runtimeApp *app.App, onlyArtifact string) {
 	repo := runtimeApp.Repo
 	persistHook, dedupHook, markDoneHook := buildHooks(repo)
-	wireGogoStreaming(runtimeApp)
-	wireSprayStreaming(runtimeApp)
-	registerArtifactActivities(w, runtimeApp, persistHook, dedupHook, markDoneHook, onlyArtifact)
+	rawEvents := NewRawEventProcessor(runtimeApp)
+	wireGogoStreaming(runtimeApp, rawEvents)
+	wireSprayStreaming(runtimeApp, rawEvents)
+	registerArtifactActivities(w, runtimeApp, rawEvents, persistHook, dedupHook, markDoneHook, onlyArtifact)
 }
 
 func buildHooks(repo *data.Repository) (artifact.PersistHook, artifact.DedupHook, artifact.MarkDoneHook) {
@@ -60,8 +61,7 @@ func buildHooks(repo *data.Repository) (artifact.PersistHook, artifact.DedupHook
 	return persistHook, dedupHook, markDoneHook
 }
 
-func wireGogoStreaming(runtimeApp *app.App) {
-	repo := runtimeApp.Repo
+func wireGogoStreaming(runtimeApp *app.App, rawEvents *RawEventProcessor) {
 	reg := runtimeApp.Registry
 	a, err := reg.Get("gogo")
 	if err != nil {
@@ -73,35 +73,30 @@ func wireGogoStreaming(runtimeApp *app.App) {
 		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
 			workflowID = info.WorkflowExecution.ID
 		}
-		_ = repo.SaveRawEvent(ctx, &data.RawEvent{
-			ID:         fmt.Sprintf("gogo-stream-%d", time.Now().UnixNano()),
-			CampaignID: campaignID,
-			Artifact:   "gogo",
-			TargetID:   target,
-			TargetType: targetType(target),
-			WorkflowID: workflowID,
-			Data:       raw,
-		})
+		req := RawEventProcessRequest{
+			Artifact:    "gogo",
+			Target:      target,
+			WorkflowID:  workflowID,
+			CampaignID:  campaignID,
+			PersistData: raw,
+		}
 		if !etl.IsGogoResultAssetCandidate(result) {
+			rawEvents.Process(ctx, req)
 			return
 		}
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}})
-		etlCtx := etl.WithCampaignID(ctx, campaignID)
 		if qr, lookupErr := runtimeApp.SDK.LookupResult(sdkResult); lookupErr == nil {
-			etlCtx = etl.WithPreEnrichment(etlCtx, qr)
+			req.PreEnrichment = qr
 		}
-		if err := runtimeApp.Pipelines.Gogo.Process(etlCtx, target, wrapped); err != nil {
-			log.Printf("WARNING: gogo streaming ETL failed: %v", err)
-			return
+		req.ETLData = wrapped
+		req.AfterETL = func(context.Context) error {
+			return upsertStreamingGogoFollowUp(ctx, runtimeApp.Repo, workflowID, campaignID, result)
 		}
-		if err := upsertStreamingGogoFollowUp(ctx, repo, workflowID, campaignID, result); err != nil {
-			log.Printf("WARNING: gogo streaming follow-up scheduling failed: %v", err)
-		}
+		rawEvents.Process(ctx, req)
 	})
 }
 
-func wireSprayStreaming(runtimeApp *app.App) {
-	repo := runtimeApp.Repo
+func wireSprayStreaming(runtimeApp *app.App, rawEvents *RawEventProcessor) {
 	reg := runtimeApp.Registry
 	a, err := reg.Get("spray")
 	if err != nil {
@@ -116,27 +111,22 @@ func wireSprayStreaming(runtimeApp *app.App) {
 		if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
 			workflowID = info.WorkflowExecution.ID
 		}
-		_ = repo.SaveRawEvent(ctx, &data.RawEvent{
-			ID:         fmt.Sprintf("spray-stream-%d", time.Now().UnixNano()),
-			CampaignID: campaignID,
-			Artifact:   "spray",
-			TargetID:   target,
-			TargetType: targetType(target),
-			WorkflowID: workflowID,
-			Data:       raw,
-		})
+		req := RawEventProcessRequest{
+			Artifact:    "spray",
+			Target:      target,
+			WorkflowID:  workflowID,
+			CampaignID:  campaignID,
+			PersistData: raw,
+		}
 		wrapped, _ := json.Marshal(map[string]interface{}{"results": []json.RawMessage{raw}, "total": 1})
-		etlCtx := etl.WithCampaignID(ctx, campaignID)
 		if qr, lookupErr := runtimeApp.SDK.LookupResult(sdkResult); lookupErr == nil {
-			etlCtx = etl.WithPreEnrichment(etlCtx, qr)
+			req.PreEnrichment = qr
 		}
-		if err := runtimeApp.Pipelines.Spray.Process(etlCtx, target, wrapped); err != nil {
-			log.Printf("WARNING: spray streaming ETL failed: %v", err)
-			return
+		req.ETLData = wrapped
+		req.AfterETL = func(context.Context) error {
+			return upsertStreamingSprayFollowUp(ctx, runtimeApp.Repo, workflowID, campaignID, result)
 		}
-		if err := upsertStreamingSprayFollowUp(ctx, repo, workflowID, campaignID, result); err != nil {
-			log.Printf("WARNING: spray streaming follow-up scheduling failed: %v", err)
-		}
+		rawEvents.Process(ctx, req)
 	})
 }
 
@@ -242,10 +232,10 @@ func mustMarshalRuntime(v interface{}) []byte {
 	return raw
 }
 
-func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, persistHook artifact.PersistHook, dedupHook artifact.DedupHook, markDoneHook artifact.MarkDoneHook, onlyArtifact string) {
+func registerArtifactActivities(w sdkworker.Worker, runtimeApp *app.App, rawEvents *RawEventProcessor, persistHook artifact.PersistHook, dedupHook artifact.DedupHook, markDoneHook artifact.MarkDoneHook, onlyArtifact string) {
 	repo := runtimeApp.Repo
 	reg := runtimeApp.Registry
-	rawEvent := buildRawEventHandler(runtimeApp)
+	rawEvent := buildRawEventHandler(rawEvents)
 	statsHook := buildStatsHook(repo)
 	heartbeatHook := buildWorkItemHeartbeatHook(repo)
 	for _, info := range reg.List() {
@@ -274,21 +264,16 @@ func buildWorkItemHeartbeatHook(repo *data.Repository) artifact.WorkItemHeartbea
 	}
 }
 
-func buildRawEventHandler(runtimeApp *app.App) artifact.RawEventHandler {
-	repo := runtimeApp.Repo
+func buildRawEventHandler(rawEvents *RawEventProcessor) artifact.RawEventHandler {
 	return func(ctx context.Context, artifactName, target, workflowID, campaignID string, eventData []byte) {
-		if err := repo.SaveRawEvent(ctx, &data.RawEvent{
-			ID:         fmt.Sprintf("%s-%d", workflowID, time.Now().UnixNano()),
-			CampaignID: campaignID,
-			Artifact:   artifactName,
-			TargetID:   target,
-			TargetType: targetType(target),
-			WorkflowID: workflowID,
-			Data:       eventData,
-		}); err != nil {
-			log.Printf("WARNING: raw event save failed for %s: %v", artifactName, err)
-		}
-		processETL(runtimeApp, ctx, artifactName, target, campaignID, eventData)
+		rawEvents.Process(ctx, RawEventProcessRequest{
+			Artifact:    artifactName,
+			Target:      target,
+			WorkflowID:  workflowID,
+			CampaignID:  campaignID,
+			PersistData: eventData,
+			ETLData:     eventData,
+		})
 	}
 }
 
@@ -314,34 +299,6 @@ func buildStatsHook(repo *data.Repository) artifact.StatsHook {
 			}
 		}
 		return nil
-	}
-}
-
-func processETL(runtimeApp *app.App, ctx context.Context, artifactName, target, campaignID string, eventData []byte) {
-	ctx = etl.WithCampaignID(ctx, campaignID)
-	var etlErr error
-	switch artifactName {
-	case "gogo":
-		etlErr = runtimeApp.Pipelines.Gogo.Process(ctx, target, eventData)
-	case "fingers":
-		etlErr = runtimeApp.Pipelines.Fingers.Process(ctx, target, eventData)
-	case "neutron":
-		etlErr = runtimeApp.Pipelines.Neutron.Process(ctx, target, eventData)
-	case "spray":
-		etlErr = runtimeApp.Pipelines.Spray.Process(ctx, target, eventData)
-	case "zombie":
-		etlErr = runtimeApp.Pipelines.Zombie.Process(ctx, target, eventData)
-	case "proton":
-		etlErr = runtimeApp.Pipelines.Proton.Process(ctx, target, eventData)
-	case "cdncheck":
-		etlErr = runtimeApp.Pipelines.Cdncheck.Process(ctx, target, eventData)
-	case "dnsx":
-		etlErr = runtimeApp.Pipelines.DNSX.Process(ctx, target, eventData)
-	case "nuclei":
-		etlErr = runtimeApp.Pipelines.Nuclei.Process(ctx, target, eventData)
-	}
-	if etlErr != nil {
-		log.Printf("WARNING: ETL failed for %s: %v", artifactName, etlErr)
 	}
 }
 

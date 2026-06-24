@@ -240,7 +240,7 @@ func TestSchedulerPhasePrefersVerificationOverRunningSprayWhenVerificationQueued
 			{Key: "nuclei_group", Pending: 21},
 		},
 	}
-	if got := deriveSchedulerCampaignPhaseFromSnapshot(snapshot); got != CampaignPhaseVerification {
+	if got := data.InferCampaignPhaseFromSummary(snapshot); got != CampaignPhaseVerification {
 		t.Fatalf("phase = %q, want verification", got)
 	}
 }
@@ -251,7 +251,7 @@ func TestSchedulerPhaseTracksRunningSprayWork(t *testing.T) {
 			{Key: "spray_shard", Running: 3},
 		},
 	}
-	if got := deriveSchedulerCampaignPhaseFromSnapshot(snapshot); got != CampaignPhaseExpansion {
+	if got := data.InferCampaignPhaseFromSummary(snapshot); got != CampaignPhaseExpansion {
 		t.Fatalf("phase = %q, want expansion", got)
 	}
 }
@@ -581,12 +581,12 @@ func TestSchedulerQueueCapacityDefaultsToOne(t *testing.T) {
 }
 
 func TestChunkStringsTrimsBeforeDedup(t *testing.T) {
-	chunks := chunkStrings([]string{" a ", "a", "", " b "}, 10)
+	chunks := data.ChunkStrings([]string{" a ", "a", "", " b "}, 10, true)
 	if len(chunks) != 1 {
 		t.Fatalf("len(chunks) = %d, want 1: %#v", len(chunks), chunks)
 	}
 	if len(chunks[0]) != 2 || chunks[0][0] != "a" || chunks[0][1] != "b" {
-		t.Fatalf("chunkStrings = %#v, want trimmed unique values", chunks)
+		t.Fatalf("ChunkStrings = %#v, want trimmed unique values", chunks)
 	}
 }
 

@@ -39,15 +39,15 @@ func sprayShardWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.Wo
 	if fullWordlistMode {
 		baseURLChunkSize = 1
 	}
-	baseURLChunks := chunkStrings(baseURLs, baseURLChunkSize)
+	baseURLChunks := data.ChunkStrings(baseURLs, baseURLChunkSize, true)
 	if len(baseURLChunks) == 0 {
 		baseURLChunks = [][]string{nil}
 	}
-	checkURLChunks := chunkStrings(checkURLs, sprayShardBaseURLSize(input))
+	checkURLChunks := data.ChunkStrings(checkURLs, sprayShardBaseURLSize(input), true)
 	if len(checkURLChunks) == 0 {
 		checkURLChunks = [][]string{nil}
 	}
-	wordChunks := chunkStrings(wordlist, sprayShardWordSize(input))
+	wordChunks := data.ChunkStrings(wordlist, sprayShardWordSize(input), true)
 	if len(wordChunks) == 0 && !fullWordlistMode {
 		wordChunks = [][]string{nil}
 	}

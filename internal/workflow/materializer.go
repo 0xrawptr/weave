@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/planner"
@@ -117,37 +116,4 @@ func actionWorkItemType(artifactName string) string {
 	default:
 		return ""
 	}
-}
-
-func chunkStrings(values []string, size int) [][]string {
-	values = uniqueNonEmpty(values)
-	if len(values) == 0 {
-		return nil
-	}
-	if size <= 0 || size >= len(values) {
-		return [][]string{values}
-	}
-	chunks := make([][]string, 0, (len(values)+size-1)/size)
-	for start := 0; start < len(values); start += size {
-		end := start + size
-		if end > len(values) {
-			end = len(values)
-		}
-		chunks = append(chunks, append([]string{}, values[start:end]...))
-	}
-	return chunks
-}
-
-func uniqueNonEmpty(values []string) []string {
-	seen := make(map[string]bool, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
 }

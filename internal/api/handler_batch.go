@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/0xrawptr/weave/internal/data"
 	"github.com/0xrawptr/weave/internal/workflow"
@@ -332,36 +331,20 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 	if req.RunPlannedDAG != nil {
 		runPlannedDAG = *req.RunPlannedDAG
 	}
-	ports := run.Ports
-	if ports == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "batch run has no ports; cannot resume scheduler"})
-		return
-	}
-	workflowID := fmt.Sprintf("batch_scheduler_resume-%s-%d", batchID, time.Now().UnixNano())
-	wfRun, err := s.temporal.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
-		ID:                  workflowID,
-		TaskQueue:           s.cfg.Temporal.TaskQueue,
-		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
-	}, workflow.SchedulerWorkflow, workflow.SchedulerWorkflowInput{
-		BatchID: batchID,
-		BatchInput: workflow.BatchPortScanInput{
-			Targets:                 data.SplitList(run.Target, true),
-			CampaignID:              run.CampaignID,
-			Ports:                   ports,
-			MaxAttempts:             req.MaxAttempts,
-			RetryDelaySeconds:       req.RetryDelaySeconds,
-			ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
-			CampaignPhase:           req.CampaignPhase,
-			RunPlannedDAG:           runPlannedDAG,
-			PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,
-			SprayShardBaseURLs:      req.SprayShardBaseURLs,
-			SprayShardWords:         req.SprayShardWords,
-			NucleiGroupTargets:      req.NucleiGroupTargets,
-			NucleiGroupTemplates:    req.NucleiGroupTemplates,
-		},
-		TotalChunks:     run.TotalChunks,
-		ContinueAfter:   req.ContinueAfter,
-		MaxContinueRuns: req.MaxContinueRuns,
+	wfRun, err := workflow.StartSchedulerForBatchRun(context.Background(), s.temporal, *run, workflow.SchedulerStartOptions{
+		TaskQueue:               s.cfg.Temporal.TaskQueue,
+		RunPlannedDAG:           runPlannedDAG,
+		MaxAttempts:             req.MaxAttempts,
+		RetryDelaySeconds:       req.RetryDelaySeconds,
+		ActivityTimeoutSeconds:  req.ActivityTimeoutSeconds,
+		CampaignPhase:           req.CampaignPhase,
+		PlannedDAGMaxIterations: req.PlannedDAGMaxIterations,
+		SprayShardBaseURLs:      req.SprayShardBaseURLs,
+		SprayShardWords:         req.SprayShardWords,
+		NucleiGroupTargets:      req.NucleiGroupTargets,
+		NucleiGroupTemplates:    req.NucleiGroupTemplates,
+		ContinueAfter:           req.ContinueAfter,
+		MaxContinueRuns:         req.MaxContinueRuns,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

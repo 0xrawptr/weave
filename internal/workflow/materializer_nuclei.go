@@ -21,14 +21,14 @@ func nucleiGroupWorkItemsFromDAGNode(input SchedulerWorkflowInput, parent data.W
 	targets := data.ActionInputStrings(baseInput, "targets")
 	ids := data.ActionInputStrings(baseInput, "ids")
 	tags := data.ActionInputStrings(baseInput, "tags")
-	targetChunks := chunkStrings(targets, nucleiGroupTargetSize(input))
+	targetChunks := data.ChunkStrings(targets, nucleiGroupTargetSize(input), true)
 	if len(targetChunks) == 0 {
 		targetChunks = [][]string{nil}
 	}
-	templateChunks := chunkStrings(ids, nucleiGroupTemplateSize(input))
+	templateChunks := data.ChunkStrings(ids, nucleiGroupTemplateSize(input), true)
 	templateKey := "ids"
 	if len(templateChunks) == 0 {
-		templateChunks = chunkStrings(tags, nucleiGroupTemplateSize(input))
+		templateChunks = data.ChunkStrings(tags, nucleiGroupTemplateSize(input), true)
 		templateKey = "tags"
 	}
 	if len(templateChunks) == 0 {

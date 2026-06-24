@@ -56,3 +56,22 @@ func ActionInputStrings(input map[string]interface{}, field string) []string {
 		return nil
 	}
 }
+
+func ChunkStrings(values []string, size int, dedup bool) [][]string {
+	values = CleanStrings(values, dedup)
+	if len(values) == 0 {
+		return nil
+	}
+	if size <= 0 || size >= len(values) {
+		return [][]string{values}
+	}
+	chunks := make([][]string, 0, (len(values)+size-1)/size)
+	for start := 0; start < len(values); start += size {
+		end := start + size
+		if end > len(values) {
+			end = len(values)
+		}
+		chunks = append(chunks, append([]string{}, values[start:end]...))
+	}
+	return chunks
+}

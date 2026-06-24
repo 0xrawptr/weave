@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/0xrawptr/weave/internal/contextx"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -71,7 +72,7 @@ func NewActivityFunc(a Artifact, persist PersistHook, dedup DedupHook, markDone 
 			}, nil
 		}
 
-		execCtx := WithCampaignID(ctx, input.CampaignID)
+		execCtx := contextx.WithCampaignID(ctx, input.CampaignID)
 		output, err := a.Execute(execCtx, input)
 		duration := time.Since(start).Milliseconds()
 

@@ -42,9 +42,9 @@ func (r *Repository) GetCampaignRuntimeViewWithCapacity(ctx context.Context, cam
 		view.Phase = NormalizeCampaignPhase(campaign.Phase)
 		view.PhaseReason = campaign.PhaseReason
 	} else {
-		view.Phase = inferRuntimePhase(summary)
+		view.Phase = InferCampaignPhaseFromSummary(summary)
 	}
-	view.OpenPhaseWork = openRuntimePhaseWork(view.Phase, summary)
+	view.OpenPhaseWork = OpenWorkItemGroupsForPhase(view.Phase, summary)
 	view.PhaseBlockingReason = runtimePhaseBlockingReason(view.Phase, view.OpenPhaseWork, summary)
 	view.ExecutionPlan = runtimeExecutionPlan(view.Phase, summary)
 	view.RuntimeQueues = runtimeQueuesForPlan(summary.ByQueue, view.ExecutionPlan)
@@ -58,62 +58,6 @@ func (r *Repository) GetCampaignRuntimeViewWithCapacity(ctx context.Context, cam
 	view.CurrentBottleneck = runtimeCurrentBottleneck(view)
 	view.RuntimeWarnings = runtimeWarnings(view)
 	return view, nil
-}
-
-func inferRuntimePhase(summary WorkItemProgressSummary) string {
-	if hasOpenType(summary, "dns_preflight") {
-		return CampaignPhaseBootstrap
-	}
-	if hasOpenType(summary, "portscan_chunk") || hasOpenType(summary, "planned_dag_followup") || hasOpenType(summary, "fingers_action") {
-		return CampaignPhaseDiscovery
-	}
-	if hasOpenType(summary, "nuclei_group") {
-		return CampaignPhaseVerification
-	}
-	if hasOpenType(summary, "spray_shard") {
-		return CampaignPhaseExpansion
-	}
-	return CampaignPhaseSteady
-}
-
-func hasOpenType(summary WorkItemProgressSummary, itemType string) bool {
-	for _, group := range summary.ByType {
-		if group.Key == itemType && openWorkItemGroup(group) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func openRuntimePhaseWork(phase string, summary WorkItemProgressSummary) []WorkItemGroupSummary {
-	allowed := map[string]bool{}
-	switch NormalizeCampaignPhase(phase) {
-	case CampaignPhaseBootstrap:
-		allowed["dns_preflight"] = true
-	case CampaignPhaseDiscovery:
-		allowed["portscan_chunk"] = true
-		allowed["planned_dag_followup"] = true
-		allowed["fingers_action"] = true
-	case CampaignPhaseExpansion:
-		allowed["spray_shard"] = true
-		allowed["fingers_action"] = true
-	case CampaignPhaseVerification:
-		allowed["nuclei_group"] = true
-		allowed["spray_shard"] = true
-	case CampaignPhaseSteady:
-		for _, group := range summary.ByType {
-			if openWorkItemGroup(group) > 0 {
-				allowed[group.Key] = true
-			}
-		}
-	}
-	out := make([]WorkItemGroupSummary, 0, len(summary.ByType))
-	for _, group := range summary.ByType {
-		if allowed[group.Key] && openWorkItemGroup(group) > 0 {
-			out = append(out, group)
-		}
-	}
-	return out
 }
 
 type runtimePlanDefinition struct {

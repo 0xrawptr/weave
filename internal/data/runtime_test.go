@@ -62,9 +62,9 @@ func TestOpenRuntimePhaseWorkUsesCurrentPhaseTypes(t *testing.T) {
 		{Key: "portscan_chunk", Pending: 1, Queued: 1},
 		{Key: "spray_shard", Pending: 10, Queued: 10},
 	}}
-	got := openRuntimePhaseWork(CampaignPhaseDiscovery, summary)
-	if len(got) != 1 || got[0].Key != "portscan_chunk" {
-		t.Fatalf("phase work = %#v, want only portscan_chunk", got)
+	got := OpenWorkItemGroupsForPhase(CampaignPhaseDiscovery, summary)
+	if len(got) != 2 || got[0].Key != "portscan_chunk" || got[1].Key != "spray_shard" {
+		t.Fatalf("phase work = %#v, want discovery-allowed work", got)
 	}
 }
 

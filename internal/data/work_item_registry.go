@@ -77,3 +77,48 @@ func WorkItemTypesForPhase(phase string) ([]string, bool) {
 		return WorkItemTypesForPhase(CampaignPhaseDiscovery)
 	}
 }
+
+func InferCampaignPhaseFromSummary(summary WorkItemProgressSummary) string {
+	if hasOpenWorkItemType(summary, WorkItemTypeDNSPreflight) {
+		return CampaignPhaseBootstrap
+	}
+	if hasOpenWorkItemType(summary, WorkItemTypePortscanChunk) ||
+		hasOpenWorkItemType(summary, WorkItemTypePlannedDAGFollowUp) ||
+		hasOpenWorkItemType(summary, WorkItemTypeFingersAction) {
+		return CampaignPhaseDiscovery
+	}
+	if hasOpenWorkItemType(summary, WorkItemTypeNucleiGroup) {
+		return CampaignPhaseVerification
+	}
+	if hasOpenWorkItemType(summary, WorkItemTypeSprayShard) {
+		return CampaignPhaseExpansion
+	}
+	return CampaignPhaseSteady
+}
+
+func OpenWorkItemGroupsForPhase(phase string, summary WorkItemProgressSummary) []WorkItemGroupSummary {
+	phase = NormalizeCampaignPhase(phase)
+	out := make([]WorkItemGroupSummary, 0, len(summary.ByType))
+	for _, group := range summary.ByType {
+		if OpenWorkItemGroup(group) == 0 {
+			continue
+		}
+		if phase == CampaignPhaseSteady || WorkItemTypeAllowedInPhase(phase, group.Key) {
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+func OpenWorkItemGroup(group WorkItemGroupSummary) int {
+	return group.Pending + group.Running + group.RetryWaiting + group.Paused
+}
+
+func hasOpenWorkItemType(summary WorkItemProgressSummary, itemType string) bool {
+	for _, group := range summary.ByType {
+		if group.Key == itemType && OpenWorkItemGroup(group) > 0 {
+			return true
+		}
+	}
+	return false
+}
