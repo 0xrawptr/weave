@@ -52,23 +52,6 @@ type SchedulerWorkflowResult struct {
 	ProcessedThisRun int    `json:"processed_this_run,omitempty"`
 }
 
-type schedulerWorkItemInput struct {
-	IP            string                    `json:"ip,omitempty"`
-	Ports         string                    `json:"ports,omitempty"`
-	SourceTarget  string                    `json:"source_target,omitempty"`
-	Target        string                    `json:"target,omitempty"`
-	ActionInput   map[string]interface{}    `json:"input,omitempty"`
-	NodeID        string                    `json:"node_id,omitempty"`
-	Reason        string                    `json:"reason,omitempty"`
-	Risk          string                    `json:"risk,omitempty"`
-	Cost          int                       `json:"cost,omitempty"`
-	DedupKey      string                    `json:"dedup_key,omitempty"`
-	RunIf         *planner.ConditionRequest `json:"run_if,omitempty"`
-	Iteration     int                       `json:"iteration,omitempty"`
-	MaxIterations int                       `json:"max_iterations,omitempty"`
-	ShardIndex    int                       `json:"shard_index,omitempty"`
-}
-
 type ScheduledWorkItemWorkflowInput struct {
 	SchedulerInput SchedulerWorkflowInput `json:"scheduler_input"`
 	Item           data.WorkItem          `json:"item"`
@@ -161,7 +144,6 @@ const (
 )
 
 type schedulerPhasePlan struct {
-	Phase     string
 	ItemTypes []string
 	NowOnly   bool
 }
@@ -169,12 +151,12 @@ type schedulerPhasePlan struct {
 type schedulerCapacityMap map[string]int
 
 func schedulerPhasePlanFor(phase string) schedulerPhasePlan {
-	normalized := NormalizeCampaignPhase(phase)
+	normalized := data.NormalizeCampaignPhase(phase)
 	if normalized == CampaignPhaseAuto {
 		normalized = CampaignPhaseDiscovery
 	}
 	itemTypes, nowOnly := data.WorkItemTypesForPhase(normalized)
-	return schedulerPhasePlan{Phase: normalized, ItemTypes: itemTypes, NowOnly: nowOnly}
+	return schedulerPhasePlan{ItemTypes: itemTypes, NowOnly: nowOnly}
 }
 
 func schedulePipelineWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput) (int, bool, error) {
@@ -271,12 +253,18 @@ func dispatchPhaseWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkf
 	case data.WorkItemTypePlannedDAGFollowUp:
 		queue := schedulerQueueForType(itemType)
 		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, queue, remaining), schedulerQueueCapacity(capacity, queue), startScheduledPlannedDAGWorkItem)
-	case data.WorkItemTypeFingersAction, data.WorkItemTypeSprayShard, data.WorkItemTypeNucleiGroup:
+	default:
+		if !actionPhaseItemType(itemType) {
+			return 0, nil
+		}
 		queue := schedulerQueueForType(itemType)
 		return dispatchScheduledWorkItems(ctx, stateCtx, input, itemType, schedule, schedulerPipelineBurst(capacity, queue, remaining), schedulerQueueCapacity(capacity, queue), startScheduledArtifactActionWorkItem)
-	default:
-		return 0, nil
 	}
+}
+
+func actionPhaseItemType(itemType string) bool {
+	def, ok := data.WorkItemDefinitionForType(itemType)
+	return ok && def.Action
 }
 
 func resolveAndPersistSchedulerCampaignPhaseFromSnapshot(ctx workflow.Context, input SchedulerWorkflowInput, snapshot data.WorkItemProgressSummary) (string, error) {
@@ -284,15 +272,16 @@ func resolveAndPersistSchedulerCampaignPhaseFromSnapshot(ctx workflow.Context, i
 	if input.BatchInput.CampaignID == "" {
 		return desired, nil
 	}
-	phase := NormalizeCampaignPhase(input.BatchInput.CampaignPhase)
+	phase := data.NormalizeCampaignPhase(input.BatchInput.CampaignPhase)
 	if phase != CampaignPhaseAuto {
+		desired = phase
 		reason = "manual phase override"
 	}
 	return updateCampaignPhase(ctx, input, desired, reason)
 }
 
 func desiredSchedulerCampaignPhaseFromSnapshot(input SchedulerWorkflowInput, snapshot data.WorkItemProgressSummary) (string, string) {
-	phase := NormalizeCampaignPhase(input.BatchInput.CampaignPhase)
+	phase := data.NormalizeCampaignPhase(input.BatchInput.CampaignPhase)
 	if phase != CampaignPhaseAuto {
 		return phase, "manual phase override"
 	}
@@ -328,11 +317,7 @@ func updateCampaignPhase(ctx workflow.Context, input SchedulerWorkflowInput, pha
 	if err != nil {
 		return "", err
 	}
-	return NormalizeCampaignPhase(campaign.Phase), nil
-}
-
-func NormalizeCampaignPhase(phase string) string {
-	return data.NormalizeCampaignPhase(phase)
+	return data.NormalizeCampaignPhase(campaign.Phase), nil
 }
 
 func dispatchScheduledWorkItems(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, itemType, schedule string, maxStarts, maxRunning int, start func(workflow.Context, workflow.Context, SchedulerWorkflowInput, data.WorkItem) error) (int, error) {
@@ -428,7 +413,7 @@ func startScheduledWorkItemsChild(ctx, stateCtx workflow.Context, input Schedule
 			return nil
 		}
 		for _, item := range items {
-			if updateErr := setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), childID, err.Error(), false); updateErr != nil {
+			if updateErr := setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, childID, err.Error(), false); updateErr != nil {
 				return updateErr
 			}
 		}
@@ -493,7 +478,7 @@ func runScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, schedulerInput
 		if updateErr := upsertPortScanBatchChunk(stateCtx, schedulerInput.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, workflowID, "failed", err.Error()); updateErr != nil {
 			return updateErr
 		}
-		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+		return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, err.Error(), false)
 	}
 	if err := upsertPortScanBatchChunk(stateCtx, schedulerInput.BatchID, batchPortScanChunk{Target: sourceTarget, Chunk: item.Target}, workflowID, "completed", ""); err != nil {
 		return err
@@ -549,7 +534,7 @@ func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input Scheduled
 			}),
 		}, &dnsxResult)
 		if err != nil {
-			return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+			return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, err.Error(), false)
 		}
 	}
 
@@ -564,7 +549,7 @@ func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input Scheduled
 		Data:                  mustMarshal(map[string]interface{}{"target": target}),
 	}, &cdnResult)
 	if err != nil {
-		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+		return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, err.Error(), false)
 	}
 
 	chunk := batchPortScanChunk{Target: sourceTarget, Chunk: target}
@@ -597,7 +582,7 @@ func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWo
 		iteration = 1
 	}
 	maxIterations := maxPositive(itemInput.MaxIterations, schedulerInput.BatchInput.PlannedDAGMaxIterations)
-	item.Input = mustMarshal(schedulerWorkItemInput{
+	item.Input = mustMarshal(data.WorkItemEnvelope{
 		Target:        item.Target,
 		Iteration:     iteration,
 		MaxIterations: maxIterations,
@@ -608,7 +593,7 @@ func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWo
 		Target:     item.Target,
 		CampaignID: schedulerInput.BatchInput.CampaignID,
 	}).Get(ctx, &plan); err != nil {
-		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+		return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, err.Error(), false)
 	}
 	items := make([]data.WorkItem, 0, len(plan.Nodes))
 	for _, node := range plan.Nodes {
@@ -621,7 +606,7 @@ func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWo
 	}
 	admitted, err := admitBatchWorkItems(stateCtx, schedulerInput, items)
 	if err != nil {
-		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+		return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, err.Error(), false)
 	}
 	items = admitted
 	if err := upsertBatchWorkItems(stateCtx, items); err != nil {
@@ -685,7 +670,7 @@ func ScheduledArtifactWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "", err.Error()); updateErr != nil {
 			return updateErr
 		}
-		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, err.Error(), false)
+		return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, err.Error(), false)
 	}
 	if actionResult == nil || !actionResult.Success {
 		errorMessage := "action failed"
@@ -701,7 +686,7 @@ func ScheduledArtifactWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 		if updateErr := completeScheduledActionRecord(stateCtx, item.ID, false, "", errorMessage); updateErr != nil {
 			return updateErr
 		}
-		return setBatchWorkItemStatus(stateCtx, item.ID, schedulerFailureStatus(item), workflowID, errorMessage, false)
+		return setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusFailed, workflowID, errorMessage, false)
 	}
 	if isNoopArtifactAction(item.Artifact, "", actionResult.Data) {
 		reason := "noop action"
@@ -746,7 +731,7 @@ func isNoopArtifactAction(artifactName, errorMessage string, raw []byte) bool {
 	return out.SkippedReason == "no_templates_available"
 }
 
-func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) (bool, error) {
+func claimScheduledActionRecord(ctx workflow.Context, item data.WorkItem, itemInput data.WorkItemEnvelope, workflowID string) (bool, error) {
 	action := scheduledPlannerAction(item, itemInput, workflowID)
 	action.Status = "running"
 	var claimed bool
@@ -774,7 +759,7 @@ func executeArtifactActivity(activityCtx workflow.Context, activityName string, 
 	return workflow.ExecuteActivity(activityCtx, activityName, input).Get(activityCtx, result)
 }
 
-func scheduledPlannerAction(item data.WorkItem, itemInput schedulerWorkItemInput, workflowID string) planner.Action {
+func scheduledPlannerAction(item data.WorkItem, itemInput data.WorkItemEnvelope, workflowID string) planner.Action {
 	input := copyActionInput(itemInput.ActionInput)
 	plannerMeta, _ := input["_planner"].(map[string]interface{})
 	if plannerMeta == nil {
@@ -811,7 +796,7 @@ func artifactWorkItemChildWorkflowID(batchID, itemType, target, itemID string, a
 	return fmt.Sprintf("%s-%s-%s-%s-%d", batchID, itemType, safeWorkflowIDPart(target), itemID, attempts)
 }
 
-func evaluateActionWorkItemCondition(ctx workflow.Context, item data.WorkItem, itemInput schedulerWorkItemInput) (bool, string, error) {
+func evaluateActionWorkItemCondition(ctx workflow.Context, item data.WorkItem, itemInput data.WorkItemEnvelope) (bool, string, error) {
 	request := *itemInput.RunIf
 	if request.Target == "" {
 		if itemInput.Target != "" {
@@ -940,7 +925,7 @@ func claimScheduledWorkItem(ctx workflow.Context, input SchedulerWorkflowInput, 
 		Artifact:     artifactName,
 		Queue:        queue,
 		WorkflowID:   workflow.GetInfo(ctx).WorkflowExecution.ID,
-		LeaseSeconds: schedulerLeaseSeconds(),
+		LeaseSeconds: schedulerRunningLeaseSeconds,
 		Schedule:     data.NormalizeSchedule(schedule),
 		MaxRunning:   maxRunning,
 	}).Get(ctx, &item)
@@ -1026,36 +1011,32 @@ func workItemSummaryFromGroup(group data.WorkItemGroupSummary) schedulerWorkItem
 func loadSchedulerSummaryFromSnapshot(snapshot data.WorkItemProgressSummary, input SchedulerWorkflowInput, result *SchedulerWorkflowResult) {
 	preflight := schedulerSummaryForType(snapshot, data.WorkItemTypeDNSPreflight)
 	result.PreflightTotal = preflight.Total
-	result.PreflightDone = preflight.ByStatus["completed"]
-	result.PreflightFailed = preflight.ByStatus["failed"] + preflight.ByStatus["dead"]
-	result.PreflightPending = preflight.ByStatus["pending"] + preflight.ByStatus["retry_waiting"] + preflight.ByStatus["paused"]
-	result.PreflightRunning = preflight.ByStatus["running"]
+	result.PreflightDone = preflight.ByStatus[data.WorkItemStatusCompleted]
+	result.PreflightFailed = preflight.ByStatus[data.WorkItemStatusFailed] + preflight.ByStatus[data.WorkItemStatusDead]
+	result.PreflightPending = preflight.ByStatus[data.WorkItemStatusPending] + preflight.ByStatus[data.WorkItemStatusRetryWaiting] + preflight.ByStatus[data.WorkItemStatusPaused]
+	result.PreflightRunning = preflight.ByStatus[data.WorkItemStatusRunning]
 	portscan := schedulerSummaryForType(snapshot, data.WorkItemTypePortscanChunk)
 	result.PortScanTotal = portscan.Total
-	result.PortScanDone = portscan.ByStatus["completed"]
-	result.PortScanFailed = portscan.ByStatus["failed"] + portscan.ByStatus["dead"]
-	result.PortScanPending = portscan.ByStatus["pending"] + portscan.ByStatus["retry_waiting"] + portscan.ByStatus["paused"]
-	result.PortScanRunning = portscan.ByStatus["running"]
+	result.PortScanDone = portscan.ByStatus[data.WorkItemStatusCompleted]
+	result.PortScanFailed = portscan.ByStatus[data.WorkItemStatusFailed] + portscan.ByStatus[data.WorkItemStatusDead]
+	result.PortScanPending = portscan.ByStatus[data.WorkItemStatusPending] + portscan.ByStatus[data.WorkItemStatusRetryWaiting] + portscan.ByStatus[data.WorkItemStatusPaused]
+	result.PortScanRunning = portscan.ByStatus[data.WorkItemStatusRunning]
 	if input.BatchInput.RunPlannedDAG {
 		followUp := schedulerSummaryForType(snapshot, data.WorkItemTypePlannedDAGFollowUp)
 		result.FollowUpTotal = followUp.Total
-		result.FollowUpDone = followUp.ByStatus["completed"]
-		result.FollowUpFailed = followUp.ByStatus["failed"] + followUp.ByStatus["dead"]
-		result.FollowUpPending = followUp.ByStatus["pending"] + followUp.ByStatus["retry_waiting"] + followUp.ByStatus["paused"]
-		result.FollowUpRunning = followUp.ByStatus["running"]
+		result.FollowUpDone = followUp.ByStatus[data.WorkItemStatusCompleted]
+		result.FollowUpFailed = followUp.ByStatus[data.WorkItemStatusFailed] + followUp.ByStatus[data.WorkItemStatusDead]
+		result.FollowUpPending = followUp.ByStatus[data.WorkItemStatusPending] + followUp.ByStatus[data.WorkItemStatusRetryWaiting] + followUp.ByStatus[data.WorkItemStatusPaused]
+		result.FollowUpRunning = followUp.ByStatus[data.WorkItemStatusRunning]
 		for _, itemType := range data.ActionWorkItemTypes() {
 			phaseSummary := schedulerSummaryForType(snapshot, itemType)
 			result.ActionTotal += phaseSummary.Total
-			result.ActionDone += phaseSummary.ByStatus["completed"] + phaseSummary.ByStatus["skipped"]
-			result.ActionFailed += phaseSummary.ByStatus["failed"] + phaseSummary.ByStatus["dead"]
-			result.ActionPending += phaseSummary.ByStatus["pending"] + phaseSummary.ByStatus["retry_waiting"] + phaseSummary.ByStatus["paused"]
-			result.ActionRunning += phaseSummary.ByStatus["running"]
+			result.ActionDone += phaseSummary.ByStatus[data.WorkItemStatusCompleted] + phaseSummary.ByStatus[data.WorkItemStatusSkipped]
+			result.ActionFailed += phaseSummary.ByStatus[data.WorkItemStatusFailed] + phaseSummary.ByStatus[data.WorkItemStatusDead]
+			result.ActionPending += phaseSummary.ByStatus[data.WorkItemStatusPending] + phaseSummary.ByStatus[data.WorkItemStatusRetryWaiting] + phaseSummary.ByStatus[data.WorkItemStatusPaused]
+			result.ActionRunning += phaseSummary.ByStatus[data.WorkItemStatusRunning]
 		}
 	}
-}
-
-func schedulerLeaseSeconds() int {
-	return schedulerRunningLeaseSeconds
 }
 
 func schedulerQueueForType(itemType string) string {
@@ -1127,17 +1108,8 @@ func nextSchedulerInput(input SchedulerWorkflowInput) SchedulerWorkflowInput {
 	return input
 }
 
-func schedulerFailureStatus(item data.WorkItem) string {
-	if item.MaxAttempts > 0 && item.Attempts < item.MaxAttempts {
-		return "retry_waiting"
-	}
-	return "failed"
-}
-
-func parseSchedulerWorkItemInput(item data.WorkItem) schedulerWorkItemInput {
-	var out schedulerWorkItemInput
-	_ = json.Unmarshal(item.Input, &out)
-	return out
+func parseSchedulerWorkItemInput(item data.WorkItem) data.WorkItemEnvelope {
+	return data.ParseWorkItemEnvelope(item)
 }
 
 func plannedDAGFollowUpWorkItemFromScheduler(input SchedulerWorkflowInput, parent data.WorkItem, schedule string) data.WorkItem {
@@ -1149,7 +1121,7 @@ func plannedDAGFollowUpWorkItemFromScheduler(input SchedulerWorkflowInput, paren
 
 func shouldReplanAfterAction(itemType string) bool {
 	def, ok := data.WorkItemDefinitionForType(itemType)
-	return ok && def.Action && itemType != data.WorkItemTypeNucleiGroup
+	return ok && def.Action && def.ReplanAfter
 }
 
 func upsertNextPlannedDAGFollowUp(ctx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem) error {
@@ -1249,7 +1221,7 @@ func normalizeBatchPortScanInput(input BatchPortScanInput) BatchPortScanInput {
 	if input.RetryDelaySeconds > 3600 {
 		input.RetryDelaySeconds = 3600
 	}
-	input.CampaignPhase = NormalizeCampaignPhase(input.CampaignPhase)
+	input.CampaignPhase = data.NormalizeCampaignPhase(input.CampaignPhase)
 	if input.PlannedDAGMaxIterations <= 0 {
 		input.PlannedDAGMaxIterations = 5
 	}

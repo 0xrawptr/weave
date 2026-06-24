@@ -78,3 +78,15 @@ func TestRecoverableWorkItemExecutionError(t *testing.T) {
 		t.Fatalf("business execution errors should not be treated as recoverable infrastructure failures")
 	}
 }
+
+func TestFailureWorkItemStatus(t *testing.T) {
+	if got := failureWorkItemStatus(1, 3); got != WorkItemStatusRetryWaiting {
+		t.Fatalf("failure status = %q, want retry_waiting", got)
+	}
+	if got := failureWorkItemStatus(3, 3); got != WorkItemStatusDead {
+		t.Fatalf("failure status = %q, want dead", got)
+	}
+	if got := failureWorkItemStatus(1, 0); got != WorkItemStatusDead {
+		t.Fatalf("failure status = %q, want dead", got)
+	}
+}

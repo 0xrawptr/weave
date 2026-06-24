@@ -13,10 +13,6 @@ type wordlistRange struct {
 
 func sprayActionMaterializer() actionMaterializer {
 	return actionMaterializerFunc{
-		validate: func(node planner.DAGPlanNode) bool {
-			baseInput := mapAnyToInterface(node.Input)
-			return len(data.ActionInputStrings(baseInput, "base_urls")) > 0 || len(data.ActionInputStrings(baseInput, "urls")) > 0
-		},
 		materialize: sprayShardWorkItemsFromDAGNode,
 	}
 }

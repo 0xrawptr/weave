@@ -71,17 +71,17 @@ func TestTargetID(t *testing.T) {
 	}
 }
 
-func TestPlannerConsumableURLStatusExcludesQueued(t *testing.T) {
-	if plannerConsumableURLStatus(AssetStatusQueued) {
+func TestPlannerVisibleAssetStatusExcludesQueued(t *testing.T) {
+	if plannerVisibleAssetStatus(AssetStatusQueued) {
 		t.Fatalf("queued URLs should stay in assets without entering planner replan")
 	}
-	if !plannerConsumableURLStatus(AssetStatusCandidate) {
+	if !plannerVisibleAssetStatus(AssetStatusCandidate) {
 		t.Fatalf("candidate URLs should enter planner replan")
 	}
-	if !plannerConsumableURLStatus(AssetStatusObserved) {
+	if !plannerVisibleAssetStatus(AssetStatusObserved) {
 		t.Fatalf("observed URLs should enter planner replan")
 	}
-	if plannerConsumableURLStatus(AssetStatusNoise) {
+	if plannerVisibleAssetStatus(AssetStatusNoise) {
 		t.Fatalf("noise URLs should not enter planner replan")
 	}
 }

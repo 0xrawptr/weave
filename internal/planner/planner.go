@@ -33,31 +33,20 @@ type Decision struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
-const (
-	ScheduleNow   = data.ScheduleNow
-	ScheduleBatch = data.ScheduleBatch
-)
-
 type Planner struct {
 	repo *data.Repository
 }
 
 type ActionSpec struct {
-	Stage         int
-	DefaultReason string
 	DefaultNow    func(Action) (string, bool)
 	ValidateInput func(Action) string
 }
 
 var actionSpecs = map[string]ActionSpec{
 	"fingers": {
-		Stage:         20,
-		DefaultReason: "fingerprint enrichment",
 		ValidateInput: requireActionInput("urls", "fingers requires urls"),
 	},
 	"spray": {
-		Stage:         30,
-		DefaultReason: "surface discovery",
 		ValidateInput: func(action Action) string {
 			if len(data.ActionInputStrings(action.Input, "base_urls")) == 0 && len(data.ActionInputStrings(action.Input, "urls")) == 0 {
 				return "spray requires base_urls or urls"
@@ -66,8 +55,6 @@ var actionSpecs = map[string]ActionSpec{
 		},
 	},
 	"nuclei": {
-		Stage:         40,
-		DefaultReason: "verification can run in batch",
 		DefaultNow:    vulnerabilityEvidenceSchedule,
 		ValidateInput: validateNucleiActionInput,
 	},
@@ -395,8 +382,8 @@ func PlanDAGFromActions(target, campaignID string, actions []Action) DAGPlan {
 }
 
 func dagStage(artifact string) int {
-	if spec, ok := actionSpecs[artifact]; ok && spec.Stage > 0 {
-		return spec.Stage
+	if def, ok := data.WorkItemDefinitionForArtifact(artifact); ok && def.Stage > 0 {
+		return def.Stage
 	}
 	return 50
 }
@@ -420,52 +407,27 @@ func actionDependsOn(action Action, byArtifact map[string][]string) []string {
 			}
 		}
 	}
-	switch action.Artifact {
-	case "fingers":
-		add(byArtifact["gogo"])
-	case "spray":
-		if len(byArtifact["fingers"]) > 0 {
-			add(byArtifact["fingers"])
-		} else {
-			add(byArtifact["gogo"])
-		}
-	case "nuclei":
-		add(byArtifact["fingers"])
-		add(byArtifact["spray"])
+	def, ok := data.WorkItemDefinitionForArtifact(action.Artifact)
+	if !ok {
+		return nil
+	}
+	for _, artifact := range def.DependsOn {
+		add(byArtifact[artifact])
 	}
 	return unique(deps)
 }
 
 func actionRunIf(action Action) *ConditionRequest {
-	switch action.Artifact {
-	case "fingers":
-		return &ConditionRequest{
-			Target:     action.Target,
-			CampaignID: action.CampaignID,
-			Any: []AssetCondition{
-				{Type: "service", MinCount: 1},
-				{Type: "url", MinCount: 1},
-			},
-		}
-	case "spray":
-		return nil
-	case "nuclei":
-		return &ConditionRequest{
-			Target:     action.Target,
-			CampaignID: action.CampaignID,
-			Any: []AssetCondition{
-				{Type: "template", MinCount: 1},
-				{Type: "tag", MinCount: 1},
-				{Type: "fingerprint", MinCount: 1},
-				{Type: "cve", MinCount: 1},
-				{Type: "url", Source: "spray", Status: "candidate", MinCount: 1},
-				{Type: "url", Source: "spray", Status: "observed", MinCount: 1},
-				{Type: "url", Source: "spray", Status: "interesting", MinCount: 1},
-			},
-		}
-	default:
+	def, ok := data.WorkItemDefinitionForArtifact(action.Artifact)
+	if !ok || def.RunIf == nil {
 		return nil
 	}
+	request := *def.RunIf
+	request.Target = action.Target
+	request.CampaignID = action.CampaignID
+	request.All = append([]AssetCondition{}, request.All...)
+	request.Any = append([]AssetCondition{}, request.Any...)
+	return &request
 }
 
 func (a Action) PersistInput() map[string]interface{} {
@@ -515,9 +477,9 @@ func decisionForAction(action Action) Decision {
 				return Decision{Schedule: data.ScheduleNow, Reason: reason}
 			}
 		}
-		if spec.DefaultReason != "" {
-			return Decision{Schedule: data.ScheduleBatch, Reason: spec.DefaultReason}
-		}
+	}
+	if def, ok := data.WorkItemDefinitionForArtifact(action.Artifact); ok && def.DefaultReason != "" {
+		return Decision{Schedule: data.ScheduleBatch, Reason: def.DefaultReason}
 	}
 	return Decision{Schedule: data.ScheduleBatch, Reason: "default batch schedule"}
 }
@@ -678,14 +640,7 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 	if len(record.Input) == 0 || json.Unmarshal(record.Input, &input) != nil {
 		return nil
 	}
-	if values := data.ActionInputStrings(input, field); len(values) > 0 {
-		return values
-	}
-	nested, ok := input["input"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	return data.ActionInputStrings(nested, field)
+	return data.ActionInputStrings(input, field)
 }
 
 func actionRecordsFromWorkItems(items []data.WorkItem) []data.ActionRecord {
@@ -703,15 +658,11 @@ func actionRecordFromWorkItem(item data.WorkItem) (data.ActionRecord, bool) {
 	if !data.PlannerBlockingActionStatus(item.Status) || item.Artifact == "" || len(item.Input) == 0 {
 		return data.ActionRecord{}, false
 	}
-	var envelope struct {
-		Input    map[string]interface{} `json:"input"`
-		DedupKey string                 `json:"dedup_key"`
-		Reason   string                 `json:"reason"`
-	}
-	if json.Unmarshal(item.Input, &envelope) != nil || len(envelope.Input) == 0 {
+	envelope := data.ParseWorkItemEnvelope(item)
+	if len(envelope.ActionInput) == 0 {
 		return data.ActionRecord{}, false
 	}
-	input := copyMap(envelope.Input)
+	input := copyMap(envelope.ActionInput)
 	if envelope.DedupKey != "" {
 		plannerMeta, _ := input["_planner"].(map[string]interface{})
 		if plannerMeta == nil {
@@ -842,7 +793,7 @@ func uniqueCVEAssets(assets []data.Asset) []data.Asset {
 			continue
 		}
 		if i, ok := seen[asset.Value]; ok {
-			if severityRank(asset.Severity) > severityRank(out[i].Severity) {
+			if data.SeverityRank(asset.Severity) > data.SeverityRank(out[i].Severity) {
 				out[i] = asset
 			}
 			continue
@@ -851,29 +802,12 @@ func uniqueCVEAssets(assets []data.Asset) []data.Asset {
 		out = append(out, asset)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if severityRank(out[i].Severity) == severityRank(out[j].Severity) {
+		if data.SeverityRank(out[i].Severity) == data.SeverityRank(out[j].Severity) {
 			return out[i].Value < out[j].Value
 		}
-		return severityRank(out[i].Severity) > severityRank(out[j].Severity)
+		return data.SeverityRank(out[i].Severity) > data.SeverityRank(out[j].Severity)
 	})
 	return out
-}
-
-func severityRank(severity string) int {
-	switch strings.ToLower(strings.TrimSpace(severity)) {
-	case "critical":
-		return 5
-	case "high":
-		return 4
-	case "medium":
-		return 3
-	case "low":
-		return 2
-	case "info":
-		return 1
-	default:
-		return 0
-	}
 }
 
 func actionDedupKey(parts ...string) string {
@@ -901,7 +835,7 @@ func uniqueHTTP(values []string) []string {
 func filterHTTP(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		if data.IsHTTPURL(value) {
 			out = append(out, value)
 		}
 	}

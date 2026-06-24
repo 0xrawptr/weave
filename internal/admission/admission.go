@@ -1,10 +1,6 @@
 package admission
 
 import (
-	"encoding/json"
-	"net"
-	"net/netip"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -38,11 +34,11 @@ type Decision struct {
 }
 
 type Policy struct {
-	scope scopeSet
+	scope data.ScopeSet
 }
 
 func NewPolicy(scopeTargets []string) Policy {
-	return Policy{scope: newScopeSet(scopeTargets)}
+	return Policy{scope: data.NewScopeSet(scopeTargets)}
 }
 
 func Admit(request Request) Result {
@@ -72,7 +68,7 @@ func (p Policy) Decide(item data.WorkItem, seen map[string]bool) Decision {
 	if seen[itemIDKey(item)] {
 		return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "work item already planned"}
 	}
-	envelope := parseEnvelope(item)
+	envelope := data.ParseWorkItemEnvelope(item)
 	if key := actionBaseKey(item, envelope); key != "" && seen[key] {
 		return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "action already planned"}
 	}
@@ -85,24 +81,10 @@ func (p Policy) Decide(item data.WorkItem, seen map[string]bool) Decision {
 	if isNoise(envelope.ActionInput) {
 		return Decision{ItemID: item.ID, Status: StatusSkipped, Reason: "noise result cannot schedule actions"}
 	}
-	if !p.scope.allowsWorkItem(item, envelope) {
+	if !allowsWorkItem(p.scope, item, envelope) {
 		return Decision{ItemID: item.ID, Status: StatusRejected, Reason: "target is outside campaign scope"}
 	}
 	return Decision{ItemID: item.ID, Status: StatusAdmitted}
-}
-
-type workItemEnvelope struct {
-	Target      string                 `json:"target,omitempty"`
-	ActionInput map[string]interface{} `json:"input,omitempty"`
-	DedupKey    string                 `json:"dedup_key,omitempty"`
-	Risk        string                 `json:"risk,omitempty"`
-	ShardIndex  int                    `json:"shard_index,omitempty"`
-}
-
-func parseEnvelope(item data.WorkItem) workItemEnvelope {
-	var out workItemEnvelope
-	_ = json.Unmarshal(item.Input, &out)
-	return out
 }
 
 func blockingKeys(items []data.WorkItem) map[string]bool {
@@ -118,7 +100,7 @@ func blockingKeys(items []data.WorkItem) map[string]bool {
 
 func rememberBlockingKeys(seen map[string]bool, item data.WorkItem) {
 	seen[itemIDKey(item)] = true
-	envelope := parseEnvelope(item)
+	envelope := data.ParseWorkItemEnvelope(item)
 	if key := actionPreciseKey(item, envelope); key != "" {
 		seen[key] = true
 	}
@@ -126,7 +108,7 @@ func rememberBlockingKeys(seen map[string]bool, item data.WorkItem) {
 
 func rememberExistingBlockingKeys(seen map[string]bool, item data.WorkItem) {
 	rememberBlockingKeys(seen, item)
-	envelope := parseEnvelope(item)
+	envelope := data.ParseWorkItemEnvelope(item)
 	if key := actionBaseKey(item, envelope); key != "" {
 		seen[key] = true
 	}
@@ -136,14 +118,14 @@ func itemIDKey(item data.WorkItem) string {
 	return "id:" + item.ID
 }
 
-func actionBaseKey(item data.WorkItem, envelope workItemEnvelope) string {
+func actionBaseKey(item data.WorkItem, envelope data.WorkItemEnvelope) string {
 	if envelope.DedupKey == "" {
 		return ""
 	}
 	return strings.Join([]string{"action", item.CampaignID, item.BatchID, item.Target, item.Type, item.Artifact, envelope.DedupKey}, "\x00")
 }
 
-func actionPreciseKey(item data.WorkItem, envelope workItemEnvelope) string {
+func actionPreciseKey(item data.WorkItem, envelope data.WorkItemEnvelope) string {
 	base := actionBaseKey(item, envelope)
 	if base == "" || envelope.ShardIndex <= 0 {
 		return base
@@ -151,7 +133,7 @@ func actionPreciseKey(item data.WorkItem, envelope workItemEnvelope) string {
 	return strings.Join([]string{base, "shard", strconv.Itoa(envelope.ShardIndex)}, "\x00")
 }
 
-func requiresApproval(item data.WorkItem, envelope workItemEnvelope) bool {
+func requiresApproval(item data.WorkItem, envelope data.WorkItemEnvelope) bool {
 	if item.Artifact == "zombie" {
 		return true
 	}
@@ -201,40 +183,8 @@ func stringValue(input map[string]interface{}, key string) string {
 	return value
 }
 
-type scopeSet struct {
-	empty    bool
-	hosts    map[string]bool
-	domains  []string
-	prefixes []netip.Prefix
-}
-
-func newScopeSet(targets []string) scopeSet {
-	out := scopeSet{hosts: map[string]bool{}}
-	for _, target := range targets {
-		target = normalizeHostLike(target)
-		if target == "" {
-			continue
-		}
-		if prefix, err := netip.ParsePrefix(target); err == nil {
-			out.prefixes = append(out.prefixes, prefix)
-			continue
-		}
-		if addr, err := netip.ParseAddr(target); err == nil {
-			out.prefixes = append(out.prefixes, netip.PrefixFrom(addr, addr.BitLen()))
-			continue
-		}
-		host := strings.ToLower(target)
-		out.hosts[host] = true
-		if net.ParseIP(host) == nil {
-			out.domains = append(out.domains, host)
-		}
-	}
-	out.empty = len(out.hosts) == 0 && len(out.prefixes) == 0
-	return out
-}
-
-func (s scopeSet) allowsWorkItem(item data.WorkItem, envelope workItemEnvelope) bool {
-	if s.empty {
+func allowsWorkItem(scope data.ScopeSet, item data.WorkItem, envelope data.WorkItemEnvelope) bool {
+	if scope.Empty() {
 		return true
 	}
 	values := make([]string, 0, 8)
@@ -245,84 +195,16 @@ func (s scopeSet) allowsWorkItem(item data.WorkItem, envelope workItemEnvelope) 
 		values = []string{item.Target, envelope.Target}
 	}
 	for _, value := range values {
-		host := normalizeHostLike(value)
+		host := data.NormalizeHostLike(value)
 		if host == "" {
 			continue
 		}
-		if isLoopbackHost(host) && !s.contains(host) {
+		if data.IsLoopbackHost(host) && !scope.Contains(host) {
 			return false
 		}
-		if !s.contains(host) {
+		if !scope.Contains(host) {
 			return false
 		}
 	}
 	return true
-}
-
-func (s scopeSet) contains(host string) bool {
-	host = normalizeHostLike(host)
-	if host == "" {
-		return true
-	}
-	if s.hosts[strings.ToLower(host)] {
-		return true
-	}
-	if addr, err := netip.ParseAddr(host); err == nil {
-		for _, prefix := range s.prefixes {
-			if prefix.Contains(addr) {
-				return true
-			}
-		}
-		return false
-	}
-	host = strings.ToLower(host)
-	for _, domain := range s.domains {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeHostLike(raw string) string {
-	raw = strings.TrimSpace(strings.Trim(raw, `"'`))
-	if raw == "" {
-		return ""
-	}
-	if strings.Contains(raw, "://") {
-		u, err := url.Parse(raw)
-		if err != nil {
-			return ""
-		}
-		return strings.ToLower(strings.Trim(u.Hostname(), "[]"))
-	}
-	if strings.Contains(raw, "/") {
-		if _, err := netip.ParsePrefix(raw); err == nil {
-			return raw
-		}
-		return ""
-	}
-	host := raw
-	if h, _, err := net.SplitHostPort(raw); err == nil {
-		host = h
-	} else if strings.Count(raw, ":") == 1 {
-		if h, _, err := net.SplitHostPort(raw); err == nil {
-			host = h
-		} else {
-			parts := strings.Split(raw, ":")
-			if len(parts) == 2 {
-				host = parts[0]
-			}
-		}
-	}
-	return strings.ToLower(strings.Trim(host, "[]"))
-}
-
-func isLoopbackHost(host string) bool {
-	host = strings.ToLower(normalizeHostLike(host))
-	if host == "localhost" {
-		return true
-	}
-	addr, err := netip.ParseAddr(host)
-	return err == nil && addr.IsLoopback()
 }

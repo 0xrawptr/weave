@@ -76,6 +76,13 @@ func OpenWorkItemStatus(status string) bool {
 	}
 }
 
+func failureWorkItemStatus(attempts, maxAttempts int) string {
+	if attempts < maxAttempts {
+		return WorkItemStatusRetryWaiting
+	}
+	return WorkItemStatusDead
+}
+
 // Admission blocking statuses prevent duplicate work from being admitted once
 // equivalent work is queued, active, retryable, paused, or already completed.
 func AdmissionBlockingWorkItemStatus(status string) bool {

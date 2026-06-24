@@ -14,19 +14,35 @@ type WorkItemDefinition struct {
 	Queue           string
 	Artifact        string
 	RuntimeArtifact string
+	Stage           int
+	DependsOn       []string
+	DefaultReason   string
+	RunIf           *WorkItemConditionRequest
 	PrimaryPhase    string
 	AllowedPhases   []string
 	Planner         bool
 	Action          bool
+	ReplanAfter     bool
 }
 
 var workItemDefinitions = []WorkItemDefinition{
 	{Type: WorkItemTypeDNSPreflight, Queue: "dns", Artifact: "dns_preflight", RuntimeArtifact: "dnsx", PrimaryPhase: CampaignPhaseBootstrap, AllowedPhases: []string{CampaignPhaseBootstrap}},
 	{Type: WorkItemTypePortscanChunk, Queue: "portscan", Artifact: "gogo", PrimaryPhase: CampaignPhaseDiscovery, AllowedPhases: []string{CampaignPhaseDiscovery}},
 	{Type: WorkItemTypePlannedDAGFollowUp, Queue: "planner", Artifact: "planned_dag", PrimaryPhase: CampaignPhaseDiscovery, AllowedPhases: []string{CampaignPhaseDiscovery}, Planner: true},
-	{Type: WorkItemTypeFingersAction, Queue: "http", Artifact: "fingers", PrimaryPhase: CampaignPhaseDiscovery, AllowedPhases: []string{CampaignPhaseDiscovery, CampaignPhaseExpansion}, Planner: true, Action: true},
-	{Type: WorkItemTypeSprayShard, Queue: "spray", Artifact: "spray", PrimaryPhase: CampaignPhaseExpansion, AllowedPhases: []string{CampaignPhaseDiscovery, CampaignPhaseExpansion, CampaignPhaseVerification}, Planner: true, Action: true},
-	{Type: WorkItemTypeNucleiGroup, Queue: "nuclei", Artifact: "nuclei", PrimaryPhase: CampaignPhaseVerification, AllowedPhases: []string{CampaignPhaseVerification}, Planner: true, Action: true},
+	{Type: WorkItemTypeFingersAction, Queue: "http", Artifact: "fingers", Stage: 20, RunIf: &WorkItemConditionRequest{Any: []WorkItemAssetCondition{
+		{Type: "service", MinCount: 1},
+		{Type: "url", MinCount: 1},
+	}}, DefaultReason: "fingerprint enrichment", PrimaryPhase: CampaignPhaseDiscovery, AllowedPhases: []string{CampaignPhaseDiscovery, CampaignPhaseExpansion}, Planner: true, Action: true, ReplanAfter: true},
+	{Type: WorkItemTypeSprayShard, Queue: "spray", Artifact: "spray", Stage: 30, DependsOn: []string{"fingers", "gogo"}, DefaultReason: "surface discovery", PrimaryPhase: CampaignPhaseExpansion, AllowedPhases: []string{CampaignPhaseDiscovery, CampaignPhaseExpansion, CampaignPhaseVerification}, Planner: true, Action: true, ReplanAfter: true},
+	{Type: WorkItemTypeNucleiGroup, Queue: "nuclei", Artifact: "nuclei", Stage: 40, RunIf: &WorkItemConditionRequest{Any: []WorkItemAssetCondition{
+		{Type: "template", MinCount: 1},
+		{Type: "tag", MinCount: 1},
+		{Type: "fingerprint", MinCount: 1},
+		{Type: "cve", MinCount: 1},
+		{Type: "url", Source: "spray", Status: "candidate", MinCount: 1},
+		{Type: "url", Source: "spray", Status: "observed", MinCount: 1},
+		{Type: "url", Source: "spray", Status: "interesting", MinCount: 1},
+	}}, DependsOn: []string{"fingers", "spray"}, DefaultReason: "verification can run in batch", PrimaryPhase: CampaignPhaseVerification, AllowedPhases: []string{CampaignPhaseVerification}, Planner: true, Action: true},
 }
 
 func WorkItemDefinitions() []WorkItemDefinition {
@@ -51,14 +67,6 @@ func WorkItemDefinitionForArtifact(artifact string) (WorkItemDefinition, bool) {
 		}
 	}
 	return WorkItemDefinition{}, false
-}
-
-func WorkItemTypeForArtifact(artifact string) (string, bool) {
-	def, ok := WorkItemDefinitionForArtifact(artifact)
-	if !ok {
-		return "", false
-	}
-	return def.Type, true
 }
 
 func WorkItemQueueForType(itemType string) string {

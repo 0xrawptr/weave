@@ -3,9 +3,6 @@ package data
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
-	"strings"
 )
 
 const (
@@ -144,7 +141,7 @@ func (r *Repository) GetAssetEventsInCampaign(ctx context.Context, scanTarget, c
 	if err != nil {
 		return nil, err
 	}
-	matches := targetScopeMatcher(scanTarget)
+	matches := NewScopeMatcher(scanTarget)
 	out := make([]AssetEvent, 0, len(events))
 	for _, event := range events {
 		if source != "" && event.Source != source {
@@ -195,7 +192,7 @@ func (r *Repository) GetDiscoveredURLsInCampaign(ctx context.Context, scanTarget
 	}
 	out := make([]Asset, 0, len(assets))
 	for _, a := range assets {
-		if isHTTPURL(a.Value) && plannerConsumableURLStatus(a.Status) {
+		if IsHTTPURL(a.Value) && plannerVisibleAssetStatus(a.Status) {
 			out = append(out, a)
 		}
 	}
@@ -209,10 +206,6 @@ func plannerVisibleAssetStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func plannerConsumableURLStatus(status string) bool {
-	return plannerVisibleAssetStatus(status)
 }
 
 func ValidAssetStatus(status string) bool {
@@ -229,10 +222,6 @@ func ValidAssetStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func isHTTPURL(value string) bool {
-	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
 }
 
 func (r *Repository) GetFingerprintsInCampaign(ctx context.Context, scanTarget, campaignID string) ([]string, error) {
@@ -364,7 +353,7 @@ func (r *Repository) assetsInScope(ctx context.Context, scanTarget, campaignID, 
 	if err != nil {
 		return nil, err
 	}
-	matches := targetScopeMatcher(scanTarget)
+	matches := NewScopeMatcher(scanTarget)
 	out := make([]Asset, 0, len(assets))
 	for _, asset := range assets {
 		if source != "" && asset.Source != source {
@@ -397,7 +386,7 @@ func (r *Repository) evidenceInScope(ctx context.Context, scanTarget, campaignID
 	if err != nil {
 		return nil, err
 	}
-	matches := targetScopeMatcher(scanTarget)
+	matches := NewScopeMatcher(scanTarget)
 	out := make([]AssetEvidence, 0, len(values))
 	for _, value := range values {
 		if source != "" && value.Source != source {
@@ -412,47 +401,6 @@ func (r *Repository) evidenceInScope(ctx context.Context, scanTarget, campaignID
 		}
 	}
 	return out, nil
-}
-
-func targetScopeMatcher(scanTarget string) func(string) bool {
-	scanTarget = strings.TrimSpace(strings.ToLower(scanTarget))
-	if scanTarget == "" {
-		return func(string) bool { return true }
-	}
-	if _, cidr, err := net.ParseCIDR(scanTarget); err == nil {
-		return func(value string) bool {
-			host := targetHost(value)
-			ip := net.ParseIP(host)
-			return ip != nil && cidr.Contains(ip)
-		}
-	}
-	targetHostValue := targetHost(scanTarget)
-	targetIP := net.ParseIP(targetHostValue)
-	return func(value string) bool {
-		value = strings.TrimSpace(strings.ToLower(value))
-		if value == scanTarget {
-			return true
-		}
-		host := targetHost(value)
-		if targetIP != nil {
-			return host == targetHostValue
-		}
-		return host == targetHostValue || strings.HasSuffix(host, "."+targetHostValue)
-	}
-}
-
-func targetHost(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return ""
-	}
-	if u, err := url.Parse(value); err == nil && u.Host != "" {
-		return strings.ToLower(u.Hostname())
-	}
-	if host, _, err := net.SplitHostPort(value); err == nil {
-		return strings.ToLower(host)
-	}
-	return strings.Trim(value, "[]")
 }
 
 func filterPlannerEvidence(values []EvidenceRecord) []EvidenceRecord {
@@ -474,8 +422,8 @@ func dedupeEvidence(values []EvidenceRecord) []EvidenceRecord {
 		}
 		key := value.Type + "|" + value.Value
 		if i, ok := seen[key]; ok {
-			if severityRank(value.Severity) > severityRank(out[i].Severity) ||
-				(severityRank(value.Severity) == severityRank(out[i].Severity) && len(value.Path) > len(out[i].Path)) {
+			if SeverityRank(value.Severity) > SeverityRank(out[i].Severity) ||
+				(SeverityRank(value.Severity) == SeverityRank(out[i].Severity) && len(value.Path) > len(out[i].Path)) {
 				out[i] = value
 			}
 			continue
@@ -484,21 +432,4 @@ func dedupeEvidence(values []EvidenceRecord) []EvidenceRecord {
 		out = append(out, value)
 	}
 	return out
-}
-
-func severityRank(severity string) int {
-	switch strings.ToLower(strings.TrimSpace(severity)) {
-	case "critical":
-		return 5
-	case "high":
-		return 4
-	case "medium":
-		return 3
-	case "low":
-		return 2
-	case "info", "informational":
-		return 1
-	default:
-		return 0
-	}
 }

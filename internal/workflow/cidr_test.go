@@ -278,9 +278,22 @@ func TestNormalizeCampaignPhase(t *testing.T) {
 		"steady":       CampaignPhaseSteady,
 	}
 	for input, want := range tests {
-		if got := NormalizeCampaignPhase(input); got != want {
+		if got := data.NormalizeCampaignPhase(input); got != want {
 			t.Fatalf("NormalizeCampaignPhase(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestDesiredSchedulerCampaignPhaseUsesManualOverride(t *testing.T) {
+	input := SchedulerWorkflowInput{
+		BatchInput: BatchPortScanInput{CampaignPhase: CampaignPhaseVerification},
+	}
+	snapshot := data.WorkItemProgressSummary{
+		ByType: []data.WorkItemGroupSummary{{Key: data.WorkItemTypeDNSPreflight, Pending: 1}},
+	}
+	phase, reason := desiredSchedulerCampaignPhaseFromSnapshot(input, snapshot)
+	if phase != CampaignPhaseVerification || reason != "manual phase override" {
+		t.Fatalf("phase, reason = %q, %q; want verification manual override", phase, reason)
 	}
 }
 
@@ -632,18 +645,6 @@ func TestNucleiGroupWorkItemsFromDAGNode(t *testing.T) {
 		if len(ids) == 0 || len(ids) > 2 {
 			t.Fatalf("template group size = %d, want 1..2: %#v", len(ids), parsed.ActionInput)
 		}
-	}
-}
-
-func TestSchedulerFailureStatus(t *testing.T) {
-	if got := schedulerFailureStatus(data.WorkItem{Attempts: 1, MaxAttempts: 3}); got != "retry_waiting" {
-		t.Fatalf("failure status = %q, want retry_waiting", got)
-	}
-	if got := schedulerFailureStatus(data.WorkItem{Attempts: 3, MaxAttempts: 3}); got != "failed" {
-		t.Fatalf("failure status = %q, want failed", got)
-	}
-	if got := schedulerFailureStatus(data.WorkItem{Attempts: 1, MaxAttempts: 0}); got != "failed" {
-		t.Fatalf("failure status = %q, want failed", got)
 	}
 }
 

@@ -95,32 +95,10 @@ func (a *Activity) CompleteAction(ctx context.Context, completion ActionCompleti
 	return a.planner.repo.CompleteAction(ctx, completion.ID, completion.Success, completion.Error)
 }
 
-type ConditionRequest struct {
-	Target     string           `json:"target"`
-	CampaignID string           `json:"campaign_id,omitempty"`
-	All        []AssetCondition `json:"all,omitempty"`
-	Any        []AssetCondition `json:"any,omitempty"`
-}
-
-type AssetCondition struct {
-	Type      string `json:"type,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Status    string `json:"status,omitempty"`
-	EventType string `json:"event_type,omitempty"`
-	MinCount  int    `json:"min_count,omitempty"`
-}
-
-type ConditionResult struct {
-	OK      bool                  `json:"ok"`
-	Counts  []AssetConditionCount `json:"counts,omitempty"`
-	Message string                `json:"message,omitempty"`
-}
-
-type AssetConditionCount struct {
-	Condition AssetCondition `json:"condition"`
-	Count     int            `json:"count"`
-	OK        bool           `json:"ok"`
-}
+type ConditionRequest = data.WorkItemConditionRequest
+type AssetCondition = data.WorkItemAssetCondition
+type ConditionResult = data.WorkItemConditionResult
+type AssetConditionCount = data.WorkItemAssetConditionCount
 
 func (a *Activity) EvaluateCondition(ctx context.Context, request ConditionRequest) (ConditionResult, error) {
 	if request.Target == "" {

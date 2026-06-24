@@ -7,11 +7,6 @@ import (
 
 func nucleiActionMaterializer() actionMaterializer {
 	return actionMaterializerFunc{
-		validate: func(node planner.DAGPlanNode) bool {
-			baseInput := mapAnyToInterface(node.Input)
-			return len(data.ActionInputStrings(baseInput, "targets")) > 0 &&
-				(len(data.ActionInputStrings(baseInput, "ids")) > 0 || len(data.ActionInputStrings(baseInput, "tags")) > 0)
-		},
 		materialize: nucleiGroupWorkItemsFromDAGNode,
 	}
 }

@@ -8,26 +8,14 @@ import (
 )
 
 type actionMaterializer interface {
-	ValidateShardableInput(planner.DAGPlanNode) bool
 	MaterializeWorkItems(SchedulerWorkflowInput, data.WorkItem, planner.DAGPlanNode, int, int) []data.WorkItem
 }
 
 type actionMaterializerFunc struct {
-	validate    func(planner.DAGPlanNode) bool
 	materialize func(SchedulerWorkflowInput, data.WorkItem, planner.DAGPlanNode, int, int) []data.WorkItem
 }
 
-func (m actionMaterializerFunc) ValidateShardableInput(node planner.DAGPlanNode) bool {
-	if m.validate == nil {
-		return true
-	}
-	return m.validate(node)
-}
-
 func (m actionMaterializerFunc) MaterializeWorkItems(input SchedulerWorkflowInput, parent data.WorkItem, node planner.DAGPlanNode, iteration, maxIterations int) []data.WorkItem {
-	if !m.ValidateShardableInput(node) {
-		return nil
-	}
 	return m.materialize(input, parent, node, iteration, maxIterations)
 }
 
@@ -89,8 +77,8 @@ func actionWorkItemFromDAGNodeInput(input SchedulerWorkflowInput, parent data.Wo
 	}
 }
 
-func actionWorkItemInputFromDAGNode(node planner.DAGPlanNode, target string, actionInput map[string]interface{}, iteration, maxIterations, shardIndex int) schedulerWorkItemInput {
-	return schedulerWorkItemInput{
+func actionWorkItemInputFromDAGNode(node planner.DAGPlanNode, target string, actionInput map[string]interface{}, iteration, maxIterations, shardIndex int) data.WorkItemEnvelope {
+	return data.WorkItemEnvelope{
 		Target:        target,
 		ActionInput:   actionInput,
 		NodeID:        node.ID,

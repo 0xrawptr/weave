@@ -104,9 +104,9 @@ func (s *Server) StartBatch(c *gin.Context) {
 		runPlannedDAG = *req.RunPlannedDAG
 	}
 	if s.repo != nil {
-		phase := workflow.NormalizeCampaignPhase(req.CampaignPhase)
-		if phase == workflow.CampaignPhaseAuto {
-			phase = workflow.CampaignPhaseBootstrap
+		phase := data.NormalizeCampaignPhase(req.CampaignPhase)
+		if phase == data.CampaignPhaseAuto {
+			phase = data.CampaignPhaseBootstrap
 		}
 		if err := s.repo.UpsertCampaign(c.Request.Context(), data.Campaign{
 			ID:          campaignID,
@@ -153,7 +153,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 		"campaign_id":     campaignID,
 		"targets":         targets,
 		"ports":           ports,
-		"campaign_phase":  workflow.NormalizeCampaignPhase(req.CampaignPhase),
+		"campaign_phase":  data.NormalizeCampaignPhase(req.CampaignPhase),
 		"run_planned_dag": runPlannedDAG,
 		"summary":         fmt.Sprintf("/api/v1/work-items/summary?campaign_id=%s", campaignID),
 	})

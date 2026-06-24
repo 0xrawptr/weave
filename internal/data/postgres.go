@@ -1460,10 +1460,12 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 	if recoverableExecutionFailure {
 		status = WorkItemStatusRetryWaiting
 	}
-	if status == WorkItemStatusFailed && attempts >= maxAttempts {
-		status = WorkItemStatusDead
-		if errorMessage == "" {
-			errorMessage = "max attempts reached"
+	if status == WorkItemStatusFailed {
+		status = failureWorkItemStatus(attempts, maxAttempts)
+		if status == WorkItemStatusDead {
+			if errorMessage == "" {
+				errorMessage = "max attempts reached"
+			}
 		}
 	}
 	if TerminalWorkItemStatus(current) && TerminalWorkItemStatus(status) {

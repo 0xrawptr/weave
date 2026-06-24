@@ -26,7 +26,7 @@ func TestPlanFromStateUsesPreciseNucleiIDs(t *testing.T) {
 	if nuclei == nil {
 		t.Fatalf("missing nuclei action: %#v", actions)
 	}
-	if nuclei.Decision.Schedule != ScheduleNow || nuclei.Decision.Suppressed {
+	if nuclei.Decision.Schedule != data.ScheduleNow || nuclei.Decision.Suppressed {
 		t.Fatalf("expected precise nuclei to run now, got %#v", nuclei.Decision)
 	}
 	if nuclei.DedupKey == "" {
@@ -363,28 +363,25 @@ func TestWorkItemsCoverPendingSprayBaseURLs(t *testing.T) {
 	}
 }
 
-func TestRecordInputStringsReadsNestedEnvelopeInput(t *testing.T) {
+func TestRecordInputStringsReadsCanonicalInput(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
-		"input": map[string]interface{}{
-			"base_urls": " https://example.com ",
-		},
+		"base_urls": " https://example.com ",
 	})
 	values := recordInputStrings(data.ActionRecord{Input: raw}, "base_urls")
 	if len(values) != 1 || values[0] != "https://example.com" {
-		t.Fatalf("expected nested base URL coverage, got %#v", values)
+		t.Fatalf("expected canonical base URL coverage, got %#v", values)
 	}
 }
 
-func TestRecordInputStringsPrefersTopLevelInput(t *testing.T) {
+func TestRecordInputStringsIgnoresLegacyNestedEnvelopeInput(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
-		"base_urls": []interface{}{" https://top.example.com ", ""},
 		"input": map[string]interface{}{
 			"base_urls": []string{"https://nested.example.com"},
 		},
 	})
 	values := recordInputStrings(data.ActionRecord{Input: raw}, "base_urls")
-	if len(values) != 1 || values[0] != "https://top.example.com" {
-		t.Fatalf("expected top-level base URL coverage, got %#v", values)
+	if len(values) != 0 {
+		t.Fatalf("legacy nested base URL coverage should be ignored, got %#v", values)
 	}
 }
 
@@ -455,10 +452,10 @@ func TestPlanFromStateSchedulesPreciseTemplateBeforeBroadTags(t *testing.T) {
 	if preciseNuclei == nil || broadNuclei == nil {
 		t.Fatalf("missing nuclei actions: precise=%#v broad=%#v", precise, broad)
 	}
-	if preciseNuclei.Decision.Schedule != ScheduleNow {
+	if preciseNuclei.Decision.Schedule != data.ScheduleNow {
 		t.Fatalf("expected precise nuclei to run now, got %#v", preciseNuclei.Decision)
 	}
-	if broadNuclei.Decision.Schedule != ScheduleBatch {
+	if broadNuclei.Decision.Schedule != data.ScheduleBatch {
 		t.Fatalf("expected broad nuclei to run in batch, got %#v", broadNuclei.Decision)
 	}
 }
@@ -491,7 +488,7 @@ func TestPlanFromStatePreservesGraphEvidenceInDecision(t *testing.T) {
 	if withEvidence == nil {
 		t.Fatalf("missing nuclei action with evidence")
 	}
-	if withEvidence.Decision.Schedule != ScheduleNow {
+	if withEvidence.Decision.Schedule != data.ScheduleNow {
 		t.Fatalf("expected graph evidence to schedule now, got %#v", withEvidence.Decision)
 	}
 	if !hasEvidence(withEvidence.Evidence, "intel", "CVE-2020-14882 KEV EPSS 0.99 CVSS 9.8") {
@@ -521,7 +518,7 @@ func TestDecisionForActionUsesPreciseEvidence(t *testing.T) {
 		}},
 	}
 	decision := decisionForAction(action)
-	if decision.Schedule != ScheduleNow || decision.Suppressed {
+	if decision.Schedule != data.ScheduleNow || decision.Suppressed {
 		t.Fatalf("expected precise evidence to schedule now, got %#v", decision)
 	}
 }
