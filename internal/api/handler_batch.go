@@ -83,9 +83,9 @@ func (s *Server) StartBatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	targets := cleanStringSlice(req.Targets)
+	targets := data.CleanStrings(req.Targets, true)
 	if len(targets) == 0 {
-		targets = splitTargetList(req.Target)
+		targets = data.SplitList(req.Target, true)
 	}
 	if len(targets) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "targets are required"})
@@ -129,7 +129,7 @@ func (s *Server) StartBatch(c *gin.Context) {
 		WorkflowTaskTimeout: workflow.ControlWorkflowTaskTimeout,
 	}, workflow.BatchPortScanWorkflow, workflow.BatchPortScanInput{
 		Targets:                 targets,
-		NowTargets:              cleanStringSlice(req.NowTargets),
+		NowTargets:              data.CleanStrings(req.NowTargets, true),
 		CampaignID:              campaignID,
 		Ports:                   ports,
 		ChunkPrefix:             req.ChunkPrefix,
@@ -345,7 +345,7 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 	}, workflow.SchedulerWorkflow, workflow.SchedulerWorkflowInput{
 		BatchID: batchID,
 		BatchInput: workflow.BatchPortScanInput{
-			Targets:                 splitBatchRunTargets(run.Target),
+			Targets:                 data.SplitList(run.Target, true),
 			CampaignID:              run.CampaignID,
 			Ports:                   ports,
 			MaxAttempts:             req.MaxAttempts,
@@ -375,14 +375,5 @@ func (s *Server) ResumeBatchScheduler(c *gin.Context) {
 		"pending_work_items":   fmt.Sprintf("/api/v1/work-items?batch_id=%s&status=pending", batchID),
 		"summary":              fmt.Sprintf("/api/v1/work-items/summary?batch_id=%s", batchID),
 		"original_workflow_id": run.WorkflowID,
-	})
-}
-
-func splitBatchRunTargets(target string) []string {
-	if strings.TrimSpace(target) == "" {
-		return nil
-	}
-	return strings.FieldsFunc(target, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
 	})
 }

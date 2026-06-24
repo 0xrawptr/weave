@@ -1324,16 +1324,22 @@ func (p *PostgresStore) ClaimWorkItem(ctx context.Context, request WorkItemClaim
 		if strings.TrimSpace(request.Queue) == "" {
 			return nil, fmt.Errorf("queue is required when max_running is set")
 		}
+		if strings.TrimSpace(request.CampaignID) == "" {
+			return nil, fmt.Errorf("campaign_id is required when max_running is set")
+		}
+		if strings.TrimSpace(request.BatchID) == "" {
+			return nil, fmt.Errorf("batch_id is required when max_running is set")
+		}
 		tx, err := p.pool.Begin(ctx)
 		if err != nil {
 			return nil, err
 		}
 		defer tx.Rollback(ctx)
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, "work_items_queue", request.Queue); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, "work_items_capacity", request.CampaignID+":"+request.BatchID+":"+request.Queue); err != nil {
 			return nil, err
 		}
 		var running int
-		if err := tx.QueryRow(ctx, `SELECT COUNT(*)::INT FROM work_items WHERE status = 'running' AND queue = $1`, request.Queue).Scan(&running); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*)::INT FROM work_items WHERE status = 'running' AND campaign_id = $1 AND batch_id = $2 AND queue = $3`, request.CampaignID, request.BatchID, request.Queue).Scan(&running); err != nil {
 			return nil, err
 		}
 		if running >= request.MaxRunning {
@@ -1394,11 +1400,6 @@ func claimWorkItem(ctx context.Context, exec sqlQueryExecutor, request WorkItemC
 	if request.Schedule != "" {
 		query += fmt.Sprintf(" AND wi.schedule = $%d", argIdx)
 		args = append(args, NormalizeSchedule(request.Schedule))
-		argIdx++
-	}
-	if request.MaxRunning > 0 {
-		query += fmt.Sprintf(" AND (SELECT COUNT(*) FROM work_items r WHERE r.status = 'running' AND r.queue = wi.queue) < $%d", argIdx)
-		args = append(args, request.MaxRunning)
 		argIdx++
 	}
 	query += fmt.Sprintf(` ORDER BY CASE wi.schedule WHEN 'now' THEN 0 ELSE 1 END, wi.created_at ASC
@@ -2170,7 +2171,7 @@ func (p *PostgresStore) RequeueEligibleRetryWorkItems(ctx context.Context, filte
 		updated_at = NOW()
 	FROM retryable
 	WHERE work_items.id = retryable.id
-	RETURNING work_items.id`, argIdx, argIdx+1)
+	RETURNING work_items.id, work_items.campaign_id, work_items.batch_id`, argIdx, argIdx+1)
 	args = append(args, minAgeSeconds, limit)
 
 	rows, err := p.pool.Query(ctx, query, args...)
@@ -2180,14 +2181,27 @@ func (p *PostgresStore) RequeueEligibleRetryWorkItems(ctx context.Context, filte
 	defer rows.Close()
 
 	updated := 0
+	batches := map[string]WorkItemBulkBatch{}
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var campaignID string
+		var batchID string
+		if err := rows.Scan(&id, &campaignID, &batchID); err != nil {
 			return WorkItemBulkResult{}, err
+		}
+		if batchID != "" {
+			batches[batchID] = WorkItemBulkBatch{CampaignID: campaignID, BatchID: batchID}
 		}
 		updated++
 	}
-	return WorkItemBulkResult{Matched: updated, Updated: updated}, rows.Err()
+	if err := rows.Err(); err != nil {
+		return WorkItemBulkResult{}, err
+	}
+	affected := make([]WorkItemBulkBatch, 0, len(batches))
+	for _, batch := range batches {
+		affected = append(affected, batch)
+	}
+	return WorkItemBulkResult{Matched: updated, Updated: updated, Batches: affected}, nil
 }
 
 func appendWorkItemFilterSQL(query string, args []interface{}, argIdx int, filter WorkItemFilter, includeStatus bool) (string, []interface{}, int) {

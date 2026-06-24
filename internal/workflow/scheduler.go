@@ -1121,8 +1121,6 @@ func recoverScheduledWorkItems(ctx workflow.Context, input SchedulerWorkflowInpu
 		Limit:                1000,
 		RecoverFailures:      true,
 		RecoverExpiredLeases: true,
-		RequeueRetryWaiting:  true,
-		RetryDelaySeconds:    input.BatchInput.RetryDelaySeconds,
 	}).Get(ctx, &result)
 }
 

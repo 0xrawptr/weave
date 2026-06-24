@@ -693,22 +693,14 @@ func recordInputStrings(record data.ActionRecord, field string) []string {
 	if len(record.Input) == 0 || json.Unmarshal(record.Input, &input) != nil {
 		return nil
 	}
-	values, ok := input[field].([]interface{})
-	if !ok {
-		if nested, nestedOK := input["input"].(map[string]interface{}); nestedOK {
-			values, ok = nested[field].([]interface{})
-		}
+	if values := data.ActionInputStrings(input, field); len(values) > 0 {
+		return values
 	}
+	nested, ok := input["input"].(map[string]interface{})
 	if !ok {
 		return nil
 	}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if s, ok := value.(string); ok && s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
+	return data.ActionInputStrings(nested, field)
 }
 
 func blocksActionStatus(status string) bool {

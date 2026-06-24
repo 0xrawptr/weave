@@ -129,6 +129,8 @@ func recoverWorkItemsOnce(ctx context.Context, runtimeApp *app.App, temporalClie
 		Limit:                10000,
 		RecoverFailures:      true,
 		RecoverExpiredLeases: true,
+		RequeueRetryWaiting:  true,
+		RetryDelaySeconds:    30,
 		OnCheckError: func(workflowID, workItemID string, err error) {
 			log.Printf("WARNING: temporal orphan check failed: workflow=%s work_item=%s err=%v", workflowID, workItemID, err)
 		},
@@ -212,7 +214,7 @@ func resumeRecoveredScheduler(ctx context.Context, runtimeApp *app.App, temporal
 	}, workflow.SchedulerWorkflow, workflow.SchedulerWorkflowInput{
 		BatchID: batchID,
 		BatchInput: workflow.BatchPortScanInput{
-			Targets:       splitBatchTargets(run.Target),
+			Targets:       data.SplitList(run.Target, true),
 			CampaignID:    run.CampaignID,
 			Ports:         ports,
 			RunPlannedDAG: true,
@@ -224,15 +226,6 @@ func resumeRecoveredScheduler(ctx context.Context, runtimeApp *app.App, temporal
 	}
 	log.Printf("resumed scheduler after %s: batch=%s workflow=%s run=%s", reason, batchID, wfRun.GetID(), wfRun.GetRunID())
 	return nil
-}
-
-func splitBatchTargets(target string) []string {
-	if strings.TrimSpace(target) == "" {
-		return nil
-	}
-	return strings.FieldsFunc(target, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
-	})
 }
 
 func workerOptions(cfg config.WorkerConfig, activityOnly bool) sdkworker.Options {

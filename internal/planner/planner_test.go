@@ -345,12 +345,25 @@ func TestWorkItemsCoverPendingSprayBaseURLs(t *testing.T) {
 func TestRecordInputStringsReadsNestedEnvelopeInput(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"input": map[string]interface{}{
-			"base_urls": []string{"https://example.com"},
+			"base_urls": " https://example.com ",
 		},
 	})
 	values := recordInputStrings(data.ActionRecord{Input: raw}, "base_urls")
 	if len(values) != 1 || values[0] != "https://example.com" {
 		t.Fatalf("expected nested base URL coverage, got %#v", values)
+	}
+}
+
+func TestRecordInputStringsPrefersTopLevelInput(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"base_urls": []interface{}{" https://top.example.com ", ""},
+		"input": map[string]interface{}{
+			"base_urls": []string{"https://nested.example.com"},
+		},
+	})
+	values := recordInputStrings(data.ActionRecord{Input: raw}, "base_urls")
+	if len(values) != 1 || values[0] != "https://top.example.com" {
+		t.Fatalf("expected top-level base URL coverage, got %#v", values)
 	}
 }
 

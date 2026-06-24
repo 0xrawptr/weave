@@ -371,34 +371,7 @@ type CampaignRuntimeView struct {
 	GeneratedAt         time.Time                `json:"generated_at"`
 }
 
-type RuntimeBottleneck struct {
-	Kind           string `json:"kind"`
-	Key            string `json:"key"`
-	Reason         string `json:"reason"`
-	Phase          string `json:"phase,omitempty"`
-	Queue          string `json:"queue,omitempty"`
-	Type           string `json:"type,omitempty"`
-	Artifact       string `json:"artifact,omitempty"`
-	Target         string `json:"target,omitempty"`
-	Pending        int    `json:"pending,omitempty"`
-	Running        int    `json:"running,omitempty"`
-	RetryWaiting   int    `json:"retry_waiting,omitempty"`
-	Paused         int    `json:"paused,omitempty"`
-	Failed         int    `json:"failed,omitempty"`
-	Dead           int    `json:"dead,omitempty"`
-	StalledRunning int    `json:"stalled_running,omitempty"`
-	ETASeconds     int64  `json:"eta_seconds,omitempty"`
-	LastError      string `json:"last_error,omitempty"`
-}
-
-type RuntimePlanItem struct {
-	Type              string `json:"type"`
-	Queue             string `json:"queue"`
-	Artifact          string `json:"artifact"`
-	Phase             string `json:"phase"`
-	Allowed           bool   `json:"allowed"`
-	State             string `json:"state"`
-	Reason            string `json:"reason"`
+type RuntimeWorkCounts struct {
 	Pending           int    `json:"pending"`
 	Running           int    `json:"running"`
 	Completed         int    `json:"completed"`
@@ -411,20 +384,37 @@ type RuntimePlanItem struct {
 	ProgressPercent   int    `json:"progress_percent,omitempty"`
 	ETASeconds        int64  `json:"eta_seconds,omitempty"`
 	LastError         string `json:"last_error,omitempty"`
-	NextPhase         string `json:"next_phase,omitempty"`
-	BlockingReason    string `json:"blocking_reason,omitempty"`
+}
+
+type RuntimeBottleneck struct {
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+	RuntimeWorkCounts
+	Reason   string `json:"reason"`
+	Phase    string `json:"phase,omitempty"`
+	Queue    string `json:"queue,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Artifact string `json:"artifact,omitempty"`
+	Target   string `json:"target,omitempty"`
+}
+
+type RuntimePlanItem struct {
+	Type     string `json:"type"`
+	Queue    string `json:"queue"`
+	Artifact string `json:"artifact"`
+	Phase    string `json:"phase"`
+	RuntimeWorkCounts
+	Allowed        bool   `json:"allowed"`
+	State          string `json:"state"`
+	Reason         string `json:"reason"`
+	NextPhase      string `json:"next_phase,omitempty"`
+	BlockingReason string `json:"blocking_reason,omitempty"`
 }
 
 type QueueRuntimeState struct {
-	Queue             string `json:"queue"`
-	Pending           int    `json:"pending"`
-	Running           int    `json:"running"`
-	RetryWaiting      int    `json:"retry_waiting,omitempty"`
-	Paused            int    `json:"paused,omitempty"`
-	StalledRunning    int    `json:"stalled_running,omitempty"`
-	NoProgressRunning int    `json:"no_progress_running,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
-	Reason            string `json:"reason"`
+	Queue string `json:"queue"`
+	RuntimeWorkCounts
+	Reason string `json:"reason"`
 }
 
 type TargetRuntimeState struct {

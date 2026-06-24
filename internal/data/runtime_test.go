@@ -133,8 +133,8 @@ func TestBlockedRuntimeQueuesIgnoresQueuesWaitingForPhase(t *testing.T) {
 func TestRuntimeCurrentBottleneckPrefersStalledWork(t *testing.T) {
 	view := CampaignRuntimeView{
 		ExecutionPlan: []RuntimePlanItem{
-			{Type: "spray_shard", Queue: "spray", Artifact: "spray", Pending: 20, StalledRunning: 1, LastError: "lease expired"},
-			{Type: "nuclei_group", Queue: "nuclei", Artifact: "nuclei", Failed: 2, LastError: "template error"},
+			{Type: "spray_shard", Queue: "spray", Artifact: "spray", RuntimeWorkCounts: RuntimeWorkCounts{Pending: 20, StalledRunning: 1, LastError: "lease expired"}},
+			{Type: "nuclei_group", Queue: "nuclei", Artifact: "nuclei", RuntimeWorkCounts: RuntimeWorkCounts{Failed: 2, LastError: "template error"}},
 		},
 	}
 	got := runtimeCurrentBottleneck(view)
@@ -146,7 +146,7 @@ func TestRuntimeCurrentBottleneckPrefersStalledWork(t *testing.T) {
 func TestRuntimeCurrentBottleneckFallsBackToBlockedQueue(t *testing.T) {
 	view := CampaignRuntimeView{
 		BlockedQueues: []QueueRuntimeState{
-			{Queue: "spray", Pending: 12, Reason: "eligible work is waiting for scheduler admission"},
+			{Queue: "spray", RuntimeWorkCounts: RuntimeWorkCounts{Pending: 12}, Reason: "eligible work is waiting for scheduler admission"},
 		},
 	}
 	got := runtimeCurrentBottleneck(view)
@@ -199,7 +199,7 @@ func TestNoProgressRunningUsesDurationThreshold(t *testing.T) {
 
 func TestRuntimeWarningsReportNoProgressRunning(t *testing.T) {
 	view := CampaignRuntimeView{
-		ExecutionPlan: []RuntimePlanItem{{NoProgressRunning: 1}},
+		ExecutionPlan: []RuntimePlanItem{{RuntimeWorkCounts: RuntimeWorkCounts{NoProgressRunning: 1}}},
 	}
 	got := runtimeWarnings(view)
 	if !containsString(got, "running work has no valid progress heartbeat") {
@@ -210,7 +210,7 @@ func TestRuntimeWarningsReportNoProgressRunning(t *testing.T) {
 func TestRuntimeWarningsDeduplicateProgressHeartbeatWarning(t *testing.T) {
 	view := CampaignRuntimeView{
 		Summary:       WorkItemProgressSummary{Overall: WorkItemGroupSummary{StalledRunning: 1}},
-		ExecutionPlan: []RuntimePlanItem{{NoProgressRunning: 1}},
+		ExecutionPlan: []RuntimePlanItem{{RuntimeWorkCounts: RuntimeWorkCounts{NoProgressRunning: 1}}},
 	}
 	got := runtimeWarnings(view)
 	count := 0

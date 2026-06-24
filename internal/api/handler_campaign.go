@@ -53,7 +53,7 @@ func (s *Server) CreateCampaign(c *gin.Context) {
 		Status:      req.Status,
 		Phase:       req.Phase,
 		PhaseReason: "campaign created",
-		Targets:     cleanStringSlice(req.Targets),
+		Targets:     data.CleanStrings(req.Targets, true),
 	}
 	if err := s.repo.UpsertCampaign(c.Request.Context(), campaign); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
