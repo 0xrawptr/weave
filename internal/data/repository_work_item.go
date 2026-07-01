@@ -117,3 +117,10 @@ func (r *Repository) RequeueEligibleRetryWorkItems(ctx context.Context, filter W
 	}
 	return r.Postgres.RequeueEligibleRetryWorkItems(ctx, filter, minAgeSeconds, limit)
 }
+
+func (r *Repository) BulkUpdateWorkItemStatus(ctx context.Context, batchID, status, errorMessage string) (int64, error) {
+	if r == nil || r.Postgres == nil {
+		return 0, nil
+	}
+	return r.Postgres.BulkUpdateWorkItemStatus(ctx, batchID, status, errorMessage)
+}

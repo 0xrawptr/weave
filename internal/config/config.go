@@ -16,6 +16,27 @@ type Config struct {
 	SDK       SDKConfig       `yaml:"sdk"`
 	Artifacts ArtifactsConfig `yaml:"artifacts"`
 	Knowledge KnowledgeConfig `yaml:"knowledge"`
+	Auth      AuthConfig      `yaml:"auth"`
+	Notify    NotifyConfig    `yaml:"notify"`
+}
+
+type AuthConfig struct {
+	Enabled bool       `yaml:"enabled"`
+	APIKey  string     `yaml:"api_key"`
+	Admin   AdminUser  `yaml:"admin"`
+}
+
+type AdminUser struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+type NotifyConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	WebhookURL    string `yaml:"webhook_url"`
+	DingTalkToken string `yaml:"dingtalk_token"`
+	FeishuURL     string `yaml:"feishu_url"`
+	WecomURL      string `yaml:"wecom_url"`
 }
 
 type SDKConfig struct {

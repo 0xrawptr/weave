@@ -32,6 +32,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("artifact init: %v", err)
 	}
+	if runtimeApp.Repo == nil || runtimeApp.Repo.Postgres == nil {
+		runtimeApp.Close()
+		log.Fatalf("postgres is required for workflow workers")
+	}
 
 	c, err := client.Dial(client.Options{
 		HostPort:  fmt.Sprintf("%s:%d", cfg.Temporal.Host, cfg.Temporal.Port),

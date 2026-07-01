@@ -1,0 +1,14 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema:
+      - "internal/data/sqlc/schema.sql"
+    queries:
+      - "internal/data/queries"
+    gen:
+      go:
+        package: "dbsqlc"
+        out: "internal/data/dbsqlc"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_empty_slices: true

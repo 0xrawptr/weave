@@ -6,6 +6,7 @@ import (
 
 const (
 	WorkItemStatusPending      = "pending"
+	WorkItemStatusDispatching  = "dispatching"
 	WorkItemStatusRunning      = "running"
 	WorkItemStatusCompleted    = "completed"
 	WorkItemStatusFailed       = "failed"
@@ -205,7 +206,7 @@ type WorkItem struct {
 	Queue          string    `json:"queue,omitempty"`
 	Input          []byte    `json:"input,omitempty"`
 	Schedule       string    `json:"schedule,omitempty"`
-	Status         string    `json:"status"` // pending, running, completed, failed, retry_waiting, paused, cancelled, skipped, dead
+	Status         string    `json:"status"` // pending, dispatching, running, completed, failed, retry_waiting, paused, cancelled, skipped, dead
 	Attempts       int       `json:"attempts"`
 	MaxAttempts    int       `json:"max_attempts"`
 	WorkflowID     string    `json:"workflow_id,omitempty"`
@@ -312,6 +313,7 @@ type WorkItemGroupSummary struct {
 	Key                    string `json:"key"`
 	Total                  int    `json:"total"`
 	Pending                int    `json:"pending"`
+	Dispatching            int    `json:"dispatching,omitempty"`
 	Running                int    `json:"running"`
 	StalledRunning         int    `json:"stalled_running,omitempty"`
 	NoProgressRunning      int    `json:"no_progress_running,omitempty"`
@@ -521,4 +523,17 @@ type EvidencePathStep struct {
 	Relation string `json:"relation,omitempty"`
 	Type     string `json:"type"`
 	Value    string `json:"value"`
+}
+
+// Policy is a reusable scan configuration template.
+type Policy struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Ports       string    `json:"ports"`
+	Threads     int       `json:"threads"`
+	SprayDict   string    `json:"spray_dict"`
+	NucleiTags  string    `json:"nuclei_tags"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

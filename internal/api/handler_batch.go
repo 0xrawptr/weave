@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/0xrawptr/weave/internal/data"
+	"github.com/0xrawptr/weave/internal/notify"
 	"github.com/0xrawptr/weave/internal/workflow"
 	"github.com/gin-gonic/gin"
 	"go.temporal.io/sdk/client"
@@ -30,6 +31,7 @@ type StartBatchRequest struct {
 	SprayShardWords         int      `json:"spray_shard_words,omitempty"`
 	NucleiGroupTargets      int      `json:"nuclei_group_targets,omitempty"`
 	NucleiGroupTemplates    int      `json:"nuclei_group_templates,omitempty"`
+	PolicyID                string   `json:"policy_id,omitempty"`
 }
 
 type ResumeBatchSchedulerRequest struct {
@@ -60,6 +62,7 @@ type BatchRunResponse struct {
 type batchProgressDTO struct {
 	Total           int `json:"total"`
 	Pending         int `json:"pending"`
+	Dispatching     int `json:"dispatching,omitempty"`
 	Running         int `json:"running"`
 	Completed       int `json:"completed"`
 	Failed          int `json:"failed"`
@@ -90,6 +93,14 @@ func (s *Server) StartBatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "targets are required"})
 		return
 	}
+	if strings.TrimSpace(req.PolicyID) != "" && s.repo != nil {
+		if policy, err := s.repo.GetPolicy(c.Request.Context(), strings.TrimSpace(req.PolicyID)); err == nil && policy != nil {
+			if req.Ports == "" {
+				req.Ports = policy.Ports
+			}
+		}
+	}
+
 	ports := strings.TrimSpace(req.Ports)
 	if ports == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ports are required"})
@@ -214,6 +225,7 @@ func (s *Server) batchRunResponse(ctx context.Context, run data.BatchRun) BatchR
 	resp.WorkItemProgress = &batchProgressDTO{
 		Total:           summary.Overall.Total,
 		Pending:         summary.Overall.Pending,
+		Dispatching:     summary.Overall.Dispatching,
 		Running:         summary.Overall.Running,
 		Completed:       summary.Overall.Completed,
 		Failed:          summary.Overall.Failed,
@@ -236,7 +248,7 @@ func statusFromWorkItemCounts(total int, counts map[string]int) string {
 	if len(counts) == 0 {
 		return ""
 	}
-	pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
+	pending := counts[data.WorkItemStatusPending] + counts[data.WorkItemStatusDispatching] + counts[data.WorkItemStatusRetryWaiting] + counts[data.WorkItemStatusPaused]
 	running := counts[data.WorkItemStatusRunning]
 	completed := counts[data.WorkItemStatusCompleted]
 	failed := counts[data.WorkItemStatusFailed] + counts[data.WorkItemStatusDead]
@@ -266,6 +278,7 @@ func dagStatusFromSummary(summary data.WorkItemProgressSummary) string {
 		}
 		total += group.Total
 		counts[data.WorkItemStatusPending] += group.Pending
+		counts[data.WorkItemStatusDispatching] += group.Dispatching
 		counts[data.WorkItemStatusRunning] += group.Running
 		counts[data.WorkItemStatusCompleted] += group.Completed
 		counts[data.WorkItemStatusFailed] += group.Failed
@@ -303,6 +316,82 @@ func (s *Server) ListBatchChunks(c *gin.Context) {
 		"limit":    limit,
 		"offset":   offset,
 	})
+}
+
+func (s *Server) StopBatch(c *gin.Context) {
+	if s.repo == nil || s.repo.Postgres == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
+		return
+	}
+	if s.temporal == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "temporal service not available"})
+		return
+	}
+
+	batchID := c.Param("id")
+	run, err := s.repo.GetBatchRun(c.Request.Context(), batchID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Cancel scheduler workflow
+	schedulerID := fmt.Sprintf("%s-scheduler", run.WorkflowID)
+	if err := s.temporal.CancelWorkflow(context.Background(), schedulerID, ""); err != nil {
+		// CancelWorkflow may fail if scheduler isn't running — that's OK
+		_ = err
+	}
+	if err := s.temporal.CancelWorkflow(context.Background(), run.WorkflowID, ""); err != nil {
+		_ = err
+	}
+
+	// Mark all pending/running work items as cancelled
+	_, _ = s.repo.BulkUpdateWorkItemStatus(c.Request.Context(), batchID, "cancelled", "batch stopped by user")
+
+	// Update batch run status
+	_ = s.repo.UpdateBatchRunStatus(c.Request.Context(), batchID, "cancelled")
+
+	notify.Send(s.cfg.Notify, notify.BatchEvent{
+		BatchID:    batchID,
+		CampaignID: run.CampaignID,
+		Status:     "stopped",
+		Message:    "batch stopped by user",
+		Targets:    run.TotalChunks,
+		Ports:      run.Ports,
+		Completed:  run.Completed,
+		Failed:     run.Failed,
+	})
+
+	c.JSON(http.StatusOK, gin.H{"message": "batch stopped", "batch_id": batchID})
+}
+
+func (s *Server) DeleteBatch(c *gin.Context) {
+	if s.repo == nil || s.repo.Postgres == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "data store not available"})
+		return
+	}
+
+	batchID := c.Param("id")
+	run, err := s.repo.GetBatchRun(c.Request.Context(), batchID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Cancel Temporal workflows first
+	if s.temporal != nil {
+		schedulerID := fmt.Sprintf("%s-scheduler", run.WorkflowID)
+		s.temporal.CancelWorkflow(context.Background(), schedulerID, "")
+		s.temporal.CancelWorkflow(context.Background(), run.WorkflowID, "")
+	}
+
+	// Cascade delete
+	if err := s.repo.DeleteBatchCascade(c.Request.Context(), batchID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "batch deleted", "batch_id": batchID})
 }
 
 func (s *Server) ResumeBatchScheduler(c *gin.Context) {

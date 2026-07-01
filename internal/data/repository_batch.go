@@ -40,3 +40,17 @@ func (r *Repository) GetBatchChunks(ctx context.Context, batchID, status string,
 	}
 	return r.Postgres.QueryBatchChunks(ctx, batchID, status, limit, offset)
 }
+
+func (r *Repository) UpdateBatchRunStatus(ctx context.Context, batchID, status string) error {
+	if r.Postgres == nil {
+		return nil
+	}
+	return r.Postgres.UpdateBatchRunStatus(ctx, batchID, status)
+}
+
+func (r *Repository) DeleteBatchCascade(ctx context.Context, batchID string) error {
+	if r.Postgres == nil {
+		return nil
+	}
+	return r.Postgres.DeleteBatchCascade(ctx, batchID)
+}

@@ -2,6 +2,20 @@ server:
   port: 18080
   mode: debug  # debug | release | test
 
+auth:
+  enabled: false  # set to true to require authentication
+  api_key: ""     # optional: X-API-Key or Authorization: Bearer
+  admin:
+    username: admin
+    password: admin
+
+notify:
+  enabled: false
+  webhook_url: ""
+  dingtalk_token: ""
+  feishu_url: ""
+  wecom_url: ""
+
 temporal:
   host: localhost
   port: 7233
@@ -56,7 +70,7 @@ temporal:
 
 postgres:
   host: localhost
-  port: 5432
+  port: 5433
   user: weave
   password: weave123
   database: weave

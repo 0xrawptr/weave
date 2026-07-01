@@ -53,9 +53,10 @@ type SchedulerWorkflowResult struct {
 }
 
 type ScheduledWorkItemWorkflowInput struct {
-	SchedulerInput SchedulerWorkflowInput `json:"scheduler_input"`
-	Item           data.WorkItem          `json:"item"`
-	WorkflowID     string                 `json:"workflow_id"`
+	SchedulerInput   SchedulerWorkflowInput `json:"scheduler_input"`
+	Item             data.WorkItem          `json:"item"`
+	WorkflowID       string                 `json:"workflow_id"`
+	ParentWorkflowID string                 `json:"parent_workflow_id,omitempty"`
 }
 
 const schedulerMaxDispatchPerRun = 10
@@ -111,12 +112,14 @@ func SchedulerWorkflow(ctx workflow.Context, input SchedulerWorkflowInput) (*Sch
 		return result, err
 	}
 	if result.Status == "running" && shouldContinueScheduler(input, result.ProcessedThisRun) {
+		drainSchedulerWakeups(ctx)
 		return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
 	}
 	if result.Status == "running" && input.ContinuedRuns < input.MaxContinueRuns {
 		if err := waitForSchedulerWakeup(ctx, input); err != nil {
 			return result, err
 		}
+		drainSchedulerWakeups(ctx)
 		return result, workflow.NewContinueAsNewError(ctx, SchedulerWorkflow, nextSchedulerInput(input))
 	}
 	return result, nil
@@ -132,6 +135,16 @@ func waitForSchedulerWakeup(ctx workflow.Context, input SchedulerWorkflowInput) 
 	selector.AddFuture(workflow.NewTimer(ctx, schedulerIdleWakeupInterval), func(workflow.Future) {})
 	selector.Select(ctx)
 	return nil
+}
+
+func drainSchedulerWakeups(ctx workflow.Context) {
+	signalCh := workflow.GetSignalChannel(ctx, schedulerWakeupSignalName)
+	for {
+		var payload interface{}
+		if !signalCh.ReceiveAsync(&payload) {
+			return
+		}
+	}
 }
 
 const (
@@ -387,9 +400,10 @@ func startScheduledArtifactActionWorkItem(ctx, stateCtx workflow.Context, input 
 
 func startScheduledWorkItemChild(ctx, stateCtx workflow.Context, input SchedulerWorkflowInput, item data.WorkItem, childID string, workflowFunc interface{}) error {
 	return startScheduledWorkItemsChild(ctx, stateCtx, input, []data.WorkItem{item}, childID, workflowFunc, ScheduledWorkItemWorkflowInput{
-		SchedulerInput: input,
-		Item:           item,
-		WorkflowID:     childID,
+		SchedulerInput:   input,
+		Item:             item,
+		WorkflowID:       childID,
+		ParentWorkflowID: workflow.GetInfo(ctx).WorkflowExecution.ID,
 	})
 }
 
@@ -398,7 +412,7 @@ func startScheduledWorkItemsChild(ctx, stateCtx workflow.Context, input Schedule
 		return nil
 	}
 	for _, item := range items {
-		if err := setBatchWorkItemStatusWithLease(stateCtx, item.ID, data.WorkItemStatusRunning, childID, "", false, schedulerRunningLeaseSeconds); err != nil {
+		if err := setBatchWorkItemStatus(stateCtx, item.ID, data.WorkItemStatusDispatching, childID, "", false); err != nil {
 			return err
 		}
 	}
@@ -422,6 +436,10 @@ func startScheduledWorkItemsChild(ctx, stateCtx workflow.Context, input Schedule
 	return nil
 }
 
+func markScheduledWorkItemRunning(ctx workflow.Context, item data.WorkItem, workflowID string) error {
+	return setBatchWorkItemStatusWithLease(ctx, item.ID, data.WorkItemStatusRunning, workflowID, "", false, schedulerRunningLeaseSeconds)
+}
+
 func childWorkflowAlreadyStarted(err error) bool {
 	if err == nil {
 		return false
@@ -432,11 +450,14 @@ func childWorkflowAlreadyStarted(err error) bool {
 		strings.Contains(value, "already started")
 }
 
-func signalSchedulerWakeup(ctx workflow.Context, input SchedulerWorkflowInput, reason string) {
+func signalSchedulerWakeup(ctx workflow.Context, input SchedulerWorkflowInput, parentWorkflowID, reason string) {
 	if input.BatchID == "" {
 		return
 	}
 	schedulerID := fmt.Sprintf("%s-scheduler", input.BatchID)
+	if parentWorkflowID != "" {
+		schedulerID = parentWorkflowID
+	}
 	_ = workflow.SignalExternalWorkflow(ctx, schedulerID, "", schedulerWakeupSignalName, map[string]interface{}{
 		"batch_id": input.BatchID,
 		"reason":   reason,
@@ -502,7 +523,7 @@ func runScheduledPortScanWorkItem(ctx, stateCtx workflow.Context, schedulerInput
 func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
 	schedulerInput := input.SchedulerInput
 	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
-	defer signalSchedulerWakeup(ctx, schedulerInput, "dns_preflight_done")
+	defer signalSchedulerWakeup(ctx, schedulerInput, input.ParentWorkflowID, "dns_preflight_done")
 	item := input.Item
 	workflowID := input.WorkflowID
 	if workflowID == "" {
@@ -512,6 +533,9 @@ func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input Scheduled
 		StartToCloseTimeout: defaultStateActivityTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
+	if err := markScheduledWorkItemRunning(stateCtx, item, workflowID); err != nil {
+		return err
+	}
 	itemInput := parseSchedulerWorkItemInput(item)
 	sourceTarget := itemInput.SourceTarget
 	if sourceTarget == "" {
@@ -565,7 +589,7 @@ func ScheduledDNSPreflightWorkItemWorkflow(ctx workflow.Context, input Scheduled
 func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWorkItemWorkflowInput) error {
 	schedulerInput := input.SchedulerInput
 	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
-	defer signalSchedulerWakeup(ctx, schedulerInput, "planned_dag_done")
+	defer signalSchedulerWakeup(ctx, schedulerInput, input.ParentWorkflowID, "planned_dag_done")
 	item := input.Item
 	workflowID := input.WorkflowID
 	if workflowID == "" {
@@ -575,6 +599,9 @@ func ScheduledPlannedDAGWorkItemWorkflow(ctx workflow.Context, input ScheduledWo
 		StartToCloseTimeout: defaultStateActivityTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
+	if err := markScheduledWorkItemRunning(stateCtx, item, workflowID); err != nil {
+		return err
+	}
 
 	itemInput := parseSchedulerWorkItemInput(item)
 	iteration := itemInput.Iteration
@@ -619,7 +646,7 @@ func ScheduledArtifactWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 	schedulerInput := input.SchedulerInput
 	schedulerInput.BatchInput = normalizeBatchPortScanInput(schedulerInput.BatchInput)
 	item := input.Item
-	defer signalSchedulerWakeup(ctx, schedulerInput, item.Type+"_done")
+	defer signalSchedulerWakeup(ctx, schedulerInput, input.ParentWorkflowID, item.Type+"_done")
 	workflowID := input.WorkflowID
 	if workflowID == "" {
 		workflowID = workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -628,6 +655,9 @@ func ScheduledArtifactWorkItemWorkflow(ctx workflow.Context, input ScheduledWork
 		StartToCloseTimeout: defaultStateActivityTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
+	if err := markScheduledWorkItemRunning(stateCtx, item, workflowID); err != nil {
+		return err
+	}
 	if item.Type == data.WorkItemTypePortscanChunk {
 		return runScheduledPortScanWorkItem(ctx, stateCtx, schedulerInput, item, workflowID)
 	}
@@ -996,6 +1026,7 @@ func workItemSummaryFromGroup(group data.WorkItemGroupSummary) schedulerWorkItem
 		Total: group.Total,
 		ByStatus: map[string]int{
 			data.WorkItemStatusPending:      group.Pending,
+			data.WorkItemStatusDispatching:  group.Dispatching,
 			data.WorkItemStatusRunning:      group.Running,
 			data.WorkItemStatusCompleted:    group.Completed,
 			data.WorkItemStatusFailed:       group.Failed,
@@ -1013,27 +1044,27 @@ func loadSchedulerSummaryFromSnapshot(snapshot data.WorkItemProgressSummary, inp
 	result.PreflightTotal = preflight.Total
 	result.PreflightDone = preflight.ByStatus[data.WorkItemStatusCompleted]
 	result.PreflightFailed = preflight.ByStatus[data.WorkItemStatusFailed] + preflight.ByStatus[data.WorkItemStatusDead]
-	result.PreflightPending = preflight.ByStatus[data.WorkItemStatusPending] + preflight.ByStatus[data.WorkItemStatusRetryWaiting] + preflight.ByStatus[data.WorkItemStatusPaused]
+	result.PreflightPending = preflight.ByStatus[data.WorkItemStatusPending] + preflight.ByStatus[data.WorkItemStatusDispatching] + preflight.ByStatus[data.WorkItemStatusRetryWaiting] + preflight.ByStatus[data.WorkItemStatusPaused]
 	result.PreflightRunning = preflight.ByStatus[data.WorkItemStatusRunning]
 	portscan := schedulerSummaryForType(snapshot, data.WorkItemTypePortscanChunk)
 	result.PortScanTotal = portscan.Total
 	result.PortScanDone = portscan.ByStatus[data.WorkItemStatusCompleted]
 	result.PortScanFailed = portscan.ByStatus[data.WorkItemStatusFailed] + portscan.ByStatus[data.WorkItemStatusDead]
-	result.PortScanPending = portscan.ByStatus[data.WorkItemStatusPending] + portscan.ByStatus[data.WorkItemStatusRetryWaiting] + portscan.ByStatus[data.WorkItemStatusPaused]
+	result.PortScanPending = portscan.ByStatus[data.WorkItemStatusPending] + portscan.ByStatus[data.WorkItemStatusDispatching] + portscan.ByStatus[data.WorkItemStatusRetryWaiting] + portscan.ByStatus[data.WorkItemStatusPaused]
 	result.PortScanRunning = portscan.ByStatus[data.WorkItemStatusRunning]
 	if input.BatchInput.RunPlannedDAG {
 		followUp := schedulerSummaryForType(snapshot, data.WorkItemTypePlannedDAGFollowUp)
 		result.FollowUpTotal = followUp.Total
 		result.FollowUpDone = followUp.ByStatus[data.WorkItemStatusCompleted]
 		result.FollowUpFailed = followUp.ByStatus[data.WorkItemStatusFailed] + followUp.ByStatus[data.WorkItemStatusDead]
-		result.FollowUpPending = followUp.ByStatus[data.WorkItemStatusPending] + followUp.ByStatus[data.WorkItemStatusRetryWaiting] + followUp.ByStatus[data.WorkItemStatusPaused]
+		result.FollowUpPending = followUp.ByStatus[data.WorkItemStatusPending] + followUp.ByStatus[data.WorkItemStatusDispatching] + followUp.ByStatus[data.WorkItemStatusRetryWaiting] + followUp.ByStatus[data.WorkItemStatusPaused]
 		result.FollowUpRunning = followUp.ByStatus[data.WorkItemStatusRunning]
 		for _, itemType := range data.ActionWorkItemTypes() {
 			phaseSummary := schedulerSummaryForType(snapshot, itemType)
 			result.ActionTotal += phaseSummary.Total
 			result.ActionDone += phaseSummary.ByStatus[data.WorkItemStatusCompleted] + phaseSummary.ByStatus[data.WorkItemStatusSkipped]
 			result.ActionFailed += phaseSummary.ByStatus[data.WorkItemStatusFailed] + phaseSummary.ByStatus[data.WorkItemStatusDead]
-			result.ActionPending += phaseSummary.ByStatus[data.WorkItemStatusPending] + phaseSummary.ByStatus[data.WorkItemStatusRetryWaiting] + phaseSummary.ByStatus[data.WorkItemStatusPaused]
+			result.ActionPending += phaseSummary.ByStatus[data.WorkItemStatusPending] + phaseSummary.ByStatus[data.WorkItemStatusDispatching] + phaseSummary.ByStatus[data.WorkItemStatusRetryWaiting] + phaseSummary.ByStatus[data.WorkItemStatusPaused]
 			result.ActionRunning += phaseSummary.ByStatus[data.WorkItemStatusRunning]
 		}
 	}

@@ -3,6 +3,7 @@ package data
 func ValidWorkItemStatus(status string) bool {
 	switch status {
 	case WorkItemStatusPending,
+		WorkItemStatusDispatching,
 		WorkItemStatusRunning,
 		WorkItemStatusCompleted,
 		WorkItemStatusFailed,
@@ -25,8 +26,17 @@ func CanTransitionWorkItemStatus(from, to string) bool {
 	case "":
 		return to == WorkItemStatusPending
 	case WorkItemStatusPending:
-		return to == WorkItemStatusRunning ||
+		return to == WorkItemStatusDispatching ||
+			to == WorkItemStatusRunning ||
 			to == WorkItemStatusPaused ||
+			to == WorkItemStatusCancelled ||
+			to == WorkItemStatusSkipped ||
+			to == WorkItemStatusDead
+	case WorkItemStatusDispatching:
+		return to == WorkItemStatusRunning ||
+			to == WorkItemStatusCompleted ||
+			to == WorkItemStatusFailed ||
+			to == WorkItemStatusRetryWaiting ||
 			to == WorkItemStatusCancelled ||
 			to == WorkItemStatusSkipped ||
 			to == WorkItemStatusDead
@@ -69,7 +79,7 @@ func TerminalWorkItemStatus(status string) bool {
 
 func OpenWorkItemStatus(status string) bool {
 	switch status {
-	case WorkItemStatusPending, WorkItemStatusRunning, WorkItemStatusRetryWaiting, WorkItemStatusPaused:
+	case WorkItemStatusPending, WorkItemStatusDispatching, WorkItemStatusRunning, WorkItemStatusRetryWaiting, WorkItemStatusPaused:
 		return true
 	default:
 		return false
@@ -88,6 +98,7 @@ func failureWorkItemStatus(attempts, maxAttempts int) string {
 func AdmissionBlockingWorkItemStatus(status string) bool {
 	switch status {
 	case WorkItemStatusPending,
+		WorkItemStatusDispatching,
 		WorkItemStatusRunning,
 		WorkItemStatusCompleted,
 		WorkItemStatusRetryWaiting,
@@ -103,6 +114,7 @@ func AdmissionBlockingWorkItemStatus(status string) bool {
 func PlannerBlockingActionStatus(status string) bool {
 	switch status {
 	case WorkItemStatusPending,
+		WorkItemStatusDispatching,
 		WorkItemStatusRunning,
 		WorkItemStatusCompleted,
 		WorkItemStatusRetryWaiting,

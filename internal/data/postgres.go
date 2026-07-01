@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0xrawptr/weave/internal/data/dbsqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,7 +35,23 @@ type PostgresConfig struct {
 }
 
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	queries *dbsqlc.Queries
+}
+
+func (p *PostgresStore) Pool() *pgxpool.Pool      { return p.pool }
+func (p *PostgresStore) Queries() *dbsqlc.Queries { return p.queries }
+
+func (p *PostgresStore) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	return p.pool.QueryRow(ctx, sql, args...)
+}
+
+func (p *PostgresStore) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	return p.pool.Query(ctx, sql, args...)
+}
+
+func (p *PostgresStore) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	return p.pool.Exec(ctx, sql, args...)
 }
 
 func NewPostgresStore(ctx context.Context, cfg PostgresConfig) (*PostgresStore, error) {
@@ -50,7 +67,7 @@ func NewPostgresStore(ctx context.Context, cfg PostgresConfig) (*PostgresStore, 
 		return nil, fmt.Errorf("postgres ping: %w", err)
 	}
 
-	store := &PostgresStore{pool: pool}
+	store := &PostgresStore{pool: pool, queries: dbsqlc.New(pool)}
 	if err := store.migrate(ctx); err != nil {
 		return nil, fmt.Errorf("postgres migrate: %w", err)
 	}
@@ -59,6 +76,19 @@ func NewPostgresStore(ctx context.Context, cfg PostgresConfig) (*PostgresStore, 
 }
 
 func (p *PostgresStore) migrate(ctx context.Context) error {
+	conn, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1))`, "weave_postgres_migrate"); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, "weave_postgres_migrate")
+	}()
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS targets (
 		id TEXT PRIMARY KEY,
@@ -229,6 +259,50 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 		updated_at TIMESTAMPTZ DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS policies (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		ports TEXT DEFAULT '',
+		threads INTEGER DEFAULT 0,
+		spray_dict TEXT DEFAULT '',
+		nuclei_tags TEXT DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS fingerprints (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		rule TEXT NOT NULL,
+		type TEXT DEFAULT 'http',
+		description TEXT DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS pocs (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		description TEXT DEFAULT '',
+		type TEXT DEFAULT '',
+		severity TEXT DEFAULT '',
+		created_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS monitors (
+		id TEXT PRIMARY KEY,
+		campaign_id TEXT NOT NULL,
+		name TEXT DEFAULT '',
+		ports TEXT DEFAULT '',
+		interval_hours INTEGER NOT NULL DEFAULT 24,
+		status TEXT DEFAULT 'active',
+		last_run_at TIMESTAMPTZ,
+		next_run_at TIMESTAMPTZ,
+		run_count INTEGER DEFAULT 0,
+		created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+
 	CREATE TABLE IF NOT EXISTS batch_chunks (
 		id TEXT PRIMARY KEY,
 		batch_id TEXT REFERENCES batch_runs(id),
@@ -317,6 +391,16 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	ALTER TABLE work_items DROP COLUMN IF EXISTS priority;
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
 	ALTER TABLE work_items ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+	UPDATE work_items
+	SET status = 'dispatching',
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		started_at = NULL,
+		updated_at = NOW()
+	WHERE status = 'running'
+	  AND workflow_id <> ''
+	  AND (heartbeat_at IS NULL OR heartbeat_at = started_at)
+	  AND completed_at IS NULL;
 	ALTER TABLE work_items DROP COLUMN IF EXISTS tail;
 	ALTER TABLE work_items DROP COLUMN IF EXISTS tail_at;
 	ALTER TABLE work_items DROP COLUMN IF EXISTS tail_reason;
@@ -387,7 +471,7 @@ func (p *PostgresStore) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_scheduler_capacity_queue ON scheduler_capacity(queue);
 	`
 
-	_, err := p.pool.Exec(ctx, schema)
+	_, err = conn.Exec(ctx, schema)
 	return err
 }
 
@@ -1034,9 +1118,11 @@ func (p *PostgresStore) ClaimActionRecord(ctx context.Context, record ActionReco
 			attempts = GREATEST(action_records.attempts, EXCLUDED.attempts),
 			workflow_id = EXCLUDED.workflow_id,
 			error = '',
+			completed_at = NULL,
 			started_at = NOW(),
 			updated_at = NOW()
 		 WHERE action_records.status NOT IN ('running', 'completed')
+		    OR (action_records.status = 'running' AND action_records.completed_at IS NOT NULL)
 		 RETURNING id`,
 		record.ID, record.CampaignID, record.Target, record.Artifact, record.Input, record.Schedule, record.Reason, record.Attempts, record.WorkflowID).Scan(&id)
 	if err == nil {
@@ -1193,6 +1279,39 @@ func (p *PostgresStore) GetBatchRun(ctx context.Context, batchID string) (*Batch
 		return nil, err
 	}
 	return &run, nil
+}
+
+func (p *PostgresStore) BulkUpdateWorkItemStatus(ctx context.Context, batchID, status, errorMessage string) (int64, error) {
+	tag, err := p.pool.Exec(ctx,
+		`UPDATE work_items SET status = $1, error = $2, updated_at = NOW() WHERE batch_id = $3 AND status IN ('pending','starting','running','retry_waiting','paused')`,
+		status, errorMessage, batchID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (p *PostgresStore) UpdateBatchRunStatus(ctx context.Context, batchID, status string) error {
+	_, err := p.pool.Exec(ctx, `UPDATE batch_runs SET status = $1, updated_at = NOW() WHERE id = $2`, status, batchID)
+	return err
+}
+
+func (p *PostgresStore) DeleteBatchCascade(ctx context.Context, batchID string) error {
+	var campaignID string
+	_ = p.pool.QueryRow(ctx, `SELECT campaign_id FROM batch_runs WHERE id = $1`, batchID).Scan(&campaignID)
+	byBatch := []string{"work_items", "artifact_stats", "batch_chunks"}
+	byCampaign := []string{"raw_events", "asset_events", "asset_evidence", "asset_observations", "asset_campaigns", "assets"}
+	for _, t := range byBatch {
+		_, _ = p.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE batch_id = $1`, t), batchID)
+	}
+	// batch_runs uses id as PK (the batch_id value)
+	_, _ = p.pool.Exec(ctx, `DELETE FROM batch_runs WHERE id = $1`, batchID)
+	if campaignID != "" {
+		for _, t := range byCampaign {
+			_, _ = p.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE campaign_id = $1`, t), campaignID)
+		}
+	}
+	return nil
 }
 
 func (p *PostgresStore) QueryBatchChunks(ctx context.Context, batchID, status string, limit, offset int) ([]BatchChunk, error) {
@@ -1407,20 +1526,20 @@ func claimWorkItem(ctx context.Context, exec sqlQueryExecutor, request WorkItemC
 		LIMIT 1
 	)
 	UPDATE work_items SET
-		status = 'running',
+		status = 'dispatching',
 		attempts = attempts + 1,
 		workflow_id = $%d,
 		error = '',
-		heartbeat_at = NOW(),
-		lease_expires_at = NOW() + ($%d * INTERVAL '1 second'),
-		started_at = NOW(),
+		heartbeat_at = NULL,
+		lease_expires_at = NULL,
+		started_at = NULL,
 		updated_at = NOW()
 	FROM candidate
 	WHERE work_items.id = candidate.id
 		RETURNING work_items.id, campaign_id, batch_id, parent_id, type, target, artifact, queue, COALESCE(input, '{}'::jsonb), schedule, status, attempts, max_attempts, workflow_id, error,
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
-		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)`, argIdx, argIdx+1)
-	args = append(args, request.WorkflowID, request.LeaseSeconds)
+		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)`, argIdx)
+	args = append(args, request.WorkflowID)
 
 	var item WorkItem
 	err := exec.QueryRow(ctx, query, args...).Scan(&item.ID, &item.CampaignID, &item.BatchID, &item.ParentID, &item.Type, &item.Target, &item.Artifact, &item.Queue, &item.Input, &item.Schedule, &item.Status, &item.Attempts, &item.MaxAttempts, &item.WorkflowID, &item.Error, &item.CreatedAt, &item.UpdatedAt, &item.HeartbeatAt, &item.LeaseExpiresAt, &item.StartedAt, &item.CompletedAt)
@@ -1452,7 +1571,8 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 	if workflowID != "" && currentWorkflowID == "" {
 		return nil
 	}
-	if workflowID != "" && currentWorkflowID != "" && currentWorkflowID != workflowID {
+	workflowHandoff := canHandoffRunningWorkItemWorkflow(current, status, currentWorkflowID, workflowID)
+	if workflowID != "" && currentWorkflowID != "" && currentWorkflowID != workflowID && !workflowHandoff {
 		return nil
 	}
 	recoverableExecutionFailure := recoverableWorkItemExecutionError(errorMessage) &&
@@ -1482,18 +1602,19 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 			error = $4,
 			attempts = GREATEST(attempts + CASE WHEN $5 THEN 1 ELSE 0 END - CASE WHEN $8 THEN 1 ELSE 0 END, 0),
 			started_at = CASE WHEN $2 = 'running' THEN NOW() ELSE started_at END,
-			heartbeat_at = CASE WHEN $2 = 'running' THEN NOW() ELSE heartbeat_at END,
+			heartbeat_at = CASE WHEN $2 = 'running' THEN NOW() WHEN $2 = 'dispatching' THEN NULL ELSE heartbeat_at END,
 			lease_expires_at = CASE
 				WHEN $2 IN ('completed', 'failed', 'retry_waiting', 'paused', 'cancelled', 'skipped', 'dead') THEN NULL
 				WHEN $2 = 'running' AND $6 > 0 THEN NOW() + ($6 * INTERVAL '1 second')
+				WHEN $2 = 'dispatching' THEN NULL
 				ELSE lease_expires_at
 			END,
 			completed_at = CASE WHEN $2 IN ('completed', 'cancelled', 'skipped', 'dead') THEN NOW() ELSE completed_at END,
 			updated_at = NOW()
 		 WHERE id = $1
 		   AND status = $7
-		   AND ($3 = '' OR workflow_id = $3)`,
-		id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds, current, recoverableExecutionFailure)
+		   AND ($3 = '' OR workflow_id = $3 OR $9)`,
+		id, status, workflowID, errorMessage, incrementAttempt, leaseSeconds, current, recoverableExecutionFailure, workflowHandoff)
 	if err != nil {
 		return err
 	}
@@ -1501,6 +1622,19 @@ func (p *PostgresStore) SetWorkItemStatus(ctx context.Context, id, status, workf
 		return nil
 	}
 	return err
+}
+
+func canHandoffRunningWorkItemWorkflow(current, next, currentWorkflowID, nextWorkflowID string) bool {
+	if currentWorkflowID == "" || nextWorkflowID == "" || currentWorkflowID == nextWorkflowID {
+		return false
+	}
+	if current == WorkItemStatusDispatching && next == WorkItemStatusDispatching {
+		return strings.HasSuffix(currentWorkflowID, "-scheduler")
+	}
+	if current != WorkItemStatusRunning || next != WorkItemStatusRunning {
+		return false
+	}
+	return strings.HasSuffix(currentWorkflowID, "-scheduler")
 }
 
 var recoverableWorkItemExecutionErrorPatterns = []string{
@@ -1720,6 +1854,7 @@ func (p *PostgresStore) GetWorkItemProgressSummary(ctx context.Context, filter W
 		summary.ThroughputPerMin = summary.Overall.ThroughputPerMin
 		summary.ByStatus = map[string]int{
 			WorkItemStatusPending:      summary.Overall.Pending,
+			WorkItemStatusDispatching:  summary.Overall.Dispatching,
 			WorkItemStatusRunning:      summary.Overall.Running,
 			"stalled_running":          summary.Overall.StalledRunning,
 			WorkItemStatusCompleted:    summary.Overall.Completed,
@@ -1741,7 +1876,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 	case "":
 	case "type", "queue", "artifact", "target":
 		groupExpr = groupBy
-		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
+		orderExpr = "COUNT(*) FILTER (WHERE status IN ('pending', 'dispatching', 'retry_waiting', 'paused')) DESC, COUNT(*) FILTER (WHERE status = 'running') DESC, COUNT(*) DESC"
 	default:
 		return nil, fmt.Errorf("unsupported work item summary group: %s", groupBy)
 	}
@@ -1750,6 +1885,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 		COALESCE(%[1]s, '') AS group_key,
 		COUNT(*)::INT AS total,
 		COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending,
+		COUNT(*) FILTER (WHERE status = 'dispatching')::INT AS dispatching,
 		COUNT(*) FILTER (WHERE status = 'running')::INT AS running,
 		COUNT(*) FILTER (
 			WHERE status = 'running'
@@ -1828,6 +1964,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 			&group.Key,
 			&group.Total,
 			&group.Pending,
+			&group.Dispatching,
 			&group.Running,
 			&group.StalledRunning,
 			&group.Completed,
@@ -1854,7 +1991,7 @@ func (p *PostgresStore) queryWorkItemGroupSummary(ctx context.Context, filter Wo
 }
 
 func completeWorkItemGroupSummary(group *WorkItemGroupSummary, doneLast15m int) {
-	group.Queued = group.Pending + group.RetryWaiting + group.Paused
+	group.Queued = group.Pending + group.Dispatching + group.RetryWaiting + group.Paused
 	group.Done = group.Completed + group.Cancelled + group.Skipped
 	group.Error = group.Failed + group.Dead
 	if group.Total > 0 {
@@ -2072,10 +2209,15 @@ func (p *PostgresStore) ListExpiredLeaseWorkItems(ctx context.Context, filter Wo
 		created_at, updated_at, COALESCE(heartbeat_at, '0001-01-01'::timestamptz), COALESCE(lease_expires_at, '0001-01-01'::timestamptz),
 		COALESCE(started_at, '0001-01-01'::timestamptz), COALESCE(completed_at, '0001-01-01'::timestamptz)
 	FROM work_items
-	WHERE status = 'running'
-	  AND workflow_id <> ''
-	  AND lease_expires_at IS NOT NULL
-	  AND lease_expires_at < NOW()`
+	WHERE workflow_id <> ''
+	  AND (
+		status = 'dispatching'
+		OR (
+		  status = 'running'
+		  AND lease_expires_at IS NOT NULL
+		  AND lease_expires_at < NOW()
+		)
+	  )`
 	args := []interface{}{}
 	argIdx := 1
 	query, args, argIdx = appendWorkItemFilterSQL(query, args, argIdx, filter, false)
@@ -2114,7 +2256,7 @@ func (p *PostgresStore) ReclaimWorkItemsByWorkflowIDs(ctx context.Context, workf
 		completed_at = NULL,
 		updated_at = NOW()
 	WHERE workflow_id = ANY($1)
-	  AND status = 'running'
+	  AND status IN ('dispatching', 'running')
 	RETURNING id, campaign_id, batch_id`, workflowIDs)
 	if err != nil {
 		return WorkItemBulkResult{}, err
@@ -2516,6 +2658,74 @@ func jsonbSafeBytes(raw []byte) []byte {
 		return bytes.ReplaceAll(raw, []byte{0}, nil)
 	}
 	return encoded
+}
+
+// Policy CRUD
+
+func (p *PostgresStore) CreatePolicy(ctx context.Context, policy Policy) error {
+	return p.queries.CreatePolicy(ctx, dbsqlc.CreatePolicyParams{
+		ID:          policy.ID,
+		Name:        policy.Name,
+		Description: policy.Description,
+		Ports:       policy.Ports,
+		Threads:     int32(policy.Threads),
+		SprayDict:   policy.SprayDict,
+		NucleiTags:  policy.NucleiTags,
+	})
+}
+
+func (p *PostgresStore) ListPolicies(ctx context.Context, limit, offset int) ([]Policy, error) {
+	rows, err := p.queries.ListPolicies(ctx, dbsqlc.ListPoliciesParams{
+		Limit:  int32(limit),
+		Offset: int32(offset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	policies := make([]Policy, 0, len(rows))
+	for _, row := range rows {
+		policies = append(policies, policyFromSQLC(row))
+	}
+	return policies, nil
+}
+
+func (p *PostgresStore) GetPolicy(ctx context.Context, id string) (*Policy, error) {
+	row, err := p.queries.GetPolicy(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	policy := policyFromSQLC(row)
+	return &policy, nil
+}
+
+func (p *PostgresStore) UpdatePolicy(ctx context.Context, policy Policy) error {
+	return p.queries.UpdatePolicy(ctx, dbsqlc.UpdatePolicyParams{
+		ID:          policy.ID,
+		Name:        policy.Name,
+		Description: policy.Description,
+		Ports:       policy.Ports,
+		Threads:     int32(policy.Threads),
+		SprayDict:   policy.SprayDict,
+		NucleiTags:  policy.NucleiTags,
+	})
+}
+
+func (p *PostgresStore) DeletePolicy(ctx context.Context, id string) error {
+	return p.queries.DeletePolicy(ctx, id)
+}
+
+func policyFromSQLC(row dbsqlc.Policy) Policy {
+	return Policy{
+		ID:          row.ID,
+		Name:        row.Name,
+		Description: row.Description,
+		Ports:       row.Ports,
+		Threads:     int(row.Threads),
+		SprayDict:   row.SprayDict,
+		NucleiTags:  row.NucleiTags,
+		CreatedAt:   row.CreatedAt.Time,
+		UpdatedAt:   row.UpdatedAt.Time,
+	}
 }
 
 func jsonbSafeValue(value interface{}) interface{} {

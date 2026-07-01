@@ -9,6 +9,7 @@ import (
 
 const (
 	defaultLongActivityTimeout  = 2 * time.Hour
+	defaultSprayActivityTimeout = 30 * time.Minute
 	maxLongActivityTimeout      = 6 * time.Hour
 	defaultHeartbeatTimeout     = 60 * time.Second
 	defaultStateActivityTimeout = 30 * time.Second
@@ -27,9 +28,13 @@ func longActivityTimeout(seconds int) time.Duration {
 }
 
 func artifactActivityContext(ctx workflow.Context, artifactName string, timeoutSeconds int) workflow.Context {
+	startToClose := longActivityTimeout(timeoutSeconds)
+	if timeoutSeconds <= 0 && artifactName == "spray" {
+		startToClose = defaultSprayActivityTimeout
+	}
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           ArtifactTaskQueue(artifactName),
-		StartToCloseTimeout: longActivityTimeout(timeoutSeconds),
+		StartToCloseTimeout: startToClose,
 		HeartbeatTimeout:    defaultHeartbeatTimeout,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 1,

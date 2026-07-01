@@ -9,6 +9,10 @@ func TestCanTransitionWorkItemStatus(t *testing.T) {
 		want bool
 	}{
 		{WorkItemStatusPending, WorkItemStatusRunning, true},
+		{WorkItemStatusPending, WorkItemStatusDispatching, true},
+		{WorkItemStatusDispatching, WorkItemStatusRunning, true},
+		{WorkItemStatusDispatching, WorkItemStatusCompleted, true},
+		{WorkItemStatusDispatching, WorkItemStatusFailed, true},
 		{WorkItemStatusRunning, WorkItemStatusCompleted, true},
 		{WorkItemStatusRunning, WorkItemStatusFailed, true},
 		{WorkItemStatusRunning, WorkItemStatusSkipped, true},
@@ -35,14 +39,17 @@ func TestValidWorkItemStatus(t *testing.T) {
 	if !ValidWorkItemStatus(WorkItemStatusRunning) {
 		t.Fatalf("running should be valid")
 	}
+	if !ValidWorkItemStatus(WorkItemStatusDispatching) {
+		t.Fatalf("dispatching should be valid")
+	}
 	if ValidWorkItemStatus("unknown") {
 		t.Fatalf("unknown status should be invalid")
 	}
 }
 
 func TestWorkItemStatusPredicates(t *testing.T) {
-	if !OpenWorkItemStatus(WorkItemStatusPending) || !OpenWorkItemStatus(WorkItemStatusRunning) || !OpenWorkItemStatus(WorkItemStatusRetryWaiting) || !OpenWorkItemStatus(WorkItemStatusPaused) {
-		t.Fatalf("expected pending/running/retry_waiting/paused to be open")
+	if !OpenWorkItemStatus(WorkItemStatusPending) || !OpenWorkItemStatus(WorkItemStatusDispatching) || !OpenWorkItemStatus(WorkItemStatusRunning) || !OpenWorkItemStatus(WorkItemStatusRetryWaiting) || !OpenWorkItemStatus(WorkItemStatusPaused) {
+		t.Fatalf("expected pending/dispatching/running/retry_waiting/paused to be open")
 	}
 	if OpenWorkItemStatus(WorkItemStatusCompleted) || OpenWorkItemStatus(WorkItemStatusSkipped) {
 		t.Fatalf("completed/skipped should not be open")
@@ -76,6 +83,24 @@ func TestRecoverableWorkItemExecutionError(t *testing.T) {
 	}
 	if recoverableWorkItemExecutionError("gogo scan failed: invalid ports") {
 		t.Fatalf("business execution errors should not be treated as recoverable infrastructure failures")
+	}
+}
+
+func TestCanHandoffRunningWorkItemWorkflow(t *testing.T) {
+	if !canHandoffRunningWorkItemWorkflow(WorkItemStatusDispatching, WorkItemStatusDispatching, "batch-1-scheduler", "batch-1-spray_shard-target-item-1") {
+		t.Fatalf("expected scheduler to hand off dispatching work item to child workflow")
+	}
+	if !canHandoffRunningWorkItemWorkflow(WorkItemStatusRunning, WorkItemStatusRunning, "batch-1-recovery-scheduler", "batch-1-spray_shard-target-item-1") {
+		t.Fatalf("expected recovery scheduler to hand off running work item to child workflow")
+	}
+	if !canHandoffRunningWorkItemWorkflow(WorkItemStatusRunning, WorkItemStatusRunning, "batch-1-scheduler", "batch-1-spray_shard-target-item-1") {
+		t.Fatalf("expected scheduler to hand off running work item to child workflow")
+	}
+	if canHandoffRunningWorkItemWorkflow(WorkItemStatusRunning, WorkItemStatusSkipped, "batch-1-recovery-scheduler", "batch-1-spray_shard-target-item-1") {
+		t.Fatalf("terminal updates should still require workflow ownership")
+	}
+	if canHandoffRunningWorkItemWorkflow(WorkItemStatusRunning, WorkItemStatusRunning, "batch-1-spray_shard-target-item-1", "other-child") {
+		t.Fatalf("child workflows should not hand off ownership to another child")
 	}
 }
 

@@ -9,6 +9,7 @@ func TestCompleteWorkItemGroupSummary(t *testing.T) {
 	group := WorkItemGroupSummary{
 		Total:         11,
 		Pending:       3,
+		Dispatching:   2,
 		Running:       2,
 		Completed:     4,
 		Failed:        1,
@@ -17,8 +18,8 @@ func TestCompleteWorkItemGroupSummary(t *testing.T) {
 
 	completeWorkItemGroupSummary(&group, 15)
 
-	if group.Queued != 3 {
-		t.Fatalf("queued = %d, want 3", group.Queued)
+	if group.Queued != 5 {
+		t.Fatalf("queued = %d, want 5", group.Queued)
 	}
 	if group.Done != 4 {
 		t.Fatalf("done = %d, want 4", group.Done)
@@ -32,8 +33,8 @@ func TestCompleteWorkItemGroupSummary(t *testing.T) {
 	if group.ThroughputPerMin != 1 {
 		t.Fatalf("throughput = %d, want 1", group.ThroughputPerMin)
 	}
-	if group.ETASeconds != 300 {
-		t.Fatalf("eta = %d, want 300", group.ETASeconds)
+	if group.ETASeconds != 420 {
+		t.Fatalf("eta = %d, want 420", group.ETASeconds)
 	}
 }
 

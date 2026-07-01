@@ -6,17 +6,25 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	"github.com/0xrawptr/weave/internal/data/dbsqlc"
 )
 
 type Repository struct {
 	Postgres *PostgresStore
 	Neo4j    *Neo4jStore
 	Redis    *RedisStore
+	SQLC     *dbsqlc.Queries
 }
 
 func NewRepository(pg *PostgresStore, neo *Neo4jStore, rds *RedisStore) *Repository {
-	return &Repository{Postgres: pg, Neo4j: neo, Redis: rds}
+	var sqlc *dbsqlc.Queries
+	if pg != nil {
+		sqlc = pg.Queries()
+	}
+	return &Repository{Postgres: pg, Neo4j: neo, Redis: rds, SQLC: sqlc}
 }
+
 
 func (r *Repository) EnsureTarget(ctx context.Context, t *Target) error {
 	if r.Postgres == nil {

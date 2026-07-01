@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "dev": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0",
+    "build": "node ./node_modules/vite/bin/vite.js build",
+    "preview": "node ./node_modules/vite/bin/vite.js preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@ant-design/icons-vue": "^7.0.1",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "ant-design-vue": "^4.2.6",
+    "vite": "^6.3.5",
+    "vue": "^3.5.16"
+  },
+  "devDependencies": {}
+}
